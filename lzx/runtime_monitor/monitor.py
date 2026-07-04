@@ -400,15 +400,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cgroup-workload-slice", default="huawei-test.slice", help="User systemd slice for cgroup workload collection.")
     parser.add_argument(
         "--lstm-checkpoint",
-        default=MONITOR_DIR.parent / "huawei_mem" / "lzx" / "operation_predictor" / "outputs" / "checkpoints" / "app_lstm_duration" / "lsapp_app_lstm_duration_switch.pt",
+        default=MONITOR_DIR.parent / "operation_predictor" / "outputs" / "checkpoints" / "app_lstm_duration" / "lsapp_app_lstm_duration_switch.pt",
     )
     parser.add_argument(
         "--app-vocab",
-        default=MONITOR_DIR.parent / "huawei_mem" / "lzx" / "operation_predictor" / "data" / "vocab" / "app_vocab_duration.json",
+        default=MONITOR_DIR.parent / "operation_predictor" / "data" / "vocab" / "app_vocab_duration.json",
     )
     parser.add_argument(
         "--group-vocab",
-        default=MONITOR_DIR.parent / "huawei_mem" / "lzx" / "operation_predictor" / "data" / "vocab" / "user_group_vocab.json",
+        default=MONITOR_DIR.parent / "operation_predictor" / "data" / "vocab" / "user_group_vocab.json",
     )
     parser.add_argument("--user-group", default="通用用户")
     parser.add_argument("--history-len", type=int, default=5)

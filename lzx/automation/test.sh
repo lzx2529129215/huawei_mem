@@ -1,4 +1,4 @@
-cd /home/lzx/Desktop/huawei/automation
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
 
 ./run_automation.sh \
   --scenario scenario_local_wps_files.json \

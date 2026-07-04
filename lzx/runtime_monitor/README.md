@@ -81,7 +81,7 @@ runtime_monitor/
 默认采集 WPS，输出到 `./output`：
 
 ```bash
-cd /home/lzx/Desktop/huawei/runtime_monitor
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx/runtime_monitor
 python3 monitor.py \
   --config config.yaml \
   --target-app WPS \
@@ -93,7 +93,7 @@ python3 monitor.py \
 采集 WPS / QQ / Files：
 
 ```bash
-cd /home/lzx/Desktop/huawei/runtime_monitor
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx/runtime_monitor
 python3 monitor.py \
   --config config.yaml \
   --target-apps WPS,QQ,FILES \
@@ -105,7 +105,7 @@ python3 monitor.py \
 也可以使用脚本：
 
 ```bash
-cd /home/lzx/Desktop/huawei/runtime_monitor
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx/runtime_monitor
 bash scripts/run_wps_monitor.sh
 ```
 
@@ -198,7 +198,7 @@ session_id,feature_window_id,window_start_ns,window_end_ns,timestamp,app_id,app_
 ### 1. 采集启动 WPS
 
 ```bash
-cd /home/lzx/Desktop/huawei/runtime_monitor
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx/runtime_monitor
 python3 monitor.py --output-dir ./output/wps_launch --label WPS_LAUNCH --path-mode hash
 ```
 
@@ -268,7 +268,7 @@ python3 scripts/label_session.py \
 ## 测试
 
 ```bash
-cd /home/lzx/Desktop/huawei/runtime_monitor
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx/runtime_monitor
 python3 -m unittest discover -s tests -p 'test_runtime_monitor.py'
 ```
 

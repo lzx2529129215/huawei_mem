@@ -12,6 +12,8 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
+LZX_ROOT = Path(__file__).resolve().parents[2]
+
 
 def read_csv(path: Path) -> list[dict[str, str]]:
     if not path.exists():
@@ -452,10 +454,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--automation-command", default="")
     parser.add_argument(
         "--checkpoint",
-        default="huawei_mem/lzx/operation_predictor/outputs/checkpoints/app_lstm_duration/lsapp_app_lstm_duration_switch.pt",
+        default=LZX_ROOT / "operation_predictor" / "outputs" / "checkpoints" / "app_lstm_duration" / "lsapp_app_lstm_duration_switch.pt",
     )
-    parser.add_argument("--app-vocab", default="huawei_mem/lzx/operation_predictor/data/vocab/app_vocab_duration.json")
-    parser.add_argument("--group-vocab", default="huawei_mem/lzx/operation_predictor/data/vocab/user_group_vocab.json")
+    parser.add_argument("--app-vocab", default=LZX_ROOT / "operation_predictor" / "data" / "vocab" / "app_vocab_duration.json")
+    parser.add_argument("--group-vocab", default=LZX_ROOT / "operation_predictor" / "data" / "vocab" / "user_group_vocab.json")
     return parser.parse_args()
 
 

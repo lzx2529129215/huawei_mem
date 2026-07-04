@@ -1,4 +1,4 @@
-cd /home/lzx/Desktop/huawei/runtime_monitor
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx/runtime_monitor
 
 mkdir -p output/session_files_001
 

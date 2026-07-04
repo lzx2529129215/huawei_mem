@@ -14,7 +14,7 @@ WORKSPACE_ROOT = MONITOR_DIR.parent
 OPERATION_PREDICTOR_ROOT = Path(
     os.environ.get(
         "OPERATION_PREDICTOR_ROOT",
-        WORKSPACE_ROOT / "huawei_mem" / "lzx" / "operation_predictor",
+        WORKSPACE_ROOT / "operation_predictor",
     )
 ).resolve()
 if str(OPERATION_PREDICTOR_ROOT) not in sys.path:

@@ -18,7 +18,7 @@ Usage:
   $0 [--scenario FILE] [--display :0] [--xauthority PATH] [--trace-output PATH] [--session-id ID] [--scenario-id ID] [--test-slice SLICE] [--reset-files] [--dry-run]
 
 Examples:
-  cd /home/lzx/Desktop/huawei/automation
+  cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
   ./run_automation.sh
   ./run_automation.sh --dry-run
   ./run_automation.sh --scenario scenario_local_wps_files.json --test-slice huawei-test.slice

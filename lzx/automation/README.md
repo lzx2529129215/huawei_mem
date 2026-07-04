@@ -15,7 +15,7 @@ sudo apt install xdotool
 一键运行自动化：
 
 ```bash
-cd /home/lzx/Desktop/huawei/automation
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
 ./run_automation.sh
 ```
 
@@ -44,7 +44,7 @@ dry-run 检查：
 手动运行底层 Python：
 
 ```bash
-cd /home/lzx/Desktop/huawei/automation
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
 python3 app_automation.py scenario_local_wps.json --dry-run
 python3 app_automation.py scenario_local_wps.json
 ```
@@ -52,7 +52,7 @@ python3 app_automation.py scenario_local_wps.json
 如果出现 `Can't open display: (null)`，说明当前终端没有 `DISPLAY` 环境变量。优先在桌面终端运行；也可以显式指定 X11 display：
 
 ```bash
-cd /home/lzx/Desktop/huawei/automation
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
 python3 app_automation.py scenario_local_wps.json --display :0
 ```
 
@@ -242,21 +242,21 @@ xprop -id $(xdotool search --onlyvisible --class firefox | tail -1) WM_CLASS _NE
 一个终端先启动采集：
 
 ```bash
-cd /home/lzx/Desktop/huawei/runtime_monitor
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx/runtime_monitor
 python3 monitor.py --output-dir ./output/wps_auto --label WPS_OPEN_DOC --path-mode hash
 ```
 
 另一个终端运行自动化：
 
 ```bash
-cd /home/lzx/Desktop/huawei/automation
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
 python3 app_automation.py scenario_local_wps.json
 ```
 
 如果你已经在另一个终端启动了 monitor，可以用一键脚本只跑自动化：
 
 ```bash
-cd /home/lzx/Desktop/huawei/automation
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
 ./run_automation.sh
 ```
 
@@ -265,7 +265,7 @@ cd /home/lzx/Desktop/huawei/automation
 终端 A：
 
 ```bash
-cd /home/lzx/Desktop/huawei/runtime_monitor
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx/runtime_monitor
 
 python3 monitor.py \
   --config config.yaml \
@@ -278,7 +278,7 @@ python3 monitor.py \
 终端 B：
 
 ```bash
-cd /home/lzx/Desktop/huawei/automation
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
 
 ./run_automation.sh \
   --scenario scenario_local_wps_files.json \
@@ -290,7 +290,7 @@ cd /home/lzx/Desktop/huawei/automation
 对齐：
 
 ```bash
-cd /home/lzx/Desktop/huawei
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx
 
 python3 runtime_monitor/scripts/align_automation_monitor.py \
   --features runtime_monitor/output/session_files_001/features_1s.csv \
