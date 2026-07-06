@@ -190,6 +190,9 @@ class OnlineDurationLSTMRunner:
         self.args = args
         self.model_dir = model_dir
         self.review_dir = review_dir
+        configured_map = getattr(args, "app_key_to_vocab_name", {}) or {}
+        self.app_name_map = dict(APP_NAME_MAP)
+        self.app_name_map.update({str(key): str(value) for key, value in configured_map.items()})
         self.call_id = 0
         self.skipped: Counter[str] = Counter()
         self.completed_segments: list[dict[str, Any]] = []
@@ -230,9 +233,9 @@ class OnlineDurationLSTMRunner:
     def process_sample(self, feature_row: dict[str, Any]) -> None:
         sample_time = parse_time(str(feature_row["timestamp"]))
         raw_fg = str(feature_row.get("foreground_app", ""))
-        mapped_fg = map_app(raw_fg)
+        mapped_fg = self.map_app(raw_fg)
         raw_open_apps = str(feature_row.get("open_apps", ""))
-        mapped_opened = map_open_apps(raw_open_apps)
+        mapped_opened = self.map_open_apps(raw_open_apps)
 
         self._update_segments(feature_row, sample_time, raw_fg, mapped_fg)
         history_segments = self._history_segments(sample_time)
@@ -326,7 +329,7 @@ class OnlineDurationLSTMRunner:
             self.prediction_writer.write_row({**base_prediction, "status": status, "skip_reason": error})
 
         previous_raw = self.previous_row.get("foreground_app", "") if self.previous_row else ""
-        previous_mapped = map_app(previous_raw) if self.previous_row else ""
+        previous_mapped = self.map_app(previous_raw) if self.previous_row else ""
         model_row = {
             "call_id": self.call_id,
             "session_id": feature_row.get("session_id", ""),
@@ -430,8 +433,8 @@ class OnlineDurationLSTMRunner:
     ) -> tuple[str, str]:
         if self.last_prediction_time is None:
             return "initial_prediction", ""
-        previous_mapped_fg = map_app(self.previous_row.get("foreground_app", "")) if self.previous_row else mapped_fg
-        previous_opened = map_open_apps(str(self.previous_row.get("open_apps", ""))) if self.previous_row else mapped_opened
+        previous_mapped_fg = self.map_app(self.previous_row.get("foreground_app", "")) if self.previous_row else mapped_fg
+        previous_opened = self.map_open_apps(str(self.previous_row.get("open_apps", ""))) if self.previous_row else mapped_opened
         event_triggers: list[str] = []
         if previous_mapped_fg != mapped_fg:
             event_triggers.append("foreground_transition")
@@ -446,3 +449,12 @@ class OnlineDurationLSTMRunner:
         if self.args.trigger_mode == "event_plus_ttl" and elapsed >= self.args.prediction_ttl_s:
             return f"periodic_ttl_refresh_{fmt_duration(self.args.periodic_refresh_s)}s", ""
         return "", "no_prediction_trigger"
+
+    def map_app(self, raw_app: str | None) -> str:
+        raw = "" if raw_app is None else str(raw_app).strip()
+        if raw in UNKNOWN_VALUES:
+            return "<UNKNOWN>"
+        return self.app_name_map.get(raw, "<UNKNOWN>")
+
+    def map_open_apps(self, raw_open_apps: str) -> list[str]:
+        return dedupe_keep_order([self.map_app(app) for app in split_apps(raw_open_apps)])

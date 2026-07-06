@@ -35,6 +35,7 @@ from core.feature_builder import FeatureBuilder
 from core.lifecycle import LifecycleEventBuilder
 from core.operation_tracker import OperationTracker
 from core.review_builder import ReviewBuilder
+from core.runtime_scope import RuntimeAppScope, load_runtime_app_scope
 from core.schema import (
     APP_LIFECYCLE_EVENT_FIELDS,
     APP_STATE_1S_FIELDS,
@@ -53,7 +54,25 @@ class RuntimeMonitorV0:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.config = load_config(args.config)
-        self.target_apps = _parse_app_list(args.target_apps) or [args.target_app]
+        self.runtime_scope = _load_runtime_scope(args)
+        if self.runtime_scope is not None:
+            self.config = self.runtime_scope.as_process_mapper_config(self.config)
+            self.target_apps = self.runtime_scope.target_apps
+            if self.target_apps:
+                self.args.target_app = self.target_apps[0]
+            if self.runtime_scope.slice_name:
+                self.args.test_slice = self.runtime_scope.slice_name
+                self.args.cgroup_workload_slice = self.runtime_scope.slice_name
+            if self.runtime_scope.workload_scopes:
+                self.args.cgroup_workload_scopes = ",".join(self.runtime_scope.workload_scopes)
+            self.args.app_key_to_vocab_name = self.runtime_scope.app_key_to_vocab_name
+            self.args.loaded_runtime_scope = self.runtime_scope
+            for warning in self.runtime_scope.vocab_warnings:
+                print(f"warning: app scope vocab validation: {warning}", file=sys.stderr)
+        else:
+            self.target_apps = _parse_app_list(args.target_apps) or [args.target_app]
+            self.args.app_key_to_vocab_name = {}
+            self.args.loaded_runtime_scope = None
         self.session_id = _resolve_session_id(args)
         self.stop_requested = False
 
@@ -79,6 +98,7 @@ class RuntimeMonitorV0:
             backend=args.foreground_backend,
             manual_app=args.target_app if args.foreground_backend == "manual" else "",
             manual_pid=manual_pid,
+            app_window_keywords=self.runtime_scope.window_keywords if self.runtime_scope else None,
         )
         self.file_collector = FileEventCollector(path_mode=args.path_mode)
 
@@ -351,6 +371,21 @@ class RuntimeMonitorV0:
         summary_path = self.review_dir / "session_summary.md"
         lines = [
             "",
+            "## Runtime App Scope",
+        ]
+        if self.runtime_scope is not None:
+            lines.extend(self.runtime_scope.summary_lines())
+        else:
+            lines.extend([
+                f"- app_scope_config: `{self.args.app_scope_config}`",
+                "- loaded_apps: none",
+                "- workload_scopes: none",
+                "- prediction_apps: none",
+                "- app_key_to_vocab_name: none",
+                "- app_scope_vocab_warnings: none",
+            ])
+        lines.extend([
+            "",
             "## Cgroup Workload Collector",
             f"- cgroup_workload_enabled: {str(bool(self.args.enable_cgroup_workload)).lower()}",
             f"- cgroup_workload_process_started: {str(self.cgroup_workload_process_started).lower()}",
@@ -358,7 +393,7 @@ class RuntimeMonitorV0:
             f"- cgroup_workload_delta_csv: `{self.cgroup_workload_delta_csv}`",
             f"- cgroup_workload_summary: `{self.cgroup_workload_summary}`",
             f"- cgroup_workload_exit_code: {'' if self.cgroup_workload_exit_code is None else self.cgroup_workload_exit_code}",
-        ]
+        ])
         try:
             self.review_dir.mkdir(parents=True, exist_ok=True)
             with summary_path.open("a", encoding="utf-8") as f:
@@ -374,6 +409,7 @@ class RuntimeMonitorV0:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Runtime Monitor v0 PC state collector.")
     parser.add_argument("--config", default=MONITOR_DIR / "config.yaml")
+    parser.add_argument("--app-scope-config", default=MONITOR_DIR / "config" / "runtime_app_scope.json")
     parser.add_argument("--target-app", default="WPS")
     parser.add_argument("--target-apps", default="", help="Comma-separated observed apps, e.g. WPS,QQ,FILES.")
     parser.add_argument("--sample-interval", type=float, default=1.0)
@@ -423,6 +459,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--disable-dwell-bucket-trigger", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args(argv)
+
+
+def _load_runtime_scope(args: argparse.Namespace) -> RuntimeAppScope | None:
+    if not args.app_scope_config:
+        return None
+    path = Path(args.app_scope_config)
+    if not path.is_absolute():
+        path = MONITOR_DIR.parent / path
+    if not path.exists():
+        print(f"warning: app scope config not found: {path}", file=sys.stderr)
+        return None
+    return load_runtime_app_scope(path, args.app_vocab)
 
 
 def _parse_app_list(value: str) -> list[str]:

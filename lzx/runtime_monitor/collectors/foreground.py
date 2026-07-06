@@ -55,11 +55,25 @@ class ForegroundDebugState:
     error: str = ""
 
 
+DEFAULT_WINDOW_KEYWORDS = {
+    "WPS": ["wps", "wpsoffice", "kingsoft"],
+    "QQ": ["linuxqq", "tencent", "腾讯", "qq"],
+    "FILES": ["org.gnome.nautilus", "nautilus", "files", "文件", "home", "主文件夹"],
+}
+
+
 class ForegroundCollector:
-    def __init__(self, backend: str = "manual", manual_app: str = "", manual_pid: int = 0) -> None:
+    def __init__(
+        self,
+        backend: str = "manual",
+        manual_app: str = "",
+        manual_pid: int = 0,
+        app_window_keywords: dict[str, list[str]] | None = None,
+    ) -> None:
         self.backend = backend
         self.manual_app = manual_app
         self.manual_pid = manual_pid
+        self.app_window_keywords = app_window_keywords or DEFAULT_WINDOW_KEYWORDS
         self._last_key = ""
         self._last_since = time.monotonic()
         self._last_state = ForegroundState(foreground_app=manual_app, foreground_pid=manual_pid, source="manual")
@@ -213,13 +227,11 @@ class ForegroundCollector:
                 return window
         return WindowState()
 
-    @staticmethod
-    def _read_x11_window(window_id: str) -> WindowState:
+    def _read_x11_window(self, window_id: str) -> WindowState:
         debug = ForegroundDebugState(chosen_window_id=window_id)
-        return ForegroundCollector._read_x11_window_debug(window_id, debug)
+        return self._read_x11_window_debug(window_id, debug)
 
-    @staticmethod
-    def _read_x11_window_debug(window_id: str, debug: ForegroundDebugState) -> WindowState:
+    def _read_x11_window_debug(self, window_id: str, debug: ForegroundDebugState) -> WindowState:
         title = ""
         pid = 0
         errors: list[str] = []
@@ -293,7 +305,7 @@ class ForegroundCollector:
         if pid:
             debug.pid_comm = _read_proc_text(pid, "comm").strip()
             debug.pid_cmdline = _read_proc_text(pid, "cmdline").replace("\x00", " ").strip()
-        app = _map_foreground_app(wm_class_values, title, pid)
+        app = _map_foreground_app(wm_class_values, title, pid, self.app_window_keywords)
         debug.error = "; ".join(errors)
         return WindowState(
             window_id=window_id,
@@ -337,23 +349,18 @@ def _read_proc_text(pid: int, name: str) -> str:
         return ""
 
 
-def _map_foreground_app(wm_classes: list[str], title: str, pid: int) -> str:
+def _map_foreground_app(
+    wm_classes: list[str],
+    title: str,
+    pid: int,
+    app_window_keywords: dict[str, list[str]] | None = None,
+) -> str:
     comm = _read_proc_text(pid, "comm").strip()
     cmdline = _read_proc_text(pid, "cmdline").replace("\x00", " ")
     text = " ".join(wm_classes + [title, comm, cmdline]).lower()
-    if "wps" in text or "wpsoffice" in text or "kingsoft" in text:
-        return "WPS"
-    if "linuxqq" in text or "tencent" in text or "腾讯" in text or "qq" in text:
-        return "QQ"
-    if (
-        "org.gnome.nautilus" in text
-        or "nautilus" in text
-        or "files" in text
-        or "文件" in text
-        or "home" in text
-        or "主文件夹" in text
-    ):
-        return "FILES"
+    for app_key, keywords in (app_window_keywords or DEFAULT_WINDOW_KEYWORDS).items():
+        if any(str(keyword).lower() in text for keyword in keywords):
+            return app_key
     return "UNKNOWN"
 
 
