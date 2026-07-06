@@ -1,0 +1,21 @@
+--- /tmp/orig_src/linux-hwe-6.17-6.17.0/include/linux/memcontrol.h	2026-06-01 14:31:08.000000000 +0800
++++ /home/xty/HUAWEI_PC/MGLRU_TEST/mglru_kernel_transfer_0705/linux-hwe-6.17-6.17.0/include/linux/memcontrol.h	2026-07-06 13:34:23.080459116 +0800
+@@ -23,6 +23,8 @@
+ #include <linux/writeback.h>
+ #include <linux/page-flags.h>
+ #include <linux/shrinker.h>
++#include <linux/tier2_watermark.h>
++#include <linux/tier2_watermark.h>
+ 
+ struct mem_cgroup;
+ struct obj_cgroup;
+@@ -320,6 +322,9 @@
+ 	spinlock_t event_list_lock;
+ #endif /* CONFIG_MEMCG_V1 */
+ 
++#ifdef CONFIG_TIER2_WATERMARK
++	struct tier2_wmark_memcg *tier2_wmark;
++#endif
+ 	struct mem_cgroup_per_node *nodeinfo[];
+ };
+ 
