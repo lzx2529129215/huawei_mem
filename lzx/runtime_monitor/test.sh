@@ -1,10 +1,16 @@
-cd /home/lzx/Desktop/huawei/huawei_mem/lzx/runtime_monitor
+#!/usr/bin/env bash
+set -euo pipefail
 
-mkdir -p output/session_files_001
+PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+SESSION_ID="${SESSION_ID:-session_files_001}"
 
-python3 monitor.py \
-  --config config.yaml \
+cd "$PROJECT_ROOT"
+
+python3 runtime_monitor/monitor.py \
+  --config configs/runtime/config.yaml \
+  --app-scope-config configs/runtime/runtime_app_scope.json \
   --target-app WPS \
   --sample-interval 1 \
-  --output-dir ./output/session_files_001 \
-  --path-mode hash
+  --output-dir outputs/runtime_monitor \
+  --path-mode hash \
+  --session-id "$SESSION_ID"

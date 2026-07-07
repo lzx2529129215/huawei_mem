@@ -1,0 +1,831 @@
+--- a/mm/vmscan.c
++++ b/mm/vmscan.c
+@@ -59,6 +59,7 @@
+ #include <linux/mmu_notifier.h>
+ #include <linux/parser.h>
+ #include <linux/memory_hotplug.h>
++#include <linux/cgroup.h>
+
+ #include <asm/tlbflush.h>
+ #include <asm/div64.h>
+@@ -3824,6 +3825,518 @@
+ 	.release = single_release,
+ };
+
++/******************************************************************************
++ *                MGLRU workload Markov observe-only MVP
++ *
++ * Provides /sys/kernel/debug/lru_gen_workload_markov, a debugfs interface
++ * that lets userspace feed app/workload state and Markov transition tables
++ * into the kernel.  On every MGLRU reclaim/aging event the kernel looks up
++ * the current app (by cgroup id), finds the matching Markov transition, and
++ * refreshes a reclaim hint — purely observe-only: it never changes any
++ * reclaim decision, generation, or folio placement.
++ ******************************************************************************/
++
++#define MGLRU_MARKOV_MAX_APPS		16
++#define MGLRU_MARKOV_MAX_PREDICTED	 4
++#define MGLRU_MARKOV_MAX_HISTORIES	64
++#define MGLRU_MARKOV_MAX_TRANSITIONS	128
++#define MGLRU_MARKOV_MAX_HINTS		64
++
++/*
++ * Throttle: at most one prediction refresh per app/workload pair every
++ * 100 ms.  Trades a tiny amount of prediction freshness for dramatically
++ * lower overhead on busy reclaim paths.
++ */
++#define MGLRU_MARKOV_THROTTLE_JIFFIES	msecs_to_jiffies(100)
++
++/* --- data structures ------------------------------------------------ */
++
++struct mglru_markov_app {
++	int		app_id;
++	u64		cgroup_id;
++	int		current_workload;
++	int		prev_workload;		/* workload before current */
++	unsigned long	ttl_ms;
++	unsigned long	last_update_jiffies;
++	bool		valid;
++};
++
++struct mglru_markov_history {
++	int		app_id;
++	u64		cgroup_id;
++	int		workload_id;
++	unsigned long	timestamp_jiffies;
++	bool		valid;
++};
++
++struct mglru_markov_transition {
++	int		app_id;
++	int		prev_workload;
++	int		current_workload;
++	int		num_next;
++	struct {
++		int	next_workload;
++		int	confidence;	/* 0 .. 10000 */
++		int	boost;
++	} next[MGLRU_MARKOV_MAX_PREDICTED];
++	bool		valid;
++};
++
++struct mglru_markov_hint {
++	int		app_id;
++	int		workload_id;
++	unsigned long	last_predict_jiffies;
++	unsigned long	hits;
++	int		num_predicted;
++	int		predicted_workload[MGLRU_MARKOV_MAX_PREDICTED];
++	int		predicted_confidence[MGLRU_MARKOV_MAX_PREDICTED];
++	bool		valid;
++};
++
++struct mglru_markov_prediction {
++	unsigned long	ttl_ms;
++	unsigned long	timestamp_jiffies;
++	int		num_apps;
++	struct {
++		int	app_id;
++		int	confidence;	/* 0 .. 10000 */
++	} apps[MGLRU_MARKOV_MAX_PREDICTED];
++	bool		valid;
++};
++
++/* --- global state --------------------------------------------------- */
++
++static struct mglru_markov_app mglru_markov_apps[MGLRU_MARKOV_MAX_APPS];
++static struct mglru_markov_history mglru_markov_histories[MGLRU_MARKOV_MAX_HISTORIES];
++static struct mglru_markov_transition mglru_markov_transitions[MGLRU_MARKOV_MAX_TRANSITIONS];
++static struct mglru_markov_hint mglru_markov_hints[MGLRU_MARKOV_MAX_HINTS];
++static struct mglru_markov_prediction mglru_markov_prediction;
++static unsigned int mglru_markov_app_count;
++
++static DEFINE_SPINLOCK(mglru_workload_markov_lock);
++
++/* statistics (hot-path counters, read under lock) */
++static unsigned long mglru_markov_reclaim_calls;
++static unsigned long mglru_markov_predictions;
++static unsigned long mglru_markov_throttled;
++static unsigned long mglru_markov_missing_hint;
++static unsigned long mglru_markov_missing_app;
++static unsigned long mglru_markov_missing_transition;
++
++/* --- helpers -------------------------------------------------------- */
++
++static struct mglru_markov_app *mglru_markov_find_app_locked(int app_id)
++{
++	int i;
++
++	lockdep_assert_held(&mglru_workload_markov_lock);
++
++	for (i = 0; i < MGLRU_MARKOV_MAX_APPS; i++) {
++		if (mglru_markov_apps[i].valid &&
++		    mglru_markov_apps[i].app_id == app_id)
++			return &mglru_markov_apps[i];
++	}
++	return NULL;
++}
++
++static struct mglru_markov_app *mglru_markov_find_app_by_cgroup_locked(u64 cgroup_id)
++{
++	int i;
++
++	lockdep_assert_held(&mglru_workload_markov_lock);
++
++	for (i = 0; i < MGLRU_MARKOV_MAX_APPS; i++) {
++		if (mglru_markov_apps[i].valid &&
++		    mglru_markov_apps[i].cgroup_id == cgroup_id)
++			return &mglru_markov_apps[i];
++	}
++	return NULL;
++}
++
++static struct mglru_markov_app *mglru_markov_get_or_create_app_locked(
++	int app_id, u64 cgroup_id)
++{
++	struct mglru_markov_app *app;
++	int i;
++
++	lockdep_assert_held(&mglru_workload_markov_lock);
++
++	app = mglru_markov_find_app_locked(app_id);
++	if (app)
++		return app;
++
++	/* find a free slot */
++	for (i = 0; i < MGLRU_MARKOV_MAX_APPS; i++) {
++		if (!mglru_markov_apps[i].valid) {
++			app = &mglru_markov_apps[i];
++			memset(app, 0, sizeof(*app));
++			app->app_id = app_id;
++			app->cgroup_id = cgroup_id;
++			app->current_workload = -1;
++			app->prev_workload = -1;
++			app->valid = true;
++			mglru_markov_app_count++;
++			return app;
++		}
++	}
++	return NULL; /* table full */
++}
++
++static struct mglru_markov_hint *mglru_markov_get_or_create_hint_locked(
++	int app_id, int workload_id)
++{
++	struct mglru_markov_hint *hint;
++	int i;
++
++	lockdep_assert_held(&mglru_workload_markov_lock);
++
++	/* find existing */
++	for (i = 0; i < MGLRU_MARKOV_MAX_HINTS; i++) {
++		if (mglru_markov_hints[i].valid &&
++		    mglru_markov_hints[i].app_id == app_id &&
++		    mglru_markov_hints[i].workload_id == workload_id)
++			return &mglru_markov_hints[i];
++	}
++
++	/* allocate new slot */
++	for (i = 0; i < MGLRU_MARKOV_MAX_HINTS; i++) {
++		if (!mglru_markov_hints[i].valid) {
++			hint = &mglru_markov_hints[i];
++			memset(hint, 0, sizeof(*hint));
++			hint->app_id = app_id;
++			hint->workload_id = workload_id;
++			hint->valid = true;
++			return hint;
++		}
++	}
++	return NULL;
++}
++
++/* --- reclaim-path entry point --------------------------------------- */
++
++/*
++ * Called from two low-invasive sites inside MGLRU:
++ *   - mglru_page_policy_reheat()  (aging path)
++ *   - mglru_page_policy_can_isolate()  (eviction path)
++ *
++ * This function NEVER allocates memory, NEVER changes any reclaim
++ * decision, and NEVER alters folio state.  It only does:
++ *   1. Lookup to find the app owning this cgroup.
++ *   2. Lookup the Markov transition for (app, prev_wl, cur_wl).
++ *   3. Refresh the reclaim hint if the throttle window has elapsed.
++ *   4. Bump statistics counters.
++ */
++static void mglru_markov_on_mglru_reclaim(struct folio *folio)
++{
++	struct mem_cgroup *memcg;
++	u64 cgroup_id;
++	struct mglru_markov_app *app;
++	struct mglru_markov_hint *hint;
++	struct mglru_markov_transition *trans;
++	unsigned long now;
++	int i;
++
++	if (!READ_ONCE(mglru_markov_app_count))
++		return;
++
++	memcg = folio_memcg(folio);
++	if (!memcg)
++		return;
++
++	cgroup_id = cgroup_id(memcg->css.cgroup);
++
++	spin_lock(&mglru_workload_markov_lock);
++
++	mglru_markov_reclaim_calls++;
++
++	/* 1. find the app that owns this cgroup */
++	app = mglru_markov_find_app_by_cgroup_locked(cgroup_id);
++	if (!app) {
++		mglru_markov_missing_app++;
++		spin_unlock(&mglru_workload_markov_lock);
++		return;
++	}
++
++	if (app->current_workload < 0) {
++		mglru_markov_missing_hint++;
++		spin_unlock(&mglru_workload_markov_lock);
++		return;
++	}
++
++	/* 2. find or pre-create the hint for this app/workload */
++	hint = mglru_markov_get_or_create_hint_locked(app->app_id,
++						      app->current_workload);
++	if (!hint) {
++		mglru_markov_missing_hint++;
++		spin_unlock(&mglru_workload_markov_lock);
++		return;
++	}
++
++	/* 3. throttle: at most one refresh per 100 ms */
++	now = jiffies;
++	if (time_before(now, hint->last_predict_jiffies +
++			       MGLRU_MARKOV_THROTTLE_JIFFIES)) {
++		mglru_markov_throttled++;
++		spin_unlock(&mglru_workload_markov_lock);
++		return;
++	}
++
++	hint->last_predict_jiffies = now;
++	hint->hits++;
++	mglru_markov_predictions++;
++
++	/* 4. look up Markov transition for (app, prev_wl, cur_wl) */
++	trans = NULL;
++	for (i = 0; i < MGLRU_MARKOV_MAX_TRANSITIONS; i++) {
++		if (!mglru_markov_transitions[i].valid)
++			continue;
++		if (mglru_markov_transitions[i].app_id == app->app_id &&
++		    mglru_markov_transitions[i].prev_workload == app->prev_workload &&
++		    mglru_markov_transitions[i].current_workload == app->current_workload) {
++			trans = &mglru_markov_transitions[i];
++			break;
++		}
++	}
++
++	if (trans) {
++		/* refresh hint from transition predictions */
++		hint->num_predicted = min(trans->num_next,
++					  MGLRU_MARKOV_MAX_PREDICTED);
++		for (i = 0; i < hint->num_predicted; i++) {
++			hint->predicted_workload[i] = trans->next[i].next_workload;
++			hint->predicted_confidence[i] = trans->next[i].confidence;
++		}
++	} else {
++		mglru_markov_missing_transition++;
++		hint->num_predicted = 0;
++	}
++
++	spin_unlock(&mglru_workload_markov_lock);
++
++	pr_debug_ratelimited("lru_gen_workload_markov: app=%d pwl=%d cwl=%d hint_pred=%d\n",
++			     app->app_id, app->prev_workload,
++			     app->current_workload, hint->num_predicted);
++}
++
++/* --- debugfs write helpers ------------------------------------------ */
++
++static int mglru_markov_parse_int(const char *str, int *value)
++{
++	return kstrtoint(str, 0, value);
++}
++
++static int mglru_markov_parse_u64(const char *str, u64 *value)
++{
++	return kstrtou64(str, 0, value);
++}
++
++static int mglru_markov_parse_ulong(const char *str, unsigned long *value)
++{
++	return kstrtoul(str, 0, value);
++}
++
++static int mglru_markov_handle_app_current(int argc, char **argv)
++{
++	int app_id, err;
++	u64 cgroup_id;
++	unsigned long ttl_ms;
++	struct mglru_markov_app *app;
++
++	if (argc != 3)
++		return -EINVAL;
++
++	err = mglru_markov_parse_int(argv[0], &app_id);
++	if (err)
++		return err;
++	err = mglru_markov_parse_u64(argv[1], &cgroup_id);
++	if (err)
++		return err;
++	err = mglru_markov_parse_ulong(argv[2], &ttl_ms);
++	if (err)
++		return err;
++
++	spin_lock(&mglru_workload_markov_lock);
++	app = mglru_markov_get_or_create_app_locked(app_id, cgroup_id);
++	if (!app) {
++		spin_unlock(&mglru_workload_markov_lock);
++		return -ENOSPC;
++	}
++	app->ttl_ms = ttl_ms;
++	app->last_update_jiffies = jiffies;
++	spin_unlock(&mglru_workload_markov_lock);
++	return 0;
++}
++
++static int mglru_markov_handle_app_predict(int argc, char **argv)
++{
++	unsigned long ttl_ms;
++	int err, i, num;
++
++	if (argc < 2)
++		return -EINVAL;
++
++	err = mglru_markov_parse_ulong(argv[0], &ttl_ms);
++	if (err)
++		return err;
++
++	/* remaining args come in pairs: <app_id> <confidence> */
++	num = (argc - 1) / 2;
++	if (num < 1 || num > MGLRU_MARKOV_MAX_PREDICTED)
++		return -EINVAL;
++	if ((argc - 1) % 2)
++		return -EINVAL; /* odd number of trailing args */
++
++	spin_lock(&mglru_workload_markov_lock);
++	mglru_markov_prediction.ttl_ms = ttl_ms;
++	mglru_markov_prediction.timestamp_jiffies = jiffies;
++	mglru_markov_prediction.num_apps = num;
++
++	for (i = 0; i < num; i++) {
++		int app_id, conf;
++
++		err = mglru_markov_parse_int(argv[1 + i * 2], &app_id);
++		if (err)
++			goto out_unlock;
++		err = mglru_markov_parse_int(argv[1 + i * 2 + 1], &conf);
++		if (err)
++			goto out_unlock;
++
++		mglru_markov_prediction.apps[i].app_id = app_id;
++		mglru_markov_prediction.apps[i].confidence =
++			max(0, min(10000, conf));
++	}
++	mglru_markov_prediction.valid = true;
++out_unlock:
++	spin_unlock(&mglru_workload_markov_lock);
++	return err;
++}
++
++static int mglru_markov_handle_workload_update(int argc, char **argv)
++{
++	u64 cgroup_id;
++	int app_id, workload_id, err;
++	struct mglru_markov_app *app;
++	struct mglru_markov_history *hist;
++	int i;
++
++	if (argc != 3)
++		return -EINVAL;
++
++	err = mglru_markov_parse_u64(argv[0], &cgroup_id);
++	if (err)
++		return err;
++	err = mglru_markov_parse_int(argv[1], &app_id);
++	if (err)
++		return err;
++	err = mglru_markov_parse_int(argv[2], &workload_id);
++	if (err)
++		return err;
++
++	spin_lock(&mglru_workload_markov_lock);
++
++	app = mglru_markov_get_or_create_app_locked(app_id, cgroup_id);
++	if (!app) {
++		spin_unlock(&mglru_workload_markov_lock);
++		return -ENOSPC;
++	}
++
++	/* record history: previous workload -> current workload transition */
++	app->prev_workload = app->current_workload;
++	app->current_workload = workload_id;
++	app->last_update_jiffies = jiffies;
++
++	/* add a history entry */
++	for (i = 0; i < MGLRU_MARKOV_MAX_HISTORIES; i++) {
++		if (!mglru_markov_histories[i].valid) {
++			hist = &mglru_markov_histories[i];
++			hist->app_id = app_id;
++			hist->cgroup_id = cgroup_id;
++			hist->workload_id = workload_id;
++			hist->timestamp_jiffies = jiffies;
++			hist->valid = true;
++			break;
++		}
++	}
++
++	/* pre-create hint slot */
++	mglru_markov_get_or_create_hint_locked(app_id, workload_id);
++
++	spin_unlock(&mglru_workload_markov_lock);
++	return 0;
++}
++
++static int mglru_markov_handle_markov_set(int argc, char **argv)
++{
++	int app_id, prev_wl, cur_wl;
++	int err, i, num_triples, idx;
++
++	if (argc < 3)
++		return -EINVAL;
++
++	err = mglru_markov_parse_int(argv[0], &app_id);
++	if (err) return err;
++	err = mglru_markov_parse_int(argv[1], &prev_wl);
++	if (err) return err;
++	err = mglru_markov_parse_int(argv[2], &cur_wl);
++	if (err) return err;
++
++	/* remaining args are triples: <next_wl> <conf> <boost> */
++	num_triples = (argc - 3) / 3;
++	if (num_triples < 1 || num_triples > MGLRU_MARKOV_MAX_PREDICTED)
++		return -EINVAL;
++	if ((argc - 3) % 3)
++		return -EINVAL;
++
++	spin_lock(&mglru_workload_markov_lock);
++
++	/* find or allocate a transition slot */
++	idx = -1;
++	for (i = 0; i < MGLRU_MARKOV_MAX_TRANSITIONS; i++) {
++		if (!mglru_markov_transitions[i].valid) {
++			if (idx < 0)
++				idx = i;
++		} else if (mglru_markov_transitions[i].app_id == app_id &&
++			   mglru_markov_transitions[i].prev_workload == prev_wl &&
++			   mglru_markov_transitions[i].current_workload == cur_wl) {
++			idx = i;
++			break;
++		}
++	}
++
++	if (idx < 0) {
++		spin_unlock(&mglru_workload_markov_lock);
++		return -ENOSPC;
++	}
++
++	mglru_markov_transitions[idx].app_id = app_id;
++	mglru_markov_transitions[idx].prev_workload = prev_wl;
++	mglru_markov_transitions[idx].current_workload = cur_wl;
++	mglru_markov_transitions[idx].num_next = num_triples;
++
++	for (i = 0; i < num_triples; i++) {
++		int next_wl, conf, boost;
++
++		err  = mglru_markov_parse_int(argv[3 + i * 3], &next_wl);
++		err |= mglru_markov_parse_int(argv[3 + i * 3 + 1], &conf);
++		err |= mglru_markov_parse_int(argv[3 + i * 3 + 2], &boost);
++		if (err) {
++			spin_unlock(&mglru_workload_markov_lock);
++			return err;
++		}
++
++		mglru_markov_transitions[idx].next[i].next_workload = next_wl;
++		mglru_markov_transitions[idx].next[i].confidence =
++			max(0, min(10000, conf));
++		mglru_markov_transitions[idx].next[i].boost = boost;
++	}
++	mglru_markov_transitions[idx].valid = true;
++
++	spin_unlock(&mglru_workload_markov_lock);
++	return 0;
++}
++
++static void mglru_markov_clear_all_locked(void)
++{
++	lockdep_assert_held(&mglru_workload_markov_lock);
++
++	memset(mglru_markov_apps, 0, sizeof(mglru_markov_apps));
++	memset(mglru_markov_histories, 0, sizeof(mglru_markov_histories));
++	memset(mglru_markov_transitions, 0, sizeof(mglru_markov_transitions));
++	memset(mglru_markov_hints, 0, sizeof(mglru_markov_hints));
++	memset(&mglru_markov_prediction, 0, sizeof(mglru_markov_prediction));
++	mglru_markov_app_count = 0;
++	mglru_markov_reclaim_calls = 0;
++	mglru_markov_predictions = 0;
++	mglru_markov_throttled = 0;
++	mglru_markov_missing_hint = 0;
++	mglru_markov_missing_app = 0;
++	mglru_markov_missing_transition = 0;
++}
++
++static void mglru_markov_clear_histories_locked(void)
++{
++	lockdep_assert_held(&mglru_workload_markov_lock);
++	memset(mglru_markov_histories, 0, sizeof(mglru_markov_histories));
++}
++
++static void mglru_markov_clear_markov_locked(void)
++{
++	lockdep_assert_held(&mglru_workload_markov_lock);
++	memset(mglru_markov_transitions, 0, sizeof(mglru_markov_transitions));
++}
++
++static void mglru_markov_clear_hints_locked(void)
++{
++	lockdep_assert_held(&mglru_workload_markov_lock);
++	memset(mglru_markov_hints, 0, sizeof(mglru_markov_hints));
++}
++
++static int mglru_workload_markov_parse_line(char *line)
++{
++	int argc = 0;
++	char *argv[16];
++	char *token;
++
++	while ((token = strsep(&line, " \t"))) {
++		if (!*token)
++			continue;
++		if (argc == ARRAY_SIZE(argv))
++			return -E2BIG;
++		argv[argc++] = token;
++	}
++
++	if (!argc)
++		return 0;
++
++	/* "app current <app_id> <cgroup_id> <ttl_ms>" */
++	if (!strcmp(argv[0], "app")) {
++		if (argc < 2)
++			return -EINVAL;
++		if (!strcmp(argv[1], "current"))
++			return mglru_markov_handle_app_current(argc - 2, argv + 2);
++		if (!strcmp(argv[1], "predict"))
++			return mglru_markov_handle_app_predict(argc - 2, argv + 2);
++		return -EINVAL;
++	}
++
++	/* "workload update <cgroup_id> <app_id> <workload_id>" */
++	if (!strcmp(argv[0], "workload")) {
++		if (argc < 3)
++			return -EINVAL;
++		if (!strcmp(argv[1], "update"))
++			return mglru_markov_handle_workload_update(argc - 2, argv + 2);
++		return -EINVAL;
++	}
++
++	/* "markov set <app_id> <prev_wl> <cur_wl> <next1> <conf1> <boost1> ..." */
++	if (!strcmp(argv[0], "markov")) {
++		if (argc < 2)
++			return -EINVAL;
++		if (!strcmp(argv[1], "set"))
++			return mglru_markov_handle_markov_set(argc - 2, argv + 2);
++		return -EINVAL;
++	}
++
++	/* "clear all|histories|markov|hints" */
++	if (!strcmp(argv[0], "clear")) {
++		if (argc != 2)
++			return -EINVAL;
++		spin_lock(&mglru_workload_markov_lock);
++		if (!strcmp(argv[1], "all"))
++			mglru_markov_clear_all_locked();
++		else if (!strcmp(argv[1], "histories"))
++			mglru_markov_clear_histories_locked();
++		else if (!strcmp(argv[1], "markov"))
++			mglru_markov_clear_markov_locked();
++		else if (!strcmp(argv[1], "hints"))
++			mglru_markov_clear_hints_locked();
++		else {
++			spin_unlock(&mglru_workload_markov_lock);
++			return -EINVAL;
++		}
++		spin_unlock(&mglru_workload_markov_lock);
++		return 0;
++	}
++
++	return -EINVAL;
++}
++
++/* --- debugfs file_operations ---------------------------------------- */
++
++static ssize_t mglru_workload_markov_write(struct file *file,
++					   const char __user *src,
++					   size_t len, loff_t *pos)
++{
++	void *buf;
++	char *cur, *next;
++	int err = 0;
++
++	if (!len)
++		return 0;
++	if (len > SZ_64K)
++		return -E2BIG;
++
++	buf = kvmalloc(len + 1, GFP_KERNEL);
++	if (!buf)
++		return -ENOMEM;
++
++	if (copy_from_user(buf, src, len)) {
++		err = -EFAULT;
++		goto done;
++	}
++
++	next = buf;
++	next[len] = '\0';
++
++	while ((cur = strsep(&next, ",;\n"))) {
++		cur = strim(cur);
++		if (!*cur)
++			continue;
++
++		err = mglru_workload_markov_parse_line(cur);
++		if (err)
++			break;
++	}
++done:
++	kvfree(buf);
++
++	return err ?: len;
++}
++
++static int mglru_workload_markov_show(struct seq_file *m, void *v)
++{
++	int i, j;
++
++	spin_lock(&mglru_workload_markov_lock);
++
++	/* --- header & commands --- */
++	seq_puts(m, "# commands:\n");
++	seq_puts(m, "#   app current <app_id> <cgroup_id> <ttl_ms>\n");
++	seq_puts(m, "#   app predict <ttl_ms> <app_id1> <conf1> [<app_id2> <conf2> ...]\n");
++	seq_puts(m, "#   workload update <cgroup_id> <app_id> <workload_id>\n");
++	seq_puts(m, "#   markov set <app_id> <prev_workload> <current_workload> <next1> <conf1> <boost1> [...]\n");
++	seq_puts(m, "#   clear all|histories|markov|hints\n");
++	seq_puts(m, "\n");
++
++	/* --- current app states --- */
++	seq_puts(m, "# current app state\n");
++	seq_puts(m, "# app_id cgroup_id current_workload prev_workload ttl_ms\n");
++	for (i = 0; i < MGLRU_MARKOV_MAX_APPS; i++) {
++		if (!mglru_markov_apps[i].valid)
++			continue;
++		seq_printf(m, "app %d %llu %d %d %lu\n",
++			   mglru_markov_apps[i].app_id,
++			   mglru_markov_apps[i].cgroup_id,
++			   mglru_markov_apps[i].current_workload,
++			   mglru_markov_apps[i].prev_workload,
++			   mglru_markov_apps[i].ttl_ms);
++	}
++	seq_puts(m, "\n");
++
++	/* --- predicted apps --- */
++	seq_puts(m, "# predicted apps\n");
++	if (mglru_markov_prediction.valid) {
++		seq_printf(m, "# ttl_ms=%lu num=%d\n",
++			   mglru_markov_prediction.ttl_ms,
++			   mglru_markov_prediction.num_apps);
++		seq_puts(m, "# app_id confidence\n");
++		for (i = 0; i < mglru_markov_prediction.num_apps; i++) {
++			seq_printf(m, "pred %d %d\n",
++				   mglru_markov_prediction.apps[i].app_id,
++				   mglru_markov_prediction.apps[i].confidence);
++		}
++	} else {
++		seq_puts(m, "# (none)\n");
++	}
++	seq_puts(m, "\n");
++
++	/* --- workload histories --- */
++	seq_puts(m, "# workload histories\n");
++	seq_puts(m, "# app_id cgroup_id workload_id\n");
++	for (i = 0; i < MGLRU_MARKOV_MAX_HISTORIES; i++) {
++		if (!mglru_markov_histories[i].valid)
++			continue;
++		seq_printf(m, "hist %d %llu %d\n",
++			   mglru_markov_histories[i].app_id,
++			   mglru_markov_histories[i].cgroup_id,
++			   mglru_markov_histories[i].workload_id);
++	}
++	seq_puts(m, "\n");
++
++	/* --- Markov transition entries --- */
++	seq_puts(m, "# Markov transitions\n");
++	seq_puts(m, "# app_id prev_workload current_workload -> next_workload confidence boost ...\n");
++	for (i = 0; i < MGLRU_MARKOV_MAX_TRANSITIONS; i++) {
++		if (!mglru_markov_transitions[i].valid)
++			continue;
++		seq_printf(m, "markov %d %d %d",
++			   mglru_markov_transitions[i].app_id,
++			   mglru_markov_transitions[i].prev_workload,
++			   mglru_markov_transitions[i].current_workload);
++		for (j = 0; j < mglru_markov_transitions[i].num_next; j++) {
++			seq_printf(m, " %d %d %d",
++				   mglru_markov_transitions[i].next[j].next_workload,
++				   mglru_markov_transitions[i].next[j].confidence,
++				   mglru_markov_transitions[i].next[j].boost);
++		}
++		seq_putc(m, '\n');
++	}
++	seq_puts(m, "\n");
++
++	/* --- reclaim hints --- */
++	seq_puts(m, "# reclaim hints\n");
++	seq_puts(m, "# app_id workload_id hits last_predict_jiffies num_predicted [wl:conf ...]\n");
++	for (i = 0; i < MGLRU_MARKOV_MAX_HINTS; i++) {
++		if (!mglru_markov_hints[i].valid)
++			continue;
++		seq_printf(m, "hint %d %d %lu %lu %d",
++			   mglru_markov_hints[i].app_id,
++			   mglru_markov_hints[i].workload_id,
++			   mglru_markov_hints[i].hits,
++			   mglru_markov_hints[i].last_predict_jiffies,
++			   mglru_markov_hints[i].num_predicted);
++		for (j = 0; j < mglru_markov_hints[i].num_predicted; j++) {
++			seq_printf(m, " %d %d",
++				   mglru_markov_hints[i].predicted_workload[j],
++				   mglru_markov_hints[i].predicted_confidence[j]);
++		}
++		seq_putc(m, '\n');
++	}
++	seq_puts(m, "\n");
++
++	/* --- statistics --- */
++	seq_puts(m, "# reclaim path statistics\n");
++	seq_printf(m, "stat reclaim_calls      %lu\n", mglru_markov_reclaim_calls);
++	seq_printf(m, "stat predictions        %lu\n", mglru_markov_predictions);
++	seq_printf(m, "stat throttled          %lu\n", mglru_markov_throttled);
++	seq_printf(m, "stat missing_hint       %lu\n", mglru_markov_missing_hint);
++	seq_printf(m, "stat missing_app        %lu\n", mglru_markov_missing_app);
++	seq_printf(m, "stat missing_transition %lu\n", mglru_markov_missing_transition);
++
++	spin_unlock(&mglru_workload_markov_lock);
++	return 0;
++}
++
++static int mglru_workload_markov_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, mglru_workload_markov_show, NULL);
++}
++
++static const struct file_operations mglru_workload_markov_fops = {
++	.open		= mglru_workload_markov_open,
++	.read		= seq_read,
++	.write		= mglru_workload_markov_write,
++	.llseek		= seq_lseek,
++	.release	= single_release,
++};
++
+ static void update_batch_size(struct lru_gen_mm_walk *walk, struct folio *folio,
+ 			      int old_gen, int new_gen)
+ {
+@@ -5015,6 +5528,9 @@
+ 		list_move(&folio->lru, &lrugen->folios[gen][type][zone]);
+ 		return true;
+ 	}
++
++	/* observe-only workload Markov hint refresh */
++	mglru_markov_on_mglru_reclaim(folio);
+
+ 	/* promoted */
+ 	if (gen != lru_gen_from_seq(lrugen->min_seq[type])) {
+@@ -5068,6 +5584,9 @@ static bool isolate_folio(struct lruvec *lruvec, struct folio *folio, struct sca
+
+ 	if (!mglru_page_policy_can_isolate(folio, sc))
+ 		return false;
++
++	/* observe-only workload Markov hint refresh */
++	mglru_markov_on_mglru_reclaim(folio);
+
+ 	/* swap constrained */
+ 	if (!(sc->gfp_mask & __GFP_IO) &&
+@@ -6313,6 +6832,8 @@ static int __init init_lru_gen(void)
+ 				    &lru_gen_ro_fops);
+ 	debugfs_create_file("lru_gen_pages", 0644, NULL, NULL,
+ 			    &mglru_page_policy_fops);
++	debugfs_create_file("lru_gen_workload_markov", 0644, NULL, NULL,
++			    &mglru_workload_markov_fops);
+
+ 	return 0;
+ };

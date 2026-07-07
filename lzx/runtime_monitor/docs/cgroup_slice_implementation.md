@@ -20,10 +20,10 @@
 SESSION_ID=session_online_lstm_$(date +%Y%m%d_%H%M%S)
 
 ./automation/run_automation.sh \
-  --scenario automation/scenario_local_wps_files_qq_auto_login.json \
+  --scenario configs/automation/scenario_local_wps_files_qq_auto_login.json \
   --session-id "$SESSION_ID" \
   --scenario-id scenario_local_wps_files_qq_auto_login \
-  --trace-output "runtime_monitor/output/${SESSION_ID}/model/automation_trace.csv" \
+  --trace-output "outputs/runtime_monitor/${SESSION_ID}/model/automation_trace.csv" \
   --test-slice huawei-test.slice \
   --reset-files
 ```
@@ -235,7 +235,7 @@ automation 每一步会写出 `automation_trace.csv`。其中包含：
 ```bash
 bash runtime_monitor/scripts/check_huawei_cgroup_membership.sh \
   --slice huawei-test.slice \
-  --session-dir runtime_monitor/output/session_cgroup_check_20260703_110252 \
+  --session-dir outputs/runtime_monitor/session_cgroup_check_20260703_110252 \
   --app-pattern 'wps|WPS|qq|QQ|nautilus|Files|dde-file-manager' \
   --watch-seconds 75 \
   --interval-s 1
@@ -244,12 +244,12 @@ bash runtime_monitor/scripts/check_huawei_cgroup_membership.sh \
 脚本会输出：
 
 ```text
-runtime_monitor/output/<session>/review/cgroup_membership_checks.csv
-runtime_monitor/output/<session>/review/cgroup_membership_report.md
-runtime_monitor/output/<session>/review/cgroup_membership_processes.tsv
-runtime_monitor/output/<session>/review/cgroup_membership_memory.tsv
-runtime_monitor/output/<session>/review/cgroup_membership_systemctl_status.txt
-runtime_monitor/output/<session>/review/cgroup_membership_systemd_cgls.txt
+outputs/runtime_monitor/<session>/review/cgroup_membership_checks.csv
+outputs/runtime_monitor/<session>/review/cgroup_membership_report.md
+outputs/runtime_monitor/<session>/review/cgroup_membership_processes.tsv
+outputs/runtime_monitor/<session>/review/cgroup_membership_memory.tsv
+outputs/runtime_monitor/<session>/review/cgroup_membership_systemctl_status.txt
+outputs/runtime_monitor/<session>/review/cgroup_membership_systemd_cgls.txt
 ```
 
 检查内容包括：
@@ -271,7 +271,7 @@ runtime_monitor/output/<session>/review/cgroup_membership_systemd_cgls.txt
 已验证会话：
 
 ```text
-runtime_monitor/output/session_cgroup_check_20260703_110252
+outputs/runtime_monitor/session_cgroup_check_20260703_110252
 ```
 
 关键结果：

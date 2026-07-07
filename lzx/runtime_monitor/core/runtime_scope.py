@@ -11,6 +11,7 @@ from typing import Any
 @dataclass(frozen=True)
 class RuntimeApp:
     app_key: str
+    app_id: int
     vocab_name: str
     scope_name: str
     unit_name: str
@@ -44,6 +45,22 @@ class RuntimeAppScope:
         return {app.app_key: app.vocab_name for app in self.apps if app.prediction_enabled}
 
     @property
+    def app_key_to_app_id(self) -> dict[str, int]:
+        return {app.app_key: app.app_id for app in self.apps}
+
+    @property
+    def vocab_name_to_app_id(self) -> dict[str, int]:
+        return {app.vocab_name: app.app_id for app in self.apps if app.prediction_enabled}
+
+    @property
+    def app_key_to_scope_name(self) -> dict[str, str]:
+        return {app.app_key: app.scope_name for app in self.apps}
+
+    @property
+    def prediction_enabled_app_ids(self) -> set[int]:
+        return {app.app_id for app in self.apps if app.prediction_enabled}
+
+    @property
     def window_keywords(self) -> dict[str, list[str]]:
         return {app.app_key: list(app.window_keywords) for app in self.apps}
 
@@ -63,12 +80,17 @@ class RuntimeAppScope:
 
     def summary_lines(self) -> list[str]:
         mapping = ", ".join(f"{key}->{value}" for key, value in self.app_key_to_vocab_name.items())
+        app_id_mapping = ", ".join(
+            f"{app.app_key}->{app.app_id}->{app.vocab_name}->{app.scope_name}"
+            for app in self.apps
+        )
         lines = [
             f"- app_scope_config: `{self.path}`",
             f"- loaded_apps: {', '.join(self.target_apps)}",
             f"- workload_scopes: {', '.join(self.workload_scopes)}",
             f"- prediction_apps: {', '.join(self.prediction_apps)}",
             f"- app_key_to_vocab_name: {mapping}",
+            f"- app_key_to_app_id_vocab_scope: {app_id_mapping}",
         ]
         if self.vocab_warnings:
             lines.append("- app_scope_vocab_warnings:")
@@ -85,9 +107,14 @@ def load_runtime_app_scope(path: str | Path, vocab_path: str | Path | None = Non
     for raw in data.get("apps", []):
         if not isinstance(raw, dict):
             continue
+        try:
+            app_id = int(raw.get("app_id", 0) or 0)
+        except (TypeError, ValueError):
+            app_id = 0
         apps.append(
             RuntimeApp(
                 app_key=str(raw.get("app_key", "")).strip(),
+                app_id=app_id,
                 vocab_name=str(raw.get("vocab_name", "")).strip(),
                 scope_name=str(raw.get("scope_name", "")).strip(),
                 unit_name=str(raw.get("unit_name", "")).strip(),
@@ -98,18 +125,33 @@ def load_runtime_app_scope(path: str | Path, vocab_path: str | Path | None = Non
             )
         )
     apps = [app for app in apps if app.app_key]
+    app_id_warnings = _validate_app_ids(apps)
     scope = RuntimeAppScope(
         path=config_path,
         slice_name=str(data.get("slice", "")).strip(),
         apps=apps,
-        vocab_warnings=[],
+        vocab_warnings=app_id_warnings,
     )
     return RuntimeAppScope(
         path=scope.path,
         slice_name=scope.slice_name,
         apps=scope.apps,
-        vocab_warnings=_validate_vocab(scope, vocab_path),
+        vocab_warnings=scope.vocab_warnings + _validate_vocab(scope, vocab_path),
     )
+
+
+def _validate_app_ids(apps: list[RuntimeApp]) -> list[str]:
+    warnings: list[str] = []
+    seen: dict[int, str] = {}
+    for app in apps:
+        if app.app_id <= 0:
+            warnings.append(f"{app.app_key} app_id must be a positive integer")
+            continue
+        if app.app_id in seen:
+            warnings.append(f"duplicate app_id {app.app_id}: {seen[app.app_id]} and {app.app_key}")
+        else:
+            seen[app.app_id] = app.app_key
+    return warnings
 
 
 def _validate_vocab(scope: RuntimeAppScope, vocab_path: str | Path | None) -> list[str]:

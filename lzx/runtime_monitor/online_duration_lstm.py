@@ -192,6 +192,7 @@ class OnlineDurationLSTMRunner:
         self.review_dir = review_dir
         configured_map = getattr(args, "app_key_to_vocab_name", {}) or {}
         self.app_name_map = dict(APP_NAME_MAP)
+        self.app_name_map.update(_load_app_mapping_aliases(getattr(args, "app_mapping", "")))
         self.app_name_map.update({str(key): str(value) for key, value in configured_map.items()})
         self.call_id = 0
         self.skipped: Counter[str] = Counter()
@@ -230,7 +231,7 @@ class OnlineDurationLSTMRunner:
         self.prediction_writer.close()
         self.timeline_writer.close()
 
-    def process_sample(self, feature_row: dict[str, Any]) -> None:
+    def process_sample(self, feature_row: dict[str, Any]) -> dict[str, Any]:
         sample_time = parse_time(str(feature_row["timestamp"]))
         raw_fg = str(feature_row.get("foreground_app", ""))
         mapped_fg = self.map_app(raw_fg)
@@ -274,7 +275,13 @@ class OnlineDurationLSTMRunner:
             self.prediction_writer.write_row({**base_prediction, "status": "skipped", "skip_reason": skip_reason})
             self.previous_row = dict(feature_row)
             self.previous_dwell_s = self._current_dwell(sample_time)
-            return
+            return {
+                "status": "skipped",
+                "skip_reason": skip_reason,
+                "outputs": [],
+                "mapped_foreground_app": mapped_fg,
+                "raw_foreground_app": raw_fg,
+            }
 
         assert self.predictor is not None
         status = "success"
@@ -388,6 +395,13 @@ class OnlineDurationLSTMRunner:
         self.call_id += 1
         self.previous_row = dict(feature_row)
         self.previous_dwell_s = self._current_dwell(sample_time)
+        return {
+            "status": status,
+            "skip_reason": error,
+            "outputs": outputs,
+            "mapped_foreground_app": mapped_fg,
+            "raw_foreground_app": raw_fg,
+        }
 
     def _update_segments(self, row: dict[str, Any], sample_time: dt.datetime, raw_fg: str, mapped_fg: str) -> None:
         if self.current_segment is None:
@@ -458,3 +472,30 @@ class OnlineDurationLSTMRunner:
 
     def map_open_apps(self, raw_open_apps: str) -> list[str]:
         return dedupe_keep_order([self.map_app(app) for app in split_apps(raw_open_apps)])
+
+
+def _load_app_mapping_aliases(path_value: str | Path | None) -> dict[str, str]:
+    if not path_value:
+        return {}
+    path = Path(path_value).expanduser()
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    aliases: dict[str, str] = {}
+    for rule in config.get("rules", []):
+        if not isinstance(rule, dict):
+            continue
+        app = str(rule.get("app", "")).strip()
+        if not app:
+            continue
+        aliases[app] = app
+        for key in ("gtk_app_id", "wm_class", "process", "title_contains"):
+            raw_values = rule.get(key, [])
+            values = raw_values if isinstance(raw_values, list) else [raw_values]
+            for value in values:
+                alias = str(value).strip()
+                if alias:
+                    aliases[alias] = app
+                    aliases[alias.upper()] = app
+    return aliases

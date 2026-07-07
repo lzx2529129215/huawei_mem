@@ -33,7 +33,7 @@ while (($# > 0)); do
 done
 
 if [[ -z "$SESSION_DIR" ]]; then
-    SESSION_DIR="runtime_monitor/output/cgroup_check_$(date +%Y%m%d_%H%M%S)"
+    SESSION_DIR="outputs/runtime_monitor/cgroup_check_$(date +%Y%m%d_%H%M%S)"
 fi
 REVIEW_DIR="$SESSION_DIR/review"
 mkdir -p "$REVIEW_DIR"

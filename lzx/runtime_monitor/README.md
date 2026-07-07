@@ -19,7 +19,7 @@
 
 已实现：
 
-- 识别 WPS 相关进程：通过 `comm/exe_path` 关键字匹配 `wps/et/wpp/wpspdf/kingsoft/office`，规则在 `config.yaml` 中配置。
+- 识别 WPS 相关进程：通过 `comm/exe_path` 关键字匹配 `wps/et/wpp/wpspdf/kingsoft/office`，规则在 `configs/runtime/config.yaml` 中配置。
 - 进程归属采集：`pid/tgid/comm/exe_path/cgroup_path/start_time`。
 - 文件事件 fallback：无 eBPF 时通过 `/proc/<pid>/fd` 近似采集 `openat`，通过 `/proc/<pid>/maps` 近似采集 `mmap`。
 - 应用级 I/O fallback：通过 `/proc/<pid>/io` 聚合 `read_bytes/write_bytes/rchar/wchar`。
@@ -49,7 +49,6 @@ Best effort 或未实现：
 ```text
 runtime_monitor/
   README.md
-  config.yaml
   monitor.py                  # Runtime Monitor v0 主入口
   online_monitor.py           # 保留：在线预测/D-Bus 对接入口
   collectors/
@@ -65,48 +64,54 @@ runtime_monitor/
     writer.py
   ebpf/
     README.md                 # eBPF 后续扩展说明
-  output/
-    events.csv
-    app_events.csv
-    features_1s.csv
-    app_features_1s.csv
   scripts/
     run_wps_monitor.sh
     label_session.py
     analyze_features.py
+
+configs/runtime/
+  config.yaml
+  runtime_app_scope.json
+  app_mapping.json
+
+outputs/runtime_monitor/
+  <session_id>/
+    model/
+    review/
 ```
 
 ## 运行方式
 
-默认采集 WPS，输出到 `./output`：
+默认采集 WPS，输出到 `outputs/runtime_monitor`：
 
 ```bash
-cd /home/lzx/Desktop/huawei/huawei_mem/lzx/runtime_monitor
-python3 monitor.py \
-  --config config.yaml \
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx
+python3 runtime_monitor/monitor.py \
+  --config configs/runtime/config.yaml \
   --target-app WPS \
   --sample-interval 1 \
-  --output-dir ./output \
+  --output-dir outputs/runtime_monitor \
   --path-mode hash
 ```
 
 采集 WPS / QQ / Files：
 
 ```bash
-cd /home/lzx/Desktop/huawei/huawei_mem/lzx/runtime_monitor
-python3 monitor.py \
-  --config config.yaml \
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx
+python3 runtime_monitor/monitor.py \
+  --config configs/runtime/config.yaml \
   --target-apps WPS,QQ,FILES \
   --sample-interval 1 \
-  --output-dir ./output/session_files \
+  --output-dir outputs/runtime_monitor \
+  --session-id session_files \
   --path-mode hash
 ```
 
 也可以使用脚本：
 
 ```bash
-cd /home/lzx/Desktop/huawei/huawei_mem/lzx/runtime_monitor
-bash scripts/run_wps_monitor.sh
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx
+bash runtime_monitor/scripts/run_wps_monitor.sh
 ```
 
 常用参数：
@@ -198,8 +203,8 @@ session_id,feature_window_id,window_start_ns,window_end_ns,timestamp,app_id,app_
 ### 1. 采集启动 WPS
 
 ```bash
-cd /home/lzx/Desktop/huawei/huawei_mem/lzx/runtime_monitor
-python3 monitor.py --output-dir ./output/wps_launch --label WPS_LAUNCH --path-mode hash
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx
+python3 runtime_monitor/monitor.py --output-dir outputs/runtime_monitor/wps_launch --label WPS_LAUNCH --path-mode hash
 ```
 
 另一个终端启动 WPS，等待几秒后回到 monitor 终端按 `Ctrl+C`。
@@ -207,7 +212,7 @@ python3 monitor.py --output-dir ./output/wps_launch --label WPS_LAUNCH --path-mo
 ### 2. 采集打开 docx
 
 ```bash
-python3 monitor.py --output-dir ./output/wps_open_doc --label WPS_OPEN_DOC --path-mode hash
+python3 runtime_monitor/monitor.py --output-dir outputs/runtime_monitor/wps_open_doc --label WPS_OPEN_DOC --path-mode hash
 ```
 
 在 WPS 中打开一个 `.docx` 文档，等待几秒后按 `Ctrl+C`。
@@ -215,7 +220,7 @@ python3 monitor.py --output-dir ./output/wps_open_doc --label WPS_OPEN_DOC --pat
 ### 3. 采集保存文档
 
 ```bash
-python3 monitor.py --output-dir ./output/wps_save_doc --label WPS_SAVE_DOC --path-mode hash
+python3 runtime_monitor/monitor.py --output-dir outputs/runtime_monitor/wps_save_doc --label WPS_SAVE_DOC --path-mode hash
 ```
 
 编辑文档并保存，等待几秒后按 `Ctrl+C`。
@@ -223,10 +228,10 @@ python3 monitor.py --output-dir ./output/wps_save_doc --label WPS_SAVE_DOC --pat
 ### 4. 查看结果
 
 ```bash
-head -20 output/wps_open_doc/events.csv
-head -20 output/wps_open_doc/app_events.csv
-head -20 output/wps_open_doc/features_1s.csv
-python3 scripts/analyze_features.py output/wps_open_doc/features_1s.csv
+head -20 outputs/runtime_monitor/wps_open_doc/events.csv
+head -20 outputs/runtime_monitor/wps_open_doc/app_events.csv
+head -20 outputs/runtime_monitor/wps_open_doc/features_1s.csv
+python3 scripts/analyze_features.py outputs/runtime_monitor/wps_open_doc/features_1s.csv
 ```
 
 重点观察：
@@ -242,15 +247,15 @@ python3 scripts/analyze_features.py output/wps_open_doc/features_1s.csv
 运行时可直接使用 `--label` 写入整段采集的标签：
 
 ```bash
-python3 monitor.py --output-dir ./output/session1 --label WPS_OPEN_DOC
+python3 runtime_monitor/monitor.py --output-dir outputs/runtime_monitor/session1 --label WPS_OPEN_DOC
 ```
 
 也可以采集后修改：
 
 ```bash
-python3 scripts/label_session.py \
-  output/session1/features_1s.csv \
-  output/session1/features_1s.labeled.csv \
+python3 runtime_monitor/scripts/label_session.py \
+  outputs/runtime_monitor/session1/features_1s.csv \
+  outputs/runtime_monitor/session1/features_1s.labeled.csv \
   WPS_OPEN_DOC
 ```
 
@@ -261,7 +266,7 @@ python3 scripts/label_session.py \
 - `online_monitor.py`：原 GNOME D-Bus 窗口事件 + 在线预测入口。
 - `predictor.py`：LSTM 在线预测适配层。
 - `gnome_extension/`：GNOME Shell 扩展。
-- `app_mapping.json`：窗口应用名到预测器词表的映射。
+- `configs/runtime/app_mapping.json`：窗口应用名到预测器词表的映射。
 
 后续如果要把 v0 的 `features_1s.csv` 或前台事件接入预测器，可以基于这些文件继续对接，不需要重新实现预测加载逻辑。
 

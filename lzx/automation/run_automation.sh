@@ -2,7 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-SCENARIO="${SCENARIO:-${SCRIPT_DIR}/scenario_local_wps.json}"
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+SCENARIO="${SCENARIO:-${PROJECT_ROOT}/configs/automation/scenario_local_wps.json}"
 DISPLAY_ARG="${DISPLAY_ARG:-}"
 XAUTHORITY_ARG="${XAUTHORITY_ARG:-}"
 DRY_RUN=0
@@ -21,7 +22,7 @@ Examples:
   cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
   ./run_automation.sh
   ./run_automation.sh --dry-run
-  ./run_automation.sh --scenario scenario_local_wps_files.json --test-slice huawei-test.slice
+  ./run_automation.sh --scenario configs/automation/scenario_local_files.json --test-slice huawei-test.slice
 EOF
 }
 
@@ -75,7 +76,9 @@ while (($# > 0)); do
     esac
 done
 
-if [[ "$SCENARIO" != /* && ! -f "$SCENARIO" && -f "${SCRIPT_DIR}/${SCENARIO}" ]]; then
+if [[ "$SCENARIO" != /* && ! -f "$SCENARIO" && -f "${PROJECT_ROOT}/${SCENARIO}" ]]; then
+    SCENARIO="${PROJECT_ROOT}/${SCENARIO}"
+elif [[ "$SCENARIO" != /* && ! -f "$SCENARIO" && -f "${SCRIPT_DIR}/${SCENARIO}" ]]; then
     SCENARIO="${SCRIPT_DIR}/${SCENARIO}"
 fi
 if [[ -z "$SESSION_ID" ]]; then

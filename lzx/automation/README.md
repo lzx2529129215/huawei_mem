@@ -15,57 +15,57 @@ sudo apt install xdotool
 一键运行自动化：
 
 ```bash
-cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
-./run_automation.sh
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx
+automation/run_automation.sh
 ```
 
 当前推荐实验场景使用 Files/Nautilus 作为第三个应用：
 
 ```bash
-./run_automation.sh --scenario scenario_local_wps_files.json
+automation/run_automation.sh --scenario configs/automation/scenario_local_files.json
 ```
 
 带 action trace 输出：
 
 ```bash
-./run_automation.sh \
-  --scenario scenario_local_wps_files.json \
-  --trace-output ../runtime_monitor/output/session_files_001/automation_trace.csv \
+automation/run_automation.sh \
+  --scenario configs/automation/scenario_local_files.json \
+  --trace-output outputs/runtime_monitor/session_files_001/model/automation_trace.csv \
   --session-id session_files_001 \
-  --scenario-id scenario_local_wps_files
+  --scenario-id scenario_local_files
 ```
 
 dry-run 检查：
 
 ```bash
-./run_automation.sh --dry-run
+automation/run_automation.sh --dry-run
 ```
 
 手动运行底层 Python：
 
 ```bash
-cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
-python3 app_automation.py scenario_local_wps.json --dry-run
-python3 app_automation.py scenario_local_wps.json
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx
+python3 automation/app_automation.py configs/automation/scenario_local_wps.json --dry-run
+python3 automation/app_automation.py configs/automation/scenario_local_wps.json
 ```
 
 如果出现 `Can't open display: (null)`，说明当前终端没有 `DISPLAY` 环境变量。优先在桌面终端运行；也可以显式指定 X11 display：
 
 ```bash
-cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
-python3 app_automation.py scenario_local_wps.json --display :0
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx
+python3 automation/app_automation.py configs/automation/scenario_local_wps.json --display :0
 ```
 
 如果是通过 `sudo` 或其他用户执行，可能还需要指定 Xauthority：
 
 ```bash
-python3 app_automation.py scenario_local_wps.json --display :0 --xauthority /home/lzx/.Xauthority
+python3 automation/app_automation.py configs/automation/scenario_local_wps.json --display :0 --xauthority /home/lzx/.Xauthority
 ```
 
 GNOME Wayland + Xwayland 下，Xauthority 通常不在 `~/.Xauthority`，而在 `/run/user/1000/.mutter-Xwaylandauth.*`。脚本会自动探测。这个参数主要给 `xdotool`、WPS、QQ 这类 X11/Xwayland 控制使用：
 
 ```bash
-python3 app_automation.py scenario_local_wps.json \
+python3 automation/app_automation.py configs/automation/scenario_local_wps.json \
   --display :0 \
   --xauthority /run/user/1000/.mutter-Xwaylandauth.OI83Q3
 ```
@@ -118,7 +118,7 @@ WPS 如果没有被关闭，通常是因为 `wps` 启动命令只是 wrapper，�
 }
 ```
 
-当前 `scenario_local_wps.json` 还包含 QQ 流程：
+当前 `configs/automation/scenario_local_wps.json` 还包含 QQ 流程：
 
 - 启动 WPS。
 - 启动 QQ。
@@ -133,8 +133,8 @@ WPS 如果没有被关闭，通常是因为 `wps` 启动命令只是 wrapper，�
 
 场景文件选择：
 
-- `scenario_local_wps.json`：原 Firefox 场景。当前 Snap Firefox + Wayland 环境下可能无法被 `xdotool` 控制。
-- `scenario_local_wps_files.json`：推荐当前实验使用的稳定场景，用 Files/Nautilus 替代 Firefox。
+- `configs/automation/scenario_local_wps.json`：原 Firefox 场景。当前 Snap Firefox + Wayland 环境下可能无法被 `xdotool` 控制。
+- `configs/automation/scenario_local_files.json`：推荐当前实验使用的稳定场景，用 Files/Nautilus 替代 Firefox。
 
 QQ 启动命令默认尝试：
 
@@ -150,7 +150,7 @@ command -v linuxqq
 command -v qq
 ```
 
-然后修改 `scenario_local_wps.json` 里启动 QQ 的 `shell` action，以及 QQ `switch/close` action 里的 `class/title/process_names/path_contains`。
+然后修改 `configs/automation/scenario_local_wps.json` 里启动 QQ 的 `shell` action，以及 QQ `switch/close` action 里的 `class/title/process_names/path_contains`。
 
 Files/Nautilus 启动命令：
 
@@ -242,22 +242,23 @@ xprop -id $(xdotool search --onlyvisible --class firefox | tail -1) WM_CLASS _NE
 一个终端先启动采集：
 
 ```bash
-cd /home/lzx/Desktop/huawei/huawei_mem/lzx/runtime_monitor
-python3 monitor.py --output-dir ./output/wps_auto --label WPS_OPEN_DOC --path-mode hash
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx
+python3 runtime_monitor/monitor.py --output-dir outputs/runtime_monitor \
+  --session-id wps_auto --label WPS_OPEN_DOC --path-mode hash
 ```
 
 另一个终端运行自动化：
 
 ```bash
-cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
-python3 app_automation.py scenario_local_wps.json
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx
+python3 automation/app_automation.py configs/automation/scenario_local_wps.json
 ```
 
 如果你已经在另一个终端启动了 monitor，可以用一键脚本只跑自动化：
 
 ```bash
-cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
-./run_automation.sh
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx
+automation/run_automation.sh
 ```
 
 ## 推荐完整流程：采集、自动化、对齐
@@ -265,26 +266,27 @@ cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
 终端 A：
 
 ```bash
-cd /home/lzx/Desktop/huawei/huawei_mem/lzx/runtime_monitor
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx
 
-python3 monitor.py \
-  --config config.yaml \
+python3 runtime_monitor/monitor.py \
+  --config configs/runtime/config.yaml \
   --target-app WPS \
   --sample-interval 1 \
-  --output-dir ./output/session_files_001 \
+  --output-dir outputs/runtime_monitor \
+  --session-id session_files_001 \
   --path-mode hash
 ```
 
 终端 B：
 
 ```bash
-cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
+cd /home/lzx/Desktop/huawei/huawei_mem/lzx
 
-./run_automation.sh \
-  --scenario scenario_local_wps_files.json \
-  --trace-output ../runtime_monitor/output/session_files_001/automation_trace.csv \
+automation/run_automation.sh \
+  --scenario configs/automation/scenario_local_files.json \
+  --trace-output outputs/runtime_monitor/session_files_001/model/automation_trace.csv \
   --session-id session_files_001 \
-  --scenario-id scenario_local_wps_files
+  --scenario-id scenario_local_files
 ```
 
 对齐：
@@ -293,10 +295,10 @@ cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
 cd /home/lzx/Desktop/huawei/huawei_mem/lzx
 
 python3 runtime_monitor/scripts/align_automation_monitor.py \
-  --features runtime_monitor/output/session_files_001/features_1s.csv \
-  --trace runtime_monitor/output/session_files_001/automation_trace.csv \
-  --output runtime_monitor/output/session_files_001/features_1s.labeled.csv \
-  --labels-output runtime_monitor/output/session_files_001/labels.csv \
+  --features outputs/runtime_monitor/session_files_001/features_1s.csv \
+  --trace outputs/runtime_monitor/session_files_001/model/automation_trace.csv \
+  --output outputs/runtime_monitor/session_files_001/features_1s.labeled.csv \
+  --labels-output outputs/runtime_monitor/session_files_001/labels.csv \
   --state-label-mode carry-forward
 ```
 

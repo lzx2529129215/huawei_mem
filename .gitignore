@@ -27,19 +27,22 @@ Thumbs.db
 
 # 构建产物 / 日志
 *.log
+*.csv
 build/
 __pycache__/
 *.pyc
 
-# Runtime Monitor session outputs
+# Unified project outputs
+lzx/outputs/
 lzx/runtime_monitor/output/
+lzx/operation_predictor/outputs/
 lzx/runtime_monitor/**/*.log
 
 # Operation predictor generated data / reports / checkpoints
 lzx/operation_predictor/data/processed/
 lzx/operation_predictor/data/raw/
-lzx/operation_predictor/outputs/results/
-lzx/operation_predictor/outputs/checkpoints/app_lstm_duration/
+**/checkpoint*
+**/checkpoints/
 
 # Linux 内核源码（仅用于参考，不应入库）
 lzx/MGLRU-test/v0/mglru_kernel_transfer/linux-hwe-6.17-6.17.0/

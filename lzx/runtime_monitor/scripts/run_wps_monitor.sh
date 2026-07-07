@@ -3,11 +3,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-python3 monitor.py \
-  --config config.yaml \
+python3 runtime_monitor/monitor.py \
+  --config configs/runtime/config.yaml \
   --target-app WPS \
   --sample-interval 1 \
-  --output-dir ./output \
+  --output-dir outputs/runtime_monitor \
   --path-mode hash \
   "$@"
 

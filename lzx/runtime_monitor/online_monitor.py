@@ -175,8 +175,8 @@ class RuntimeMonitor:
 def default_paths() -> dict[str, Path]:
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     return {
-        "raw_events": MONITOR_DIR / "outputs" / "runtime" / f"events_{stamp}.jsonl",
-        "predictions": MONITOR_DIR / "outputs" / "runtime" / f"predictions_{stamp}.jsonl",
+        "raw_events": WORKSPACE_ROOT / "outputs" / "runtime_monitor" / f"events_{stamp}.jsonl",
+        "predictions": WORKSPACE_ROOT / "outputs" / "runtime_monitor" / f"predictions_{stamp}.jsonl",
         "app_events": MONITOR_DIR / "data" / "raw" / "runtime" / "app_events.csv",
     }
 
@@ -184,7 +184,7 @@ def default_paths() -> dict[str, Path]:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     paths = default_paths()
     parser = argparse.ArgumentParser(description="Monitor GNOME app runtime events and run online app prediction.")
-    parser.add_argument("--mapping", default=MONITOR_DIR / "app_mapping.json")
+    parser.add_argument("--mapping", default=WORKSPACE_ROOT / "configs" / "runtime" / "app_mapping.json")
     parser.add_argument("--app-vocab", default=OPERATION_PREDICTOR_ROOT / "data" / "vocab" / "app_vocab.json")
     parser.add_argument("--group-vocab", default=OPERATION_PREDICTOR_ROOT / "data" / "vocab" / "user_group_vocab.json")
     parser.add_argument(

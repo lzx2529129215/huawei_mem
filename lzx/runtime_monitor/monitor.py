@@ -2,7 +2,7 @@
 """Runtime Monitor v0: local PC state collector for dataset generation.
 
 Output directory (per session):
-  output/<session_id>/
+  outputs/runtime_monitor/<session_id>/
   ├── model/     — machine-training data (9 CSVs)
   └── review/    — human-inspection data (7 files)
 
@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 MONITOR_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = MONITOR_DIR.parent
 if str(MONITOR_DIR) not in sys.path:
     sys.path.insert(0, str(MONITOR_DIR))
 
@@ -33,6 +34,11 @@ from core.app_mapper import AppMapper, load_config
 from core.app_registry import AppRegistry
 from core.feature_builder import FeatureBuilder
 from core.lifecycle import LifecycleEventBuilder
+from core.mglru_markov_debugfs import (
+    MGLRUMarkovDebugfsWriter,
+    RANK_BASED_CONFIDENCE,
+    resolve_scope_cgroup_id,
+)
 from core.operation_tracker import OperationTracker
 from core.review_builder import ReviewBuilder
 from core.runtime_scope import RuntimeAppScope, load_runtime_app_scope
@@ -82,6 +88,7 @@ class RuntimeMonitorV0:
         self.model_dir = self.output_dir / "model"
         self.review_dir = self.output_dir / "review"
         self.model_dir.mkdir(parents=True, exist_ok=True)
+        self.review_dir.mkdir(parents=True, exist_ok=True)
 
         # Collectors
         self.mapper = AppMapper(self.config, target_app=args.target_app, target_apps=self.target_apps)
@@ -153,6 +160,17 @@ class RuntimeMonitorV0:
             self.model_dir / "foreground_debug.csv", FOREGROUND_DEBUG_FIELDS,
         )
         self.online_lstm = OnlineDurationLSTMRunner(args, self.model_dir, self.review_dir) if args.enable_online_lstm else None
+        self.mglru_markov_writer = MGLRUMarkovDebugfsWriter(
+            enabled=args.enable_mglru_markov_debugfs,
+            strict=args.mglru_markov_strict,
+            debugfs_path=args.mglru_markov_debugfs_path,
+            session_id=self.session_id,
+            model_dir=self.model_dir,
+            review_dir=self.review_dir,
+            ttl_ms=args.mglru_markov_ttl_ms,
+        )
+        self.last_mglru_foreground_app_key = ""
+        self._scope_cgroup_cache: dict[tuple[str, str], int | None] = {}
         self.cgroup_workload_process: subprocess.Popen[Any] | None = None
         self.cgroup_workload_process_started = False
         self.cgroup_workload_exit_code: int | None = None
@@ -185,6 +203,11 @@ class RuntimeMonitorV0:
             print(f"  cgroup workload delta_csv: {self.cgroup_workload_delta_csv}")
         else:
             print("  cgroup workload collector: disabled")
+        if self.args.enable_mglru_markov_debugfs:
+            print("  MGLRU Markov debugfs writer: enabled")
+            print(f"  MGLRU Markov debugfs path: {self.args.mglru_markov_debugfs_path}")
+        else:
+            print("  MGLRU Markov debugfs writer: disabled")
         print("No prefetch, eviction, swap, or kernel policy action will be performed.")
         try:
             while not self.stop_requested:
@@ -283,8 +306,10 @@ class RuntimeMonitorV0:
             test_mem_max=test_mem.get("max", 0),
         )
         self.global_state_writer.write_row(feature_row)
+        self._maybe_write_mglru_current_app(feature_row)
         if self.online_lstm is not None:
-            self.online_lstm.process_sample(feature_row)
+            prediction_result = self.online_lstm.process_sample(feature_row)
+            self._maybe_write_mglru_predictions(prediction_result)
 
         if self.args.verbose:
             print(
@@ -310,6 +335,7 @@ class RuntimeMonitorV0:
         self.foreground_debug_writer.close()
         if self.online_lstm is not None:
             self.online_lstm.close()
+        self.mglru_markov_writer.close()
 
     def _generate_review(self) -> None:
         try:
@@ -393,6 +419,13 @@ class RuntimeMonitorV0:
             f"- cgroup_workload_delta_csv: `{self.cgroup_workload_delta_csv}`",
             f"- cgroup_workload_summary: `{self.cgroup_workload_summary}`",
             f"- cgroup_workload_exit_code: {'' if self.cgroup_workload_exit_code is None else self.cgroup_workload_exit_code}",
+            "",
+            "## MGLRU Markov Debugfs",
+            f"- mglru_markov_debugfs_enabled: {str(bool(self.args.enable_mglru_markov_debugfs)).lower()}",
+            f"- mglru_markov_debugfs_path: `{self.args.mglru_markov_debugfs_path}`",
+            f"- mglru_markov_debugfs_csv: `{self.mglru_markov_writer.csv_path}`",
+            f"- mglru_markov_debugfs_summary: `{self.mglru_markov_writer.summary_path}`",
+            f"- mglru_markov_debugfs_final_result: {self.mglru_markov_writer.final_result()}",
         ])
         try:
             self.review_dir.mkdir(parents=True, exist_ok=True)
@@ -401,6 +434,62 @@ class RuntimeMonitorV0:
         except Exception as exc:
             print(f"warning: failed to append cgroup workload summary: {exc}", file=sys.stderr)
 
+    def _maybe_write_mglru_current_app(self, feature_row: dict[str, Any]) -> None:
+        if not self.args.enable_mglru_markov_debugfs or self.runtime_scope is None:
+            return
+        app_key = str(feature_row.get("foreground_app", "")).strip()
+        if not app_key or app_key == self.last_mglru_foreground_app_key:
+            return
+        app_id = self.runtime_scope.app_key_to_app_id.get(app_key)
+        scope_name = self.runtime_scope.app_key_to_scope_name.get(app_key, "")
+        if not app_id:
+            print(f"warning: MGLRU Markov current app has no app_id: {app_key}", file=sys.stderr)
+            return
+        cgroup_id = self._resolve_mglru_scope_cgroup_id(scope_name)
+        self.mglru_markov_writer.write_current_app(
+            app_key=app_key,
+            app_id=app_id,
+            cgroup_id=cgroup_id,
+            ttl_ms=self.args.mglru_markov_ttl_ms,
+        )
+        if cgroup_id is not None:
+            self.last_mglru_foreground_app_key = app_key
+
+    def _maybe_write_mglru_predictions(self, prediction_result: dict[str, Any]) -> None:
+        if not self.args.enable_mglru_markov_debugfs or self.runtime_scope is None:
+            return
+        if prediction_result.get("status") != "success":
+            return
+        outputs = prediction_result.get("outputs", [])
+        if not isinstance(outputs, list):
+            return
+        rows = [row for row in outputs if int(row.get("horizon", -1)) == 3]
+        rows.sort(key=lambda row: int(row.get("rank", 0)))
+        predictions: list[tuple[int, int]] = []
+        for row in rows:
+            app_name = str(row.get("app", "")).strip()
+            app_id = self.runtime_scope.vocab_name_to_app_id.get(app_name)
+            if not app_id or app_id not in self.runtime_scope.prediction_enabled_app_ids:
+                self.mglru_markov_writer.skip_prediction(f"missing_or_disabled_app_id:{app_name}")
+                print(f"warning: MGLRU Markov skips prediction without app_id: {app_name}", file=sys.stderr)
+                continue
+            rank_index = len(predictions)
+            confidence = RANK_BASED_CONFIDENCE[rank_index] if rank_index < len(RANK_BASED_CONFIDENCE) else 1000
+            predictions.append((app_id, confidence))
+            if len(predictions) >= len(RANK_BASED_CONFIDENCE):
+                break
+        self.mglru_markov_writer.write_predicted_apps(predictions, ttl_ms=self.args.mglru_markov_ttl_ms)
+
+    def _resolve_mglru_scope_cgroup_id(self, scope_name: str) -> int | None:
+        slice_name = self.args.cgroup_workload_slice or self.args.test_slice
+        key = (slice_name, scope_name)
+        if key in self._scope_cgroup_cache:
+            return self._scope_cgroup_cache[key]
+        cgroup_id = resolve_scope_cgroup_id(slice_name, scope_name)
+        if cgroup_id is not None:
+            self._scope_cgroup_cache[key] = cgroup_id
+        return cgroup_id
+
 
 # ------------------------------------------------------------------
 # CLI
@@ -408,12 +497,12 @@ class RuntimeMonitorV0:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Runtime Monitor v0 PC state collector.")
-    parser.add_argument("--config", default=MONITOR_DIR / "config.yaml")
-    parser.add_argument("--app-scope-config", default=MONITOR_DIR / "config" / "runtime_app_scope.json")
+    parser.add_argument("--config", default=PROJECT_ROOT / "configs" / "runtime" / "config.yaml")
+    parser.add_argument("--app-scope-config", default=PROJECT_ROOT / "configs" / "runtime" / "runtime_app_scope.json")
     parser.add_argument("--target-app", default="WPS")
     parser.add_argument("--target-apps", default="", help="Comma-separated observed apps, e.g. WPS,QQ,FILES.")
     parser.add_argument("--sample-interval", type=float, default=1.0)
-    parser.add_argument("--output-dir", default=str(MONITOR_DIR / "output"))
+    parser.add_argument("--output-dir", default=str(PROJECT_ROOT / "outputs" / "runtime_monitor"))
     parser.add_argument("--path-mode", choices=["raw", "hash", "basename"], default="hash")
     parser.add_argument("--target-pid", type=int)
     parser.add_argument("--target-comm")
@@ -434,6 +523,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Comma-separated app scope names under the cgroup workload slice.",
     )
     parser.add_argument("--cgroup-workload-slice", default="huawei-test.slice", help="User systemd slice for cgroup workload collection.")
+    parser.add_argument("--enable-mglru-markov-debugfs", action="store_true", help="Write current app and online LSTM top-k apps to MGLRU Markov debugfs.")
+    parser.add_argument("--mglru-markov-debugfs-path", default="/sys/kernel/debug/lru_gen_workload_markov")
+    parser.add_argument("--mglru-markov-ttl-ms", type=int, default=180000)
+    parser.add_argument("--mglru-markov-strict", action="store_true", help="Mark MGLRU Markov debugfs result FAIL if debugfs writes cannot succeed.")
     parser.add_argument(
         "--lstm-checkpoint",
         default=MONITOR_DIR.parent / "operation_predictor" / "outputs" / "checkpoints" / "app_lstm_duration" / "lsapp_app_lstm_duration_switch.pt",
@@ -442,6 +535,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--app-vocab",
         default=MONITOR_DIR.parent / "operation_predictor" / "data" / "vocab" / "app_vocab_duration.json",
     )
+    parser.add_argument("--app-mapping", default=PROJECT_ROOT / "configs" / "runtime" / "app_mapping.json")
     parser.add_argument(
         "--group-vocab",
         default=MONITOR_DIR.parent / "operation_predictor" / "data" / "vocab" / "user_group_vocab.json",
@@ -464,13 +558,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _load_runtime_scope(args: argparse.Namespace) -> RuntimeAppScope | None:
     if not args.app_scope_config:
         return None
-    path = Path(args.app_scope_config)
-    if not path.is_absolute():
-        path = MONITOR_DIR.parent / path
+    path = _resolve_project_path(args.app_scope_config, legacy_base=MONITOR_DIR)
     if not path.exists():
         print(f"warning: app scope config not found: {path}", file=sys.stderr)
         return None
     return load_runtime_app_scope(path, args.app_vocab)
+
+
+def _resolve_project_path(value: str | Path, legacy_base: Path | None = None) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute() or path.exists():
+        return path
+    project_path = PROJECT_ROOT / path
+    if project_path.exists():
+        return project_path
+    if legacy_base is not None:
+        legacy_path = legacy_base / path
+        if legacy_path.exists():
+            return legacy_path
+    return project_path
 
 
 def _parse_app_list(value: str) -> list[str]:
