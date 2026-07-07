@@ -1,0 +1,392 @@
+# Unified patch for Tier2 Watermark improvement
+# Apply with: patch -p1 < tier2_watermark_improvement.patch
+# From the linux-hwe-6.17-6.17.0/ directory
+
+--- original/kernel-source/linux-hwe-6.17-6.17.0/mm/Kconfig	2025-09-29 05:39:22.000000000 +0800
++++ improved_Kconfig	2026-07-07 20:13:55.291891900 +0800
+@@ -1327,6 +1327,18 @@
+ 	depends on LRU_GEN && ARCH_HAS_HW_PTE_YOUNG
+ # }
+ 
++#
++# Tier-2 Watermark for memory tiering demotion/promotion decisions
++#
++config TIER2_WATERMARK
++	bool "Tier-2 Watermark for proactive demotion and memory tiering"
++	depends on NUMA
++	default n
++	help
++	  Add a secondary watermark system for top-tier memory nodes,
++	  enabling proactive demotion and headroom-based allocation
++	  decisions. Exposes state/stats via debugfs and sysctl.
++
+ config ARCH_SUPPORTS_PER_VMA_LOCK
+        def_bool n
+ 
+
+--- original/kernel-source/linux-hwe-6.17-6.17.0/mm/Makefile	2025-09-29 05:39:22.000000000 +0800
++++ improved_Makefile	2026-07-07 20:13:55.217516300 +0800
+@@ -147,3 +147,4 @@
+ obj-$(CONFIG_EXECMEM) += execmem.o
+ obj-$(CONFIG_TMPFS_QUOTA) += shmem_quota.o
+ obj-$(CONFIG_PT_RECLAIM) += pt_reclaim.o
++obj-$(CONFIG_TIER2_WATERMARK) += tier2_watermark.o
+
+--- original/kernel-source/linux-hwe-6.17-6.17.0/include/linux/memcontrol.h	2026-06-01 14:31:08.000000000 +0800
++++ improved_memcontrol.h	2026-07-07 20:13:55.139843700 +0800
+@@ -23,6 +23,8 @@
+ #include <linux/writeback.h>
+ #include <linux/page-flags.h>
+ #include <linux/shrinker.h>
++#include <linux/tier2_watermark.h>
++#include <linux/tier2_watermark.h>
+ 
+ struct mem_cgroup;
+ struct obj_cgroup;
+@@ -320,6 +322,9 @@
+ 	spinlock_t event_list_lock;
+ #endif /* CONFIG_MEMCG_V1 */
+ 
++#ifdef CONFIG_TIER2_WATERMARK
++	struct tier2_wmark_memcg *tier2_wmark;
++#endif
+ 	struct mem_cgroup_per_node *nodeinfo[];
+ };
+ 
+
+--- original/kernel-source/linux-hwe-6.17-6.17.0/mm/vmscan.c	2026-06-15 14:08:25.000000000 +0800
++++ improved-vmscan.c	2026-07-07 20:06:11.006062000 +0800
+@@ -66,6 +66,7 @@
+ #include <linux/swapops.h>
+ #include <linux/balloon_compaction.h>
+ #include <linux/sched/sysctl.h>
++#include <linux/tier2_watermark.h>
+ 
+ #include "internal.h"
+ #include "swap.h"
+@@ -1067,6 +1068,10 @@
+ 	if (target_nid == NUMA_NO_NODE)
+ 		return 0;
+ 
++	/* Tier2 watermark: record demotion attempt */
++	if (tier2_wmark_enabled())
++		tier2_wmark_record_demote_attempt(pgdat, 1);
++
+ 	node_get_allowed_targets(pgdat, &allowed_mask);
+ 
+ 	/* Demotion ignores all cpuset and mempolicy settings */
+@@ -1074,6 +1079,15 @@
+ 		      (unsigned long)&mtc, MIGRATE_ASYNC, MR_DEMOTION,
+ 		      &nr_succeeded);
+ 
++	/* Tier2 watermark: record demotion result */
++	if (tier2_wmark_enabled() && nr_succeeded > 0) {
++		unsigned int remaining = 0;
++		struct folio *__f;
++		list_for_each_entry(__f, demote_folios, lru)
++			remaining++;
++		tier2_wmark_record_demote_result(pgdat, nr_succeeded, remaining);
++	}
++
+ 	return nr_succeeded;
+ }
+ 
+@@ -7466,6 +7480,16 @@
+ 		sc->nr_to_reclaim += max(high_wmark_pages(zone), SWAP_CLUSTER_MAX);
+ 	}
+ 
++#ifdef CONFIG_TIER2_WATERMARK
++	/* Tier2 watermark: extend reclaim target to demotion watermark */
++	if (tier2_wmark_enabled() && tier2_wmark_below_demote(pgdat)) {
++		unsigned long tier2_target =
++			tier2_wmark_demote_pages_pgdat(pgdat);
++		sc->nr_to_reclaim += max(tier2_target, (unsigned long)SWAP_CLUSTER_MAX);
++		tier2_wmark_record_reclaim_wakeup(pgdat);
++	}
++#endif
++
+ 	/*
+ 	 * Historically care was taken to put equal pressure on all zones but
+ 	 * now pressure is applied based on node LRU order.
+
+--- original/kernel-source/linux-hwe-6.17-6.17.0/mm/page_alloc.c	2026-06-01 14:31:08.000000000 +0800
++++ improved_page_alloc.c	2026-07-07 20:13:54.952168700 +0800
+@@ -55,6 +55,7 @@
+ #include <linux/delayacct.h>
+ #include <linux/cacheinfo.h>
+ #include <linux/pgalloc_tag.h>
++#include <linux/tier2_watermark.h>
+ #include <asm/div64.h>
+ #include "internal.h"
+ #include "shuffle.h"
+@@ -4400,6 +4401,19 @@
+ 		wakeup_kswapd(zone, gfp_mask, reclaim_order, highest_zoneidx);
+ 		last_pgdat = zone->zone_pgdat;
+ 	}
++
++#ifdef CONFIG_TIER2_WATERMARK
++	/* Tier2 watermark: record below-watermark events */
++	if (tier2_wmark_enabled()) {
++		struct zone *__tz;
++		struct zoneref *__zr;
++		for_each_zone_zonelist_nodemask(__tz, __zr, ac->zonelist,
++						highest_zoneidx, ac->nodemask) {
++			if (managed_zone(__tz))
++				tier2_wmark_record_below(__tz->zone_pgdat);
++		}
++	}
++#endif
+ }
+ 
+ static inline unsigned int
+@@ -6645,6 +6659,35 @@
+ 		.extra1		= SYSCTL_ONE,
+ 		.extra2		= SYSCTL_THREE_THOUSAND,
+ 	},
++#ifdef CONFIG_TIER2_WATERMARK
++	{
++		.procname	= "tier2_wmark_enabled",
++		.data		= &sysctl_tier2_wmark_enabled,
++		.maxlen		= sizeof(sysctl_tier2_wmark_enabled),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= SYSCTL_ZERO,
++		.extra2		= SYSCTL_ONE,
++	},
++	{
++		.procname	= "tier2_alloc_scale_factor",
++		.data		= &sysctl_tier2_alloc_scale_factor,
++		.maxlen		= sizeof(sysctl_tier2_alloc_scale_factor),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= SYSCTL_ZERO,
++		.extra2		= SYSCTL_ONE_THOUSAND,
++	},
++	{
++		.procname	= "tier2_demote_scale_factor",
++		.data		= &sysctl_tier2_demote_scale_factor,
++		.maxlen		= sizeof(sysctl_tier2_demote_scale_factor),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= SYSCTL_ZERO,
++		.extra2		= SYSCTL_ONE_THOUSAND,
++	},
++#endif /* CONFIG_TIER2_WATERMARK */
+ 	{
+ 		.procname	= "defrag_mode",
+ 		.data		= &defrag_mode,
+
+--- original/kernel-source/linux-hwe-6.17-6.17.0/mm/memcontrol.c	2026-06-01 14:31:08.000000000 +0800
++++ improved_memcontrol.c	2026-07-07 20:13:55.062585600 +0800
+@@ -64,6 +64,8 @@
+ #include <linux/sched/isolation.h>
+ #include <linux/kmemleak.h>
+ #include "internal.h"
++#include <linux/tier2_watermark.h>
++#include <linux/tier2_watermark.h>
+ #include <net/sock.h>
+ #include <net/ip.h>
+ #include "slab.h"
+@@ -2461,6 +2463,15 @@
+ 			continue;
+ 		}
+ 
++#ifdef CONFIG_TIER2_WATERMARK
++		/*
++		 * Proactive tier2 reclaim: if headroom is below
++		 * demote watermark, trigger reclaim to free pages
++		 * before hitting the hard limit.
++		 */
++		tier2_wmark_memcg_check_and_reclaim(memcg);
++#endif
++
+ 		if (mem_high || swap_high) {
+ 			/*
+ 			 * The allocating tasks in this cgroup will need to do
+@@ -3831,6 +3842,14 @@
+ 	if (!cgroup_memory_nobpf)
+ 		static_branch_inc(&memcg_bpf_enabled_key);
+ 
++#ifdef CONFIG_TIER2_WATERMARK
++	if (tier2_wmark_memcg_alloc(memcg))
++		pr_warn("memcg: tier2_wmark alloc failed (non-fatal)\n");
++#endif
++#ifdef CONFIG_TIER2_WATERMARK
++	if (tier2_wmark_memcg_alloc(memcg))
++		pr_warn("memcg: tier2_wmark alloc failed (non-fatal)\n");
++#endif
+ 	return &memcg->css;
+ }
+ 
+@@ -3910,6 +3929,9 @@
+ static void mem_cgroup_css_free(struct cgroup_subsys_state *css)
+ {
+ 	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
++#ifdef CONFIG_TIER2_WATERMARK
++	tier2_wmark_memcg_free(memcg);
++#endif
+ 	int __maybe_unused i;
+ 
+ #ifdef CONFIG_CGROUP_WRITEBACK
+@@ -4651,6 +4673,53 @@
+ 		.flags = CFTYPE_NS_DELEGATABLE,
+ 		.write = memory_reclaim,
+ 	},
++
++#ifdef CONFIG_TIER2_WATERMARK
++	{
++		.name = "tier2_enabled",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_enabled_show,
++		.write = tier2_memcg_enabled_write,
++	},
++	{
++		.name = "tier2_alloc_scale",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_alloc_scale_show,
++		.write = tier2_memcg_alloc_scale_write,
++	},
++	{
++		.name = "tier2_demote_scale",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_demote_scale_show,
++		.write = tier2_memcg_demote_scale_write,
++	},
++	{
++		.name = "tier2_alloc_wmark",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_alloc_wmark_show,
++	},
++	{
++		.name = "tier2_demote_wmark",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_demote_wmark_show,
++	},
++	{
++		.name = "tier2_headroom",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_headroom_show,
++	},
++	{
++		.name = "tier2_below",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_below_show,
++	},
++	{
++		.name = "tier2_stats",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_stats_show,
++	},
++#endif
++
+ 	{ }	/* terminate */
+ };
+ 
+@@ -5381,6 +5450,53 @@
+ 		.file_offset = offsetof(struct mem_cgroup, swap_events_file),
+ 		.seq_show = swap_events_show,
+ 	},
++
++#ifdef CONFIG_TIER2_WATERMARK
++	{
++		.name = "tier2_enabled",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_enabled_show,
++		.write = tier2_memcg_enabled_write,
++	},
++	{
++		.name = "tier2_alloc_scale",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_alloc_scale_show,
++		.write = tier2_memcg_alloc_scale_write,
++	},
++	{
++		.name = "tier2_demote_scale",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_demote_scale_show,
++		.write = tier2_memcg_demote_scale_write,
++	},
++	{
++		.name = "tier2_alloc_wmark",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_alloc_wmark_show,
++	},
++	{
++		.name = "tier2_demote_wmark",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_demote_wmark_show,
++	},
++	{
++		.name = "tier2_headroom",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_headroom_show,
++	},
++	{
++		.name = "tier2_below",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_below_show,
++	},
++	{
++		.name = "tier2_stats",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_stats_show,
++	},
++#endif
++
+ 	{ }	/* terminate */
+ };
+ 
+@@ -5568,6 +5684,53 @@
+ 		.seq_show = zswap_writeback_show,
+ 		.write = zswap_writeback_write,
+ 	},
++
++#ifdef CONFIG_TIER2_WATERMARK
++	{
++		.name = "tier2_enabled",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_enabled_show,
++		.write = tier2_memcg_enabled_write,
++	},
++	{
++		.name = "tier2_alloc_scale",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_alloc_scale_show,
++		.write = tier2_memcg_alloc_scale_write,
++	},
++	{
++		.name = "tier2_demote_scale",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_demote_scale_show,
++		.write = tier2_memcg_demote_scale_write,
++	},
++	{
++		.name = "tier2_alloc_wmark",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_alloc_wmark_show,
++	},
++	{
++		.name = "tier2_demote_wmark",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_demote_wmark_show,
++	},
++	{
++		.name = "tier2_headroom",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_headroom_show,
++	},
++	{
++		.name = "tier2_below",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_below_show,
++	},
++	{
++		.name = "tier2_stats",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = tier2_memcg_stats_show,
++	},
++#endif
++
+ 	{ }	/* terminate */
+ };
+ #endif /* CONFIG_ZSWAP */
