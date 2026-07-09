@@ -5,22 +5,23 @@
  #include <linux/parser.h>
  #include <linux/memory_hotplug.h>
 +#include <linux/cgroup.h>
-
+ 
  #include <asm/tlbflush.h>
  #include <asm/div64.h>
-@@ -3824,6 +3825,518 @@
+@@ -3829,6 +3830,825 @@
  	.release = single_release,
  };
-
+ 
 +/******************************************************************************
 + *                MGLRU workload Markov observe-only MVP
 + *
 + * Provides /sys/kernel/debug/lru_gen_workload_markov, a debugfs interface
 + * that lets userspace feed app/workload state and Markov transition tables
-+ * into the kernel.  On every MGLRU reclaim/aging event the kernel looks up
-+ * the current app (by cgroup id), finds the matching Markov transition, and
-+ * refreshes a reclaim hint — purely observe-only: it never changes any
-+ * reclaim decision, generation, or folio placement.
++ * into the kernel. Before each MGLRU eviction batch, the kernel looks up the
++ * current app (by cgroup id), finds the matching Markov transition, and
++ * refreshes a cycle-level reclaim hint. It is purely observe-only: it never
++ * changes any reclaim decision, generation, or folio placement, and it is
++ * never called from a per-folio path.
 + ******************************************************************************/
 +
 +#define MGLRU_MARKOV_MAX_APPS		16
@@ -29,12 +30,8 @@
 +#define MGLRU_MARKOV_MAX_TRANSITIONS	128
 +#define MGLRU_MARKOV_MAX_HINTS		64
 +
-+/*
-+ * Throttle: at most one prediction refresh per app/workload pair every
-+ * 100 ms.  Trades a tiny amount of prediction freshness for dramatically
-+ * lower overhead on busy reclaim paths.
-+ */
-+#define MGLRU_MARKOV_THROTTLE_JIFFIES	msecs_to_jiffies(100)
++/* Limit observe-only prepare work for the same reclaim target to once per 50ms. */
++#define MGLRU_MARKOV_PREPARE_THROTTLE_JIFFIES	msecs_to_jiffies(50)
 +
 +/* --- data structures ------------------------------------------------ */
 +
@@ -45,6 +42,8 @@
 +	int		prev_workload;		/* workload before current */
 +	unsigned long	ttl_ms;
 +	unsigned long	last_update_jiffies;
++	unsigned long	last_prepare_jiffies;
++	const struct lruvec *last_prepare_lruvec;
 +	bool		valid;
 +};
 +
@@ -102,10 +101,13 @@
 +
 +static DEFINE_SPINLOCK(mglru_workload_markov_lock);
 +
-+/* statistics (hot-path counters, read under lock) */
++/* Statistics and prepare throttle state, all protected by the lock above. */
 +static unsigned long mglru_markov_reclaim_calls;
++static unsigned long mglru_markov_prepare_calls;
++static unsigned long mglru_markov_per_folio_calls;
 +static unsigned long mglru_markov_predictions;
 +static unsigned long mglru_markov_throttled;
++static unsigned long mglru_markov_throttled_prepare;
 +static unsigned long mglru_markov_missing_hint;
 +static unsigned long mglru_markov_missing_app;
 +static unsigned long mglru_markov_missing_transition;
@@ -199,45 +201,62 @@
 +	return NULL;
 +}
 +
-+/* --- reclaim-path entry point --------------------------------------- */
++/* --- reclaim-cycle entry point -------------------------------------- */
 +
 +/*
-+ * Called from two low-invasive sites inside MGLRU:
-+ *   - mglru_page_policy_reheat()  (aging path)
-+ *   - mglru_page_policy_can_isolate()  (eviction path)
-+ *
-+ * This function NEVER allocates memory, NEVER changes any reclaim
-+ * decision, and NEVER alters folio state.  It only does:
-+ *   1. Lookup to find the app owning this cgroup.
++ * Called once before evict_folios() starts an isolation/scan batch. This
++ * function NEVER allocates memory, changes a reclaim decision, or alters
++ * folio state. It only does:
++ *   1. Lookup to find the app owning this lruvec's cgroup.
 + *   2. Lookup the Markov transition for (app, prev_wl, cur_wl).
-+ *   3. Refresh the reclaim hint if the throttle window has elapsed.
++ *   3. Refresh an observe-only cycle hint if the throttle window elapsed.
 + *   4. Bump statistics counters.
 + */
-+static void mglru_markov_on_mglru_reclaim(struct folio *folio)
++static void mglru_markov_apply_generation_adjustment(
++	struct lruvec *lruvec, struct scan_control *sc, const char *caller,
++	int app_id, int prev_workload, int current_workload, int num_predicted)
 +{
-+	struct mem_cgroup *memcg;
-+	u64 cgroup_id;
++	/*
++	 * Future workload -> folio hint -> generation adjustment belongs here.
++	 * This version intentionally does not inspect folios, move generations,
++	 * or change any scan, isolation, aging, or reclaim result.
++	 */
++	pr_debug_ratelimited("lru_gen_workload_markov: caller=%s lruvec=%p sc=%p app=%d pwl=%d cwl=%d hint_pred=%d observe_only=1\n",
++			     caller, lruvec, sc, app_id, prev_workload,
++			     current_workload, num_predicted);
++}
++
++static void mglru_markov_prepare_reclaim(struct lruvec *lruvec,
++					 struct scan_control *sc,
++					 const char *caller)
++{
++	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
++	u64 cg_id;
 +	struct mglru_markov_app *app;
 +	struct mglru_markov_hint *hint;
 +	struct mglru_markov_transition *trans;
 +	unsigned long now;
++	int app_id;
++	int prev_workload;
++	int current_workload;
++	int num_predicted;
 +	int i;
 +
 +	if (!READ_ONCE(mglru_markov_app_count))
 +		return;
 +
-+	memcg = folio_memcg(folio);
 +	if (!memcg)
 +		return;
 +
-+	cgroup_id = cgroup_id(memcg->css.cgroup);
++	cg_id = cgroup_id(memcg->css.cgroup);
 +
 +	spin_lock(&mglru_workload_markov_lock);
 +
 +	mglru_markov_reclaim_calls++;
++	mglru_markov_prepare_calls++;
 +
 +	/* 1. find the app that owns this cgroup */
-+	app = mglru_markov_find_app_by_cgroup_locked(cgroup_id);
++	app = mglru_markov_find_app_by_cgroup_locked(cg_id);
 +	if (!app) {
 +		mglru_markov_missing_app++;
 +		spin_unlock(&mglru_workload_markov_lock);
@@ -250,6 +269,19 @@
 +		return;
 +	}
 +
++	/* Avoid repeating prepare for the same reclaim target in a short window. */
++	now = jiffies;
++	if (app->last_prepare_lruvec == lruvec &&
++	    time_before(now, app->last_prepare_jiffies +
++			      MGLRU_MARKOV_PREPARE_THROTTLE_JIFFIES)) {
++		mglru_markov_throttled++;
++		mglru_markov_throttled_prepare++;
++		spin_unlock(&mglru_workload_markov_lock);
++		return;
++	}
++	app->last_prepare_lruvec = lruvec;
++	app->last_prepare_jiffies = now;
++
 +	/* 2. find or pre-create the hint for this app/workload */
 +	hint = mglru_markov_get_or_create_hint_locked(app->app_id,
 +						      app->current_workload);
@@ -259,20 +291,10 @@
 +		return;
 +	}
 +
-+	/* 3. throttle: at most one refresh per 100 ms */
-+	now = jiffies;
-+	if (time_before(now, hint->last_predict_jiffies +
-+			       MGLRU_MARKOV_THROTTLE_JIFFIES)) {
-+		mglru_markov_throttled++;
-+		spin_unlock(&mglru_workload_markov_lock);
-+		return;
-+	}
-+
 +	hint->last_predict_jiffies = now;
 +	hint->hits++;
-+	mglru_markov_predictions++;
 +
-+	/* 4. look up Markov transition for (app, prev_wl, cur_wl) */
++	/* 3. look up Markov transition for (app, prev_wl, cur_wl) */
 +	trans = NULL;
 +	for (i = 0; i < MGLRU_MARKOV_MAX_TRANSITIONS; i++) {
 +		if (!mglru_markov_transitions[i].valid)
@@ -287,6 +309,7 @@
 +
 +	if (trans) {
 +		/* refresh hint from transition predictions */
++		mglru_markov_predictions++;
 +		hint->num_predicted = min(trans->num_next,
 +					  MGLRU_MARKOV_MAX_PREDICTED);
 +		for (i = 0; i < hint->num_predicted; i++) {
@@ -298,11 +321,16 @@
 +		hint->num_predicted = 0;
 +	}
 +
++	app_id = app->app_id;
++	prev_workload = app->prev_workload;
++	current_workload = app->current_workload;
++	num_predicted = hint->num_predicted;
 +	spin_unlock(&mglru_workload_markov_lock);
 +
-+	pr_debug_ratelimited("lru_gen_workload_markov: app=%d pwl=%d cwl=%d hint_pred=%d\n",
-+			     app->app_id, app->prev_workload,
-+			     app->current_workload, hint->num_predicted);
++	mglru_markov_apply_generation_adjustment(lruvec, sc, caller, app_id,
++						 prev_workload,
++						 current_workload,
++						 num_predicted);
 +}
 +
 +/* --- debugfs write helpers ------------------------------------------ */
@@ -533,8 +561,11 @@
 +	memset(&mglru_markov_prediction, 0, sizeof(mglru_markov_prediction));
 +	mglru_markov_app_count = 0;
 +	mglru_markov_reclaim_calls = 0;
++	mglru_markov_prepare_calls = 0;
++	mglru_markov_per_folio_calls = 0;
 +	mglru_markov_predictions = 0;
 +	mglru_markov_throttled = 0;
++	mglru_markov_throttled_prepare = 0;
 +	mglru_markov_missing_hint = 0;
 +	mglru_markov_missing_app = 0;
 +	mglru_markov_missing_transition = 0;
@@ -774,8 +805,11 @@
 +	/* --- statistics --- */
 +	seq_puts(m, "# reclaim path statistics\n");
 +	seq_printf(m, "stat reclaim_calls      %lu\n", mglru_markov_reclaim_calls);
++	seq_printf(m, "stat prepare_calls      %lu\n", mglru_markov_prepare_calls);
++	seq_printf(m, "stat per_folio_calls    %lu\n", mglru_markov_per_folio_calls);
 +	seq_printf(m, "stat predictions        %lu\n", mglru_markov_predictions);
 +	seq_printf(m, "stat throttled          %lu\n", mglru_markov_throttled);
++	seq_printf(m, "stat throttled_prepare  %lu\n", mglru_markov_throttled_prepare);
 +	seq_printf(m, "stat missing_hint       %lu\n", mglru_markov_missing_hint);
 +	seq_printf(m, "stat missing_app        %lu\n", mglru_markov_missing_app);
 +	seq_printf(m, "stat missing_transition %lu\n", mglru_markov_missing_transition);
@@ -800,32 +834,21 @@
  static void update_batch_size(struct lru_gen_mm_walk *walk, struct folio *folio,
  			      int old_gen, int new_gen)
  {
-@@ -5015,6 +5528,9 @@
- 		list_move(&folio->lru, &lrugen->folios[gen][type][zone]);
- 		return true;
- 	}
+@@ -5260,6 +6080,8 @@
+ 	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
+ 	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
+ 
++	mglru_markov_prepare_reclaim(lruvec, sc, __func__);
 +
-+	/* observe-only workload Markov hint refresh */
-+	mglru_markov_on_mglru_reclaim(folio);
-
- 	/* promoted */
- 	if (gen != lru_gen_from_seq(lrugen->min_seq[type])) {
-@@ -5068,6 +5584,9 @@ static bool isolate_folio(struct lruvec *lruvec, struct folio *folio, struct sca
-
- 	if (!mglru_page_policy_can_isolate(folio, sc))
- 		return false;
-+
-+	/* observe-only workload Markov hint refresh */
-+	mglru_markov_on_mglru_reclaim(folio);
-
- 	/* swap constrained */
- 	if (!(sc->gfp_mask & __GFP_IO) &&
-@@ -6313,6 +6832,8 @@ static int __init init_lru_gen(void)
+ 	spin_lock_irq(&lruvec->lru_lock);
+ 
+ 	scanned = isolate_folios(nr_to_scan, lruvec, sc, swappiness, &type, &list);
+@@ -6311,6 +7133,8 @@
  				    &lru_gen_ro_fops);
  	debugfs_create_file("lru_gen_pages", 0644, NULL, NULL,
  			    &mglru_page_policy_fops);
 +	debugfs_create_file("lru_gen_workload_markov", 0644, NULL, NULL,
 +			    &mglru_workload_markov_fops);
-
+ 
  	return 0;
  };

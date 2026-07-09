@@ -1,4 +1,4 @@
-# MGLRU Pull-Based Workload Markov MVP
+# MGLRU 拉取式 Workload Markov 机制
 
 本文档说明 `MGLRU-test/v0/mglru_kernel_transfer/linux-hwe-6.17-6.17.0/mm/vmscan.c`
 中的 workload Markov observe-only MVP。
@@ -32,7 +32,7 @@
 - workload histories；
 - Markov transition entries；
 - reclaim hints；
-- reclaim 路径调用、预测、节流、missing hint 计数。
+- reclaim cycle prepare、预测、节流、missing hint 计数。
 
 ## 支持的写命令
 
@@ -49,32 +49,72 @@ echo "clear hints" > /sys/kernel/debug/lru_gen_workload_markov
 
 `confidence` 使用 `0..10000` 整数定点值。
 
-## 插入点
+## 调用语义与插入点
 
-当前在两个低侵入位置调用：
+旧版本在 `sort_folio()` 的 reheat 检查后以及 `isolate_folio()` 的
+can-isolate 检查后调用 Markov。这两个位置均处于 folio 级扫描路径，会随着
+扫描 folio 数量重复执行。
 
-- `mglru_page_policy_reheat()`
-- `mglru_page_policy_can_isolate()`
-
-调用入口是：
+新版本已移除上述两个 folio 级调用，改为在：
 
 ```c
-mglru_markov_on_mglru_reclaim(folio, sc);
+evict_folios()
+  -> mglru_markov_prepare_reclaim(lruvec, sc, __func__)
+  -> spin_lock_irq(&lruvec->lru_lock)
+  -> isolate_folios(...)
 ```
 
-它只做有限次数 hash lookup、100ms 节流、hint 更新和 `pr_debug_ratelimited()`，
-不影响原有返回值。
+中执行。`evict_folios()` 每次 eviction batch 只 prepare 一次，然后仍按原有
+MGLRU generation 逻辑扫描、隔离和回收 folio。prepare 位于 `lruvec->lru_lock`
+加锁前，不增加 folio 扫描锁的持有时间。
+
+同一 `lruvec/cgroup/app` 在 50ms 内的重复 prepare 会被 observe-only 节流。
+节流只跳过 Markov 查询，不跳过或改变原始 reclaim。
+
+## Generation adjustment 预留点
+
+`mglru_markov_prepare_reclaim()` 在完成查询后调用：
+
+```c
+mglru_markov_apply_generation_adjustment(...)
+```
+
+该函数当前严格为 no-op，只输出受限的 `pr_debug` 信息。它不接收或遍历 folio，
+不修改 generation，不调用 promote/depromote/protect，也不改变 scan、
+isolate、aging 或 reclaim 结果。该位置仅为后续
+`predicted_workload -> page hint -> generation adjustment` 预留。
 
 ## 锁与分配
 
 - 使用一个内部自旋锁 `mglru_workload_markov_lock` 保护 app state、history、
   transition 和 hint 表。
 - debugfs write 可以 `GFP_KERNEL` 分配。
-- reclaim 路径不分配内存，只 lookup 已存在的 history、transition 和 hint。
+- reclaim cycle prepare 不分配内存，只查找已存在的 app、transition 和 hint。
 - `workload update` 会为对应 `cgroup_id/app_id` 预创建 history 和 hint slot。
-- Markov 查表使用 hash table，热路径只查当前 app 和最多 4 个 predicted app，
-  不遍历全部 app 或全部 hint。
-- 同一个 history 使用 `last_predict_ns` 做 100ms 节流。
+- 当前固定容量表采用线性查找；由于 prepare 已从 folio 级路径迁移到 batch 级，
+  不会按扫描 folio 数量重复查表。
+- 每个 app 条目记录最近的 `lruvec` 和 prepare 时间，对同一
+  `lruvec/cgroup/app` 执行 50ms 节流。
+
+## Debugfs 统计语义
+
+```text
+stat reclaim_calls       <n>
+stat prepare_calls       <n>
+stat per_folio_calls     <n>
+stat predictions         <n>
+stat throttled_prepare   <n>
+stat missing_hint        <n>
+stat missing_app         <n>
+```
+
+- `reclaim_calls`：兼容旧字段，当前与 `prepare_calls` 同步递增，表示进入
+  cycle-level prepare 的次数；
+- `prepare_calls`：`evict_folios()` 批次开始前的 Markov prepare 次数；
+- `per_folio_calls`：folio 级 Markov 调用次数，新版本应始终为 0；
+- `predictions`：找到匹配 Markov transition 并刷新 hint 的次数；
+- `throttled_prepare`：同一 reclaim 目标在 50ms 内被跳过的 prepare 次数；
+- `missing_hint`、`missing_app`：prepare 查找失败计数。
 
 ## 测试示例
 
@@ -89,15 +129,15 @@ echo "markov set 1 0 2 3 9000 2" > /sys/kernel/debug/lru_gen_workload_markov
 cat /sys/kernel/debug/lru_gen_workload_markov
 ```
 
-随后触发 MGLRU reclaim/aging 路径后，再次 `cat` 应看到 `reclaim_calls`、
-`predictions` 和对应 `hint` 更新。
+随后触发 MGLRU reclaim 路径，再次 `cat` 应看到 `prepare_calls` 增长、
+`per_folio_calls` 保持 0，并根据 transition 匹配情况更新 `predictions` 和
+对应 `hint`。
 
-## 当前编译前置条件
+## 编译验证
 
-该 kernel tree 当前缺少 `.config` / `include/config/auto.conf`，直接执行：
+沿用独立构建目录：
 
 ```bash
-make -C MGLRU-test/v0/mglru_kernel_transfer/linux-hwe-6.17-6.17.0 mm/vmscan.o
+cd MGLRU-test/v0/mglru_kernel_transfer/linux-hwe-6.17-6.17.0
+make O=../linux-hwe-6.17-mglru-build LOCALVERSION=-mglru mm/vmscan.o
 ```
-
-会在配置阶段失败。需要先准备内核 `.config` 并运行 `make oldconfig` 或等价配置生成流程。

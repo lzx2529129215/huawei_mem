@@ -12,6 +12,7 @@ No prefetch, eviction, swap, or kernel policy action is performed.
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
 import signal
 import subprocess
@@ -42,6 +43,8 @@ from core.mglru_markov_debugfs import (
 from core.operation_tracker import OperationTracker
 from core.review_builder import ReviewBuilder
 from core.runtime_scope import RuntimeAppScope, load_runtime_app_scope
+from core.workload_classifier import ClassificationResult, classify_session
+from core.workload_markov_builder import MarkovBuildResult, build_workload_markov
 from core.schema import (
     APP_LIFECYCLE_EVENT_FIELDS,
     APP_STATE_1S_FIELDS,
@@ -178,6 +181,23 @@ class RuntimeMonitorV0:
         self.cgroup_workload_delta_csv = self.model_dir / "cgroup_memory_workload_delta_1s.csv"
         self.cgroup_workload_summary = self.review_dir / "cgroup_memory_workload_summary.md"
         self.cgroup_workload_log = self.review_dir / "cgroup_memory_workload_collector.log"
+        self.workload_classifier_enabled = (
+            args.enable_cgroup_workload and not args.disable_workload_classifier
+        )
+        self.workload_classifier_result: ClassificationResult | None = None
+        self.cgroup_workload_state_csv = self.model_dir / "cgroup_workload_state_1s.csv"
+        self.cgroup_workload_state_summary = self.review_dir / "cgroup_workload_state_summary.md"
+        self.workload_markov_builder_enabled = (
+            self.workload_classifier_enabled
+            and not args.disable_workload_markov_builder
+        )
+        self.workload_markov_result: MarkovBuildResult | None = None
+        self.workload_markov_transitions_csv = (
+            self.model_dir / "workload_markov_transitions.csv"
+        )
+        self.workload_markov_summary = (
+            self.review_dir / "workload_markov_summary.md"
+        )
 
     # ------------------------------------------------------------------
     # main loop
@@ -220,8 +240,13 @@ class RuntimeMonitorV0:
                 self.sample_once()
                 next_tick += self.args.sample_interval
         finally:
-            self._close_writers()
+            self._close_writers(close_mglru=False)
             self._stop_cgroup_workload_collector()
+            self._run_workload_classifier()
+            self._write_workload_state_changes()
+            self._run_workload_markov_builder()
+            self._write_workload_markov_sets()
+            self.mglru_markov_writer.close()
             self._generate_review()
             self._append_cgroup_workload_summary()
             print(
@@ -321,7 +346,7 @@ class RuntimeMonitorV0:
     # private
     # ------------------------------------------------------------------
 
-    def _close_writers(self) -> None:
+    def _close_writers(self, *, close_mglru: bool = True) -> None:
         self.global_state_writer.close()
         self.app_state_writer.close()
         self.foreground_events_writer.close()
@@ -335,7 +360,8 @@ class RuntimeMonitorV0:
         self.foreground_debug_writer.close()
         if self.online_lstm is not None:
             self.online_lstm.close()
-        self.mglru_markov_writer.close()
+        if close_mglru:
+            self.mglru_markov_writer.close()
 
     def _generate_review(self) -> None:
         try:
@@ -393,11 +419,149 @@ class RuntimeMonitorV0:
                 proc.wait(timeout=5)
         self.cgroup_workload_exit_code = proc.returncode
 
+    def _run_workload_classifier(self) -> None:
+        if not self.workload_classifier_enabled:
+            return
+        if not self.cgroup_workload_delta_csv.exists():
+            print(
+                f"warning: workload classifier input does not exist: "
+                f"{self.cgroup_workload_delta_csv}",
+                file=sys.stderr,
+            )
+            return
+        try:
+            self.workload_classifier_result = classify_session(
+                self.output_dir,
+                self.args.app_scope_config,
+            )
+            for field in self.workload_classifier_result.missing_fields:
+                print(
+                    f"warning: workload classifier field missing, using 0: {field}",
+                    file=sys.stderr,
+                )
+        except Exception as exc:
+            print(f"warning: workload classifier failed: {exc}", file=sys.stderr)
+
+    def _write_workload_state_changes(self) -> None:
+        if not self.args.enable_mglru_markov_debugfs:
+            return
+        if not self.cgroup_workload_state_csv.exists():
+            print(
+                f"warning: workload state CSV does not exist: "
+                f"{self.cgroup_workload_state_csv}",
+                file=sys.stderr,
+            )
+            return
+        try:
+            with self.cgroup_workload_state_csv.open(
+                "r", encoding="utf-8", newline=""
+            ) as f:
+                for row in csv.DictReader(f):
+                    if str(row.get("state_changed", "")).strip().lower() != "true":
+                        continue
+                    scope_name = str(row.get("scope_name", "")).strip()
+                    cgroup_id = _optional_int(row.get("cgroup_id"))
+                    if cgroup_id is None:
+                        cgroup_id = self._resolve_mglru_scope_cgroup_id(scope_name)
+                    self.mglru_markov_writer.write_workload_update(
+                        cgroup_id=cgroup_id,
+                        app_id=_optional_int(row.get("app_id")),
+                        workload_id=_optional_int(row.get("workload_id")),
+                        app_key=str(row.get("app_key", "")).strip(),
+                        workload_name=str(row.get("workload_name", "")).strip(),
+                    )
+        except Exception as exc:
+            print(
+                f"warning: failed to write workload state changes: {exc}",
+                file=sys.stderr,
+            )
+
+    def _run_workload_markov_builder(self) -> None:
+        if not self.workload_markov_builder_enabled:
+            return
+        if not self.cgroup_workload_state_csv.exists():
+            print(
+                f"warning: workload Markov builder 输入不存在: "
+                f"{self.cgroup_workload_state_csv}",
+                file=sys.stderr,
+            )
+            return
+        try:
+            self.workload_markov_result = build_workload_markov(self.output_dir)
+            for field in self.workload_markov_result.missing_fields:
+                print(
+                    f"warning: workload Markov builder 输入字段缺失: {field}",
+                    file=sys.stderr,
+                )
+        except Exception as exc:
+            print(f"warning: workload Markov builder 失败: {exc}", file=sys.stderr)
+
+    def _write_workload_markov_sets(self) -> None:
+        if not self.args.enable_mglru_markov_debugfs:
+            return
+        if not self.workload_markov_transitions_csv.exists():
+            print(
+                f"warning: workload Markov 转移 CSV 不存在: "
+                f"{self.workload_markov_transitions_csv}",
+                file=sys.stderr,
+            )
+            return
+        groups: dict[
+            tuple[str, str, str, str], list[dict[str, int]]
+        ] = {}
+        try:
+            with self.workload_markov_transitions_csv.open(
+                "r", encoding="utf-8", newline=""
+            ) as f:
+                for row in csv.DictReader(f):
+                    key = (
+                        str(row.get("app_key", "")).strip(),
+                        str(row.get("app_id", "")).strip(),
+                        str(row.get("prev_workload_id", "")).strip(),
+                        str(row.get("current_workload_id", "")).strip(),
+                    )
+                    next_workload_id = _optional_int(
+                        row.get("next_workload_id")
+                    )
+                    confidence = _optional_int(row.get("confidence"))
+                    boost_level = _optional_int(row.get("boost_level"))
+                    if (
+                        next_workload_id is None
+                        or confidence is None
+                        or boost_level is None
+                    ):
+                        continue
+                    groups.setdefault(key, []).append(
+                        {
+                            "next_workload_id": next_workload_id,
+                            "confidence": confidence,
+                            "boost_level": boost_level,
+                        }
+                    )
+            for (
+                app_key,
+                app_id,
+                prev_workload_id,
+                current_workload_id,
+            ), entries in groups.items():
+                self.mglru_markov_writer.write_markov_set(
+                    app_id=_optional_int(app_id),
+                    prev_workload_id=_optional_int(prev_workload_id),
+                    current_workload_id=_optional_int(current_workload_id),
+                    entries=entries,
+                    app_key=app_key,
+                )
+        except Exception as exc:
+            print(
+                f"warning: workload Markov set 写入失败: {exc}",
+                file=sys.stderr,
+            )
+
     def _append_cgroup_workload_summary(self) -> None:
         summary_path = self.review_dir / "session_summary.md"
         lines = [
             "",
-            "## Runtime App Scope",
+            "## Runtime 应用范围",
         ]
         if self.runtime_scope is not None:
             lines.extend(self.runtime_scope.summary_lines())
@@ -412,7 +576,7 @@ class RuntimeMonitorV0:
             ])
         lines.extend([
             "",
-            "## Cgroup Workload Collector",
+            "## Cgroup Workload 采集器",
             f"- cgroup_workload_enabled: {str(bool(self.args.enable_cgroup_workload)).lower()}",
             f"- cgroup_workload_process_started: {str(self.cgroup_workload_process_started).lower()}",
             f"- cgroup_workload_raw_csv: `{self.cgroup_workload_raw_csv}`",
@@ -420,11 +584,32 @@ class RuntimeMonitorV0:
             f"- cgroup_workload_summary: `{self.cgroup_workload_summary}`",
             f"- cgroup_workload_exit_code: {'' if self.cgroup_workload_exit_code is None else self.cgroup_workload_exit_code}",
             "",
+            "## Cgroup Workload 分类器",
+            f"- workload_classifier_enabled: {str(self.workload_classifier_enabled).lower()}",
+            f"- cgroup_workload_state_csv: `{self.cgroup_workload_state_csv}`",
+            f"- cgroup_workload_state_summary: `{self.cgroup_workload_state_summary}`",
+            f"- workload_classifier_final_result: {self.workload_classifier_result.final_result if self.workload_classifier_result else 'NOT_RUN'}",
+            "",
+            "## Workload Markov 构建器",
+            f"- workload_markov_builder_enabled: {str(self.workload_markov_builder_enabled).lower()}",
+            f"- workload_markov_transitions_csv: `{self.workload_markov_transitions_csv}`",
+            f"- workload_markov_summary: `{self.workload_markov_summary}`",
+            f"- workload_markov_builder_final_result: {self.workload_markov_result.final_result if self.workload_markov_result else 'NOT_RUN'}",
+            f"- markov_set_write_ok: {self.mglru_markov_writer.markov_set_write_ok}",
+            "",
             "## MGLRU Markov Debugfs",
             f"- mglru_markov_debugfs_enabled: {str(bool(self.args.enable_mglru_markov_debugfs)).lower()}",
             f"- mglru_markov_debugfs_path: `{self.args.mglru_markov_debugfs_path}`",
             f"- mglru_markov_debugfs_csv: `{self.mglru_markov_writer.csv_path}`",
             f"- mglru_markov_debugfs_summary: `{self.mglru_markov_writer.summary_path}`",
+            f"- workload_update_write_attempts: {self.mglru_markov_writer.workload_update_write_attempts}",
+            f"- workload_update_write_ok: {self.mglru_markov_writer.workload_update_write_ok}",
+            f"- workload_update_write_error: {self.mglru_markov_writer.workload_update_write_error}",
+            f"- workload_update_skipped: {self.mglru_markov_writer.workload_update_skipped}",
+            f"- markov_set_write_attempts: {self.mglru_markov_writer.markov_set_write_attempts}",
+            f"- markov_set_write_ok: {self.mglru_markov_writer.markov_set_write_ok}",
+            f"- markov_set_write_error: {self.mglru_markov_writer.markov_set_write_error}",
+            f"- markov_set_skipped: {self.mglru_markov_writer.markov_set_skipped}",
             f"- mglru_markov_debugfs_final_result: {self.mglru_markov_writer.final_result()}",
         ])
         try:
@@ -516,6 +701,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--close-grace-windows", type=int, default=2, help="Consecutive empty windows before APP_CLOSE.")
     parser.add_argument("--enable-online-lstm", action="store_true", help="Enable online duration-aware switch LSTM prediction.")
     parser.add_argument("--enable-cgroup-workload", action="store_true", help="Enable lightweight cgroup v2 memory workload collector.")
+    parser.add_argument(
+        "--disable-workload-classifier",
+        action="store_true",
+        help="Disable offline cgroup workload state classification.",
+    )
+    parser.add_argument(
+        "--disable-workload-markov-builder",
+        action="store_true",
+        help="禁用离线 workload 二阶 Markov 转移构建。",
+    )
     parser.add_argument("--cgroup-workload-interval-s", type=float, default=1.0, help="Cgroup workload sampling interval in seconds.")
     parser.add_argument(
         "--cgroup-workload-scopes",
@@ -581,6 +776,13 @@ def _resolve_project_path(value: str | Path, legacy_base: Path | None = None) ->
 
 def _parse_app_list(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def _resolve_session_id(args: argparse.Namespace) -> str:

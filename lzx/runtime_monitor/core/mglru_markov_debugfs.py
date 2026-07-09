@@ -22,6 +22,16 @@ MGLRU_MARKOV_WRITE_FIELDS = [
     "foreground_cgroup_id",
     "predicted_app_ids",
     "predicted_confidences",
+    "app_key",
+    "app_id",
+    "cgroup_id",
+    "workload_id",
+    "workload_name",
+    "prev_workload_id",
+    "current_workload_id",
+    "next_workload_ids",
+    "confidences",
+    "boost_levels",
     "debugfs_path",
 ]
 
@@ -105,12 +115,24 @@ class MGLRUMarkovDebugfsWriter:
         self.total_write_attempts = 0
         self.current_app_write_ok = 0
         self.predicted_apps_write_ok = 0
+        self.workload_update_write_attempts = 0
+        self.workload_update_write_ok = 0
+        self.workload_update_write_error = 0
+        self.workload_update_skipped = 0
+        self.markov_set_write_attempts = 0
+        self.markov_set_write_ok = 0
+        self.markov_set_write_error = 0
+        self.markov_set_skipped = 0
         self.debugfs_missing_count = 0
         self.write_error_count = 0
         self.skipped_prediction_count = 0
         self.disabled_count = 0
         self.dry_run_count = 0
         self.confidence_source = "rank_based"
+        self.workload_markov_transitions_csv = (
+            model_dir / "workload_markov_transitions.csv"
+        )
+        self.workload_markov_summary = review_dir / "workload_markov_summary.md"
 
         if self.enabled and not self.debugfs_exists:
             msg = f"mglru markov debugfs not found: {self.debugfs_path}"
@@ -184,6 +206,135 @@ class MGLRUMarkovDebugfsWriter:
             error=reason,
         )
 
+    def write_workload_update(
+        self,
+        cgroup_id: int | None,
+        app_id: int | None,
+        workload_id: int | None,
+        *,
+        app_key: str = "",
+        workload_name: str = "",
+    ) -> None:
+        if not cgroup_id or not app_id or workload_id is None:
+            self.workload_update_skipped += 1
+            missing = [
+                name
+                for name, value in (
+                    ("cgroup_id", cgroup_id),
+                    ("app_id", app_id),
+                    ("workload_id", workload_id),
+                )
+                if value is None or (name != "workload_id" and not value)
+            ]
+            self._record(
+                event_type="workload_update",
+                command="",
+                status="dry_run",
+                error=f"missing_{'_'.join(missing)}",
+                app_key=app_key,
+                app_id="" if app_id is None else app_id,
+                cgroup_id="" if cgroup_id is None else cgroup_id,
+                workload_id="" if workload_id is None else workload_id,
+                workload_name=workload_name,
+            )
+            return
+        command = (
+            f"workload update {int(cgroup_id)} {int(app_id)} {int(workload_id)}"
+        )
+        self.workload_update_write_attempts += 1
+        status, error = self._write_command(command)
+        if status == "ok":
+            self.workload_update_write_ok += 1
+        else:
+            self.workload_update_write_error += 1
+        self._record(
+            event_type="workload_update",
+            command=command,
+            status=status,
+            error=error,
+            app_key=app_key,
+            app_id=app_id,
+            cgroup_id=cgroup_id,
+            workload_id=workload_id,
+            workload_name=workload_name,
+        )
+
+    def write_markov_set(
+        self,
+        app_id: int | None,
+        prev_workload_id: int | None,
+        current_workload_id: int | None,
+        entries: Iterable[dict[str, int]],
+        *,
+        app_key: str = "",
+    ) -> None:
+        normalized: list[tuple[int, int, int]] = []
+        for entry in entries:
+            try:
+                next_workload_id = int(entry["next_workload_id"])
+                confidence = max(0, min(10000, int(entry["confidence"])))
+                boost_level = max(0, int(entry["boost_level"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            normalized.append((next_workload_id, confidence, boost_level))
+            if len(normalized) >= 4:
+                break
+        if (
+            app_id is None
+            or prev_workload_id is None
+            or current_workload_id is None
+            or not normalized
+        ):
+            self.markov_set_skipped += 1
+            self._record(
+                event_type="markov_set",
+                command="",
+                status="dry_run",
+                error="missing_key_or_entries",
+                app_key=app_key,
+                app_id="" if app_id is None else app_id,
+                prev_workload_id=(
+                    "" if prev_workload_id is None else prev_workload_id
+                ),
+                current_workload_id=(
+                    "" if current_workload_id is None else current_workload_id
+                ),
+            )
+            return
+        args = " ".join(
+            f"{next_id} {confidence} {boost}"
+            for next_id, confidence, boost in normalized
+        )
+        command = (
+            f"markov set {int(app_id)} {int(prev_workload_id)} "
+            f"{int(current_workload_id)} {args}"
+        )
+        self.markov_set_write_attempts += 1
+        status, error = self._write_command(command)
+        if status == "ok":
+            self.markov_set_write_ok += 1
+        else:
+            self.markov_set_write_error += 1
+        self._record(
+            event_type="markov_set",
+            command=command,
+            status=status,
+            error=error,
+            app_key=app_key,
+            app_id=app_id,
+            prev_workload_id=prev_workload_id,
+            current_workload_id=current_workload_id,
+            next_workload_ids="|".join(
+                str(next_id) for next_id, _, _ in normalized
+            ),
+            confidences="|".join(
+                str(confidence) for _, confidence, _ in normalized
+            ),
+            boost_levels="|".join(
+                str(boost) for _, _, boost in normalized
+            ),
+        )
+
     def _write_command(self, command: str) -> tuple[str, str]:
         self.total_write_attempts += 1
         if not self.enabled:
@@ -213,6 +364,16 @@ class MGLRUMarkovDebugfsWriter:
         foreground_cgroup_id: int | str = "",
         predicted_app_ids: str = "",
         predicted_confidences: str = "",
+        app_key: str = "",
+        app_id: int | str = "",
+        cgroup_id: int | str = "",
+        workload_id: int | str = "",
+        workload_name: str = "",
+        prev_workload_id: int | str = "",
+        current_workload_id: int | str = "",
+        next_workload_ids: str = "",
+        confidences: str = "",
+        boost_levels: str = "",
     ) -> None:
         if status == "dry_run":
             self.dry_run_count += 1
@@ -229,6 +390,16 @@ class MGLRUMarkovDebugfsWriter:
                 "foreground_cgroup_id": foreground_cgroup_id,
                 "predicted_app_ids": predicted_app_ids,
                 "predicted_confidences": predicted_confidences,
+                "app_key": app_key,
+                "app_id": app_id,
+                "cgroup_id": cgroup_id,
+                "workload_id": workload_id,
+                "workload_name": workload_name,
+                "prev_workload_id": prev_workload_id,
+                "current_workload_id": current_workload_id,
+                "next_workload_ids": next_workload_ids,
+                "confidences": confidences,
+                "boost_levels": boost_levels,
                 "debugfs_path": str(self.debugfs_path),
             }
         )
@@ -238,7 +409,22 @@ class MGLRUMarkovDebugfsWriter:
         if not self.enabled:
             return "PASS"
         if self.strict:
-            if self._debugfs_exists() and self.current_app_write_ok > 0 and self.predicted_apps_write_ok > 0:
+            if (
+                self._debugfs_exists()
+                and self.total_write_attempts > 0
+                and self.debugfs_missing_count == 0
+                and self.write_error_count == 0
+                and self.workload_update_write_error == 0
+                and self.markov_set_write_error == 0
+                and (
+                    self.workload_update_write_attempts == 0
+                    or self.workload_update_write_ok > 0
+                )
+                and (
+                    self.markov_set_write_attempts == 0
+                    or self.markov_set_write_ok > 0
+                )
+            ):
                 return "PASS"
             return "FAIL"
         if self.write_error_count:
@@ -248,7 +434,7 @@ class MGLRUMarkovDebugfsWriter:
     def write_summary(self) -> None:
         self.debugfs_exists = self._debugfs_exists()
         lines = [
-            "# MGLRU Markov debugfs summary",
+            "# MGLRU Markov debugfs 汇总",
             "",
             f"- enabled: {str(self.enabled).lower()}",
             f"- debugfs_path: `{self.debugfs_path}`",
@@ -257,6 +443,16 @@ class MGLRUMarkovDebugfsWriter:
             f"- total_write_attempts: {self.total_write_attempts}",
             f"- current_app_write_ok: {self.current_app_write_ok}",
             f"- predicted_apps_write_ok: {self.predicted_apps_write_ok}",
+            f"- workload_update_write_attempts: {self.workload_update_write_attempts}",
+            f"- workload_update_write_ok: {self.workload_update_write_ok}",
+            f"- workload_update_write_error: {self.workload_update_write_error}",
+            f"- workload_update_skipped: {self.workload_update_skipped}",
+            f"- markov_set_write_attempts: {self.markov_set_write_attempts}",
+            f"- markov_set_write_ok: {self.markov_set_write_ok}",
+            f"- markov_set_write_error: {self.markov_set_write_error}",
+            f"- markov_set_skipped: {self.markov_set_skipped}",
+            f"- workload_markov_transitions_csv: `{self.workload_markov_transitions_csv}`",
+            f"- workload_markov_summary: `{self.workload_markov_summary}`",
             f"- debugfs_missing_count: {self.debugfs_missing_count}",
             f"- write_error_count: {self.write_error_count}",
             f"- skipped_prediction_count: {self.skipped_prediction_count}",
