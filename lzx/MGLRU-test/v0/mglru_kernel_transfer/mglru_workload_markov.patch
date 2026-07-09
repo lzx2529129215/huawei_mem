@@ -1,17 +1,8 @@
 --- a/mm/vmscan.c
 +++ b/mm/vmscan.c
-@@ -59,6 +59,7 @@
- #include <linux/mmu_notifier.h>
- #include <linux/parser.h>
- #include <linux/memory_hotplug.h>
+@@ -61,0 +62 @@
 +#include <linux/cgroup.h>
- 
- #include <asm/tlbflush.h>
- #include <asm/div64.h>
-@@ -3829,6 +3830,825 @@
- 	.release = single_release,
- };
- 
+@@ -3831,0 +3833,819 @@
 +/******************************************************************************
 + *                MGLRU workload Markov observe-only MVP
 + *
@@ -831,24 +822,9 @@
 +	.release	= single_release,
 +};
 +
- static void update_batch_size(struct lru_gen_mm_walk *walk, struct folio *folio,
- 			      int old_gen, int new_gen)
- {
-@@ -5260,6 +6080,8 @@
- 	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
- 	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
- 
+@@ -5262,0 +6083,2 @@
 +	mglru_markov_prepare_reclaim(lruvec, sc, __func__);
 +
- 	spin_lock_irq(&lruvec->lru_lock);
- 
- 	scanned = isolate_folios(nr_to_scan, lruvec, sc, swappiness, &type, &list);
-@@ -6311,6 +7133,8 @@
- 				    &lru_gen_ro_fops);
- 	debugfs_create_file("lru_gen_pages", 0644, NULL, NULL,
- 			    &mglru_page_policy_fops);
+@@ -6313,0 +7136,2 @@
 +	debugfs_create_file("lru_gen_workload_markov", 0644, NULL, NULL,
 +			    &mglru_workload_markov_fops);
- 
- 	return 0;
- };
