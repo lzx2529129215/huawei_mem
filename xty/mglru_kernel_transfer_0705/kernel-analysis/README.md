@@ -31,13 +31,21 @@ This kit contains everything needed to reproduce the improved `6.17.13-mglru` ke
 kernel-analysis/
 ├── README.md                          # This file
 ├── config-6.17.13-mglru               # Kernel .config with CONFIG_TIER2_WATERMARK=y
-├── tier2_watermark.patch              # Unified patch for all modified source files (393 lines)
+├── tier2_watermark.patch              # Unified patch for all modified source files (~10KB)
+├── mglru_kernel_transfer_0705.zip     # Complete source bundle (553MB):
+│   ├── linux-hwe-6.17.0-mglru-source.tar.zst  # Original unpatched kernel source
+│   ├── linux-hwe-6.17-6.17.0/                  # Full extracted source tree
+│   └── ...                                      # (other original kit files)
 ├── new_files/
 │   ├── tier2_watermark.h              # NEW — Tier2 watermark header (175 lines)
 │   └── tier2_watermark.c              # NEW — Tier2 watermark implementation (1239 lines)
-├── original/                          # Original MGLRU kernel transfer kit
-│   └── mglru-kernel-transfer-kit.tar.zst
-└── diffs/                             # Per-file diffs for reference (optional)
+└── improved/                          # Reference: expected post-patch state of modified files
+    ├── mm_Kconfig
+    ├── mm_Makefile
+    ├── include_linux_memcontrol.h
+    ├── mm_vmscan.c
+    ├── mm_page_alloc.c
+    └── mm_memcontrol.c
 ```
 
 ---
@@ -46,14 +54,14 @@ kernel-analysis/
 
 ### Prerequisites
 
-- Original kernel source archive: `original/mglru-kernel-transfer-kit.tar.zst`
+- `mglru_kernel_transfer_0705.zip` (unzipped in this directory, or already extracted)
 - Linux build environment with: gcc, make, flex, bison, libssl-dev, libelf-dev, zstd
 
 ### Step 1: Extract original kernel source
 
 ```bash
-tar --use-compress-program=zstd -xf original/mglru-kernel-transfer-kit.tar.zst
-cd mglru_kernel_transfer
+unzip mglru_kernel_transfer_0705.zip
+cd mglru_kernel_transfer_0705
 tar --use-compress-program=zstd -xf linux-hwe-6.17.0-mglru-source.tar.zst
 cd linux-hwe-6.17-6.17.0
 ```
@@ -61,21 +69,36 @@ cd linux-hwe-6.17-6.17.0
 ### Step 2: Copy new tier2 files
 
 ```bash
-cp ../new_files/tier2_watermark.h include/linux/
-cp ../new_files/tier2_watermark.c mm/
+cp ../../new_files/tier2_watermark.h include/linux/
+cp ../../new_files/tier2_watermark.c mm/
 ```
 
-### Step 3: Apply the patch
+### Step 3: Apply the patch (with path fix)
+
+> **⚠️ IMPORTANT:** The patch was originally generated on a virtual machine and
+> contains absolute paths (`/tmp/orig_extract/...` and `/home/xty/...`).
+> These MUST be fixed before applying, otherwise `patch -p1` will fail.
 
 ```bash
-patch -p1 < ../tier2_watermark.patch
+# Fix patch paths from VM absolute paths → standard a/b/ prefixes
+sed -i 's|/tmp/orig_extract/linux-hwe-6.17-6.17.0/|a/|g' ../../tier2_watermark.patch
+sed -i 's|/home/xty/HUAWEI_PC/MGLRU_TEST/mglru_kernel_transfer_0705/linux-hwe-6.17-6.17.0/|b/|g' ../../tier2_watermark.patch
+
+# Verify the fix worked (should show "a/mm/Kconfig" not "/tmp/orig_extract/...")
+head -7 ../../tier2_watermark.patch
+
+# Apply the patch
+patch -p1 --dry-run < ../../tier2_watermark.patch   # dry-run first to verify
+patch -p1 < ../../tier2_watermark.patch               # actual apply
 ```
 
 ### Step 4: Build
 
 ```bash
+# We are in: kernel-analysis/mglru_kernel_transfer_0705/linux-hwe-6.17-6.17.0/
+# Config is in: ../../config-6.17.13-mglru
 mkdir -p ../build
-cp ../config-6.17.13-mglru ../build/.config
+cp ../../config-6.17.13-mglru ../build/.config
 make O=../build LOCALVERSION=-mglru olddefconfig
 make O=../build LOCALVERSION=-mglru -j$(nproc)
 ```
@@ -136,14 +159,64 @@ ls /sys/fs/cgroup/memory/memory.tier2_*
 | `mm/page_alloc.c`            | Added tier2 include, watermark recording in freelist path, 3 sysctl entries |
 | `mm/memcontrol.c`            | Added tier2 include, proactive reclaim in charge path, CSS alloc/free hooks, cgroup file definitions in `memory_files[]`, `mem_cgroup_legacy_files[]`, and `zswap_files[]` |
 
-### Fixed from VM Source (cleaned)
+### Known Patch Issues
 
-The VM's source had 4 issues that were cleaned:
+1. **Duplicate `#include` in `memcontrol.c`**: The patch adds `#include <linux/tier2_watermark.h>` twice at lines 67-68. This is **harmless** (the include guard `_LINUX_TIER2_WATERMARK_H` prevents double inclusion) but not ideal. To clean up, delete one of the duplicate lines after patching.
 
-1. Duplicate SPDX/import block in `tier2_watermark.c` — removed
-2. Duplicate `#include <linux/tier2_watermark.h>` in `memcontrol.h` — removed
-3. Duplicate `tier2_wmark_memcg_alloc()` call in `memcontrol.c` — removed
-4. Redundant `tier2_memcg_register_files()` function — removed (files already registered via `memory_files[]`/`mem_cgroup_legacy_files[]` in memcontrol.c)
+2. **Absolute VM paths in patch headers**: See the sed fix in **Step 3**. Without this fix, `patch -p1` will fail with "can't find file to patch".
+
+---
+
+## Troubleshooting
+
+### "can't find file to patch" when applying tier2_watermark.patch
+
+**Cause:** The patch was generated on a VM with absolute paths like `/tmp/orig_extract/linux-hwe-6.17-6.17.0/mm/Kconfig` instead of the standard `a/mm/Kconfig`.
+
+**Fix:** Run the `sed` commands from **Step 3** to replace the absolute paths:
+
+```bash
+sed -i 's|/tmp/orig_extract/linux-hwe-6.17-6.17.0/|a/|g' tier2_watermark.patch
+sed -i 's|/home/xty/HUAWEI_PC/MGLRU_TEST/mglru_kernel_transfer_0705/linux-hwe-6.17-6.17.0/|b/|g' tier2_watermark.patch
+```
+
+After fixing, verify with `head -7 tier2_watermark.patch` — the first diff header should show `--- a/mm/Kconfig`, NOT an absolute path.
+
+### "This does not look like a tar archive" on extracted .tar.zst
+
+**Cause:** The `.tar.zst` file was decompressed incorrectly (e.g., using `tar -xf` without `--use-compress-program=zstd`, or piping through a broken pipeline).
+
+**Fix:**
+
+```bash
+# Correct way — let tar invoke zstd internally:
+tar --use-compress-program=zstd -xf linux-hwe-6.17.0-mglru-source.tar.zst
+
+# Or decompress first, then extract:
+zstd -d linux-hwe-6.17.0-mglru-source.tar.zst -o source.tar
+tar -xf source.tar
+```
+
+### Build fails with "CONFIG_TIER2_WATERMARK" not found
+
+**Cause:** The patch was not applied before building.
+
+**Fix:** Ensure **Step 3** completed successfully (the dry-run should list "checking file ..." for all 6 files). If it was skipped, the Kconfig won't have the `TIER2_WATERMARK` option and the build config will fail `olddefconfig`.
+
+### Want to verify the patch produced correct output
+
+Compare your patched files against the reference copies in `improved/`:
+
+```bash
+diff mm/Kconfig ../../improved/mm_Kconfig
+diff mm/Makefile ../../improved/mm_Makefile
+diff mm/vmscan.c ../../improved/mm_vmscan.c
+diff mm/page_alloc.c ../../improved/mm_page_alloc.c
+diff mm/memcontrol.c ../../improved/mm_memcontrol.c
+diff include/linux/memcontrol.h ../../improved/include_linux_memcontrol.h
+```
+
+No output = files match the expected post-patch state (what built the working kernel).
 
 ---
 
