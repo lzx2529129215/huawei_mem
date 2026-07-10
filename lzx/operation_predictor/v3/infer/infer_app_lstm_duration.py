@@ -216,7 +216,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--user-group", default="通用用户")
     parser.add_argument("--history-len", type=int, default=5)
     parser.add_argument("--top-k", type=int, default=5)
-    parser.add_argument("--score-mode", choices=["softmax", "sigmoid"], default="softmax")
+    parser.add_argument("--score-mode", choices=["softmax", "sigmoid"], default="sigmoid")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--format", choices=["csv", "json"], default="csv")
     parser.add_argument("--output")

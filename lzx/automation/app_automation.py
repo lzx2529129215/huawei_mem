@@ -54,19 +54,32 @@ class Context:
     session_id: str = ""
     scenario_id: str = ""
     test_slice: str = ""
+    validation_mode: bool = False
+
+
+@dataclass(frozen=True)
+class Scenario:
+    actions: list[dict[str, Any]]
+    keep_alive_after_s: float = 0.0
+    validation_mode: bool = False
 
 
 TRACE_FIELDS = [
     "session_id",
     "ts_ns",
     "ts_iso",
+    "timestamp",
     "scenario_id",
     "step_id",
     "phase",
     "action",
+    "op_type",
+    "event_type",
     "app",
+    "app_key",
     "label",
     "status",
+    "validation_mode",
     "optional",
     "command",
     "window_match",
@@ -99,6 +112,7 @@ class TraceWriter:
             "scenario_id": self.scenario_id,
             **row,
         }
+        payload.setdefault("timestamp", payload["ts_iso"])
         self._writer.writerow({field: payload.get(field, "") for field in TRACE_FIELDS})
         self._file.flush()
 
@@ -526,17 +540,55 @@ def quiet_window_trace(action: dict[str, Any]) -> dict[str, str]:
     return out
 
 
+def trace_marker(
+    ctx: Context,
+    *,
+    event_type: str,
+    status: str,
+    step_id: int = 0,
+    action: dict[str, Any] | None = None,
+    op_type: str = "",
+    error: str = "",
+) -> None:
+    if ctx.trace is None:
+        return
+    action = action or {}
+    app = infer_app(action)
+    row: dict[str, Any] = {
+        "step_id": step_id,
+        "phase": "marker",
+        "action": get_str(action, "type"),
+        "op_type": op_type or get_str(action, "type"),
+        "event_type": event_type,
+        "app": app,
+        "app_key": app,
+        "label": default_label(action, app),
+        "status": status,
+        "validation_mode": str(ctx.validation_mode).lower(),
+        "optional": "true" if bool(action.get("optional")) else "false",
+        "command": action_command(action),
+        "window_match": action_window_match(action),
+        "error": error,
+    }
+    ctx.trace.write(row)
+
+
 def trace_action(ctx: Context, step_id: int, phase: str, status: str, action: dict[str, Any], error: str = "") -> None:
     if ctx.trace is None:
         return
     app = infer_app(action)
+    event_type = "OP_START" if phase == "start" else "OP_DONE"
     row: dict[str, Any] = {
         "step_id": step_id,
         "phase": phase,
         "action": get_str(action, "type"),
+        "op_type": get_str(action, "type"),
+        "event_type": event_type,
         "app": app,
+        "app_key": app,
         "label": default_label(action, app),
         "status": status,
+        "validation_mode": str(ctx.validation_mode).lower(),
         "optional": "true" if bool(action.get("optional")) else "false",
         "command": action_command(action),
         "window_match": action_window_match(action),
@@ -677,19 +729,65 @@ def get_str_list(action: dict[str, Any], key: str) -> list[str]:
     raise AutomationError(f"{key} 必须是字符串或字符串数组")
 
 
-def load_scenario(path: Path) -> list[dict[str, Any]]:
+def _expand_actions(actions: list[Any], *, prefix: str = "") -> list[dict[str, Any]]:
+    expanded: list[dict[str, Any]] = []
+    for index, action in enumerate(actions, start=1):
+        if not isinstance(action, dict):
+            raise AutomationError(f"{prefix}第 {index} 个 action 必须是对象")
+        action_type = str(action.get("type", "")).strip()
+        if action_type == "repeat":
+            times = get_int(action, "times", get_int(action, "count", 1))
+            nested = action.get("actions", [])
+            if times < 1:
+                continue
+            if not isinstance(nested, list):
+                raise AutomationError(f"{prefix}repeat.actions 必须是 action 数组")
+            for repeat_index in range(1, times + 1):
+                for nested_action in _expand_actions(nested, prefix=f"{prefix}repeat {index}: "):
+                    copied = dict(nested_action)
+                    copied.setdefault("_repeat_index", repeat_index)
+                    copied.setdefault("_repeat_total", times)
+                    expanded.append(copied)
+            continue
+        expanded.append(dict(action))
+    return expanded
+
+
+def load_scenario(path: Path) -> Scenario:
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
     if isinstance(data, list):
-        actions = data
+        raw_actions = data
+        keep_alive_after_s = 0.0
+        validation_mode = False
     elif isinstance(data, dict) and isinstance(data.get("actions"), list):
-        actions = data["actions"]
+        raw_actions = data["actions"]
+        try:
+            keep_alive_after_s = float(data.get("keep_alive_after_s", 0.0) or 0.0)
+        except (TypeError, ValueError) as exc:
+            raise AutomationError("keep_alive_after_s 必须是数字") from exc
+        validation_mode = bool(data.get("validation_mode", False))
     else:
         raise AutomationError("场景文件必须是 action 数组，或包含 actions 数组的对象")
+    actions = _expand_actions(raw_actions)
     for index, action in enumerate(actions, start=1):
         if not isinstance(action, dict):
             raise AutomationError(f"第 {index} 个 action 必须是对象")
-    return actions
+    return Scenario(
+        actions=actions,
+        keep_alive_after_s=keep_alive_after_s,
+        validation_mode=validation_mode,
+    )
+
+
+def keep_alive(seconds: float, ctx: Context) -> None:
+    if seconds <= 0:
+        return
+    trace_marker(ctx, event_type="KEEP_ALIVE_START", status="running", op_type="keep_alive")
+    log(f"keep_alive_after_s {seconds:g}s")
+    if not ctx.dry_run:
+        time.sleep(seconds)
+    trace_marker(ctx, event_type="KEEP_ALIVE_DONE", status="success", op_type="keep_alive")
 
 
 def launch(action: dict[str, Any], ctx: Context) -> None:
@@ -1097,13 +1195,23 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         configure_display(args.display, args.xauthority)
-        actions = load_scenario(args.scenario)
+        scenario = load_scenario(args.scenario)
+        actions = scenario.actions
         scenario_id = args.scenario_id or args.scenario.stem
         session_id = args.session_id or dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         trace = TraceWriter(args.trace_output, session_id, scenario_id) if args.trace_output else None
-        ctx = Context(dry_run=args.dry_run, processes={}, trace=trace, session_id=session_id, scenario_id=scenario_id, test_slice=args.test_slice)
+        ctx = Context(
+            dry_run=args.dry_run,
+            processes={},
+            trace=trace,
+            session_id=session_id,
+            scenario_id=scenario_id,
+            test_slice=args.test_slice,
+            validation_mode=scenario.validation_mode,
+        )
         log(f"scenario={args.scenario}")
         try:
+            trace_marker(ctx, event_type="SCENARIO_START", status="running", op_type="scenario")
             for index, action in enumerate(actions, start=1):
                 action_type = get_str(action, "type")
                 handler = ACTION_HANDLERS.get(action_type)
@@ -1114,6 +1222,25 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     handler(action, ctx)
                     trace_action(ctx, index, "end", "success", action)
+                    is_named_app_action = bool(get_str(action, "name")) or action_type == "launch"
+                    if is_named_app_action and action_type in {"launch", "shell"} and infer_app(action) != "UNKNOWN":
+                        trace_marker(
+                            ctx,
+                            event_type="APP_LAUNCH",
+                            status="success",
+                            step_id=index,
+                            action=action,
+                            op_type=action_type,
+                        )
+                    elif is_named_app_action and action_type in {"focus", "switch", "verify_foreground"} and infer_app(action) != "UNKNOWN":
+                        trace_marker(
+                            ctx,
+                            event_type="APP_FOCUS",
+                            status="success",
+                            step_id=index,
+                            action=action,
+                            op_type=action_type,
+                        )
                 except (AutomationError, subprocess.CalledProcessError) as exc:
                     if isinstance(exc, subprocess.CalledProcessError):
                         message = exc.stderr.strip() or exc.stdout.strip() or str(exc)
@@ -1124,6 +1251,8 @@ def main(argv: list[str] | None = None) -> int:
                         log(f"optional action skipped: {message}")
                         continue
                     raise
+            keep_alive(scenario.keep_alive_after_s, ctx)
+            trace_marker(ctx, event_type="SCENARIO_DONE", status="success", op_type="scenario")
             log("done")
             return 0
         finally:

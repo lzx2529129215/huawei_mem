@@ -39,7 +39,7 @@ class OnlineLSTMDurationPredictor:
         history_len: int = 5,
         duration_cap_s: float = 600.0,
         top_k: int = 5,
-        score_mode: str = "softmax",
+        score_mode: str = "sigmoid",
         device_name: str = "auto",
     ) -> None:
         try:
@@ -88,6 +88,7 @@ class OnlineLSTMDurationPredictor:
                 f"app vocab size mismatch: vocab={len(self.app_vocab)} checkpoint={checkpoint_data['num_apps']}"
             )
         self.model = build_model(checkpoint_data, self.device)
+        self.training_objective = "bce_multilabel"
 
     def encode_inputs(
         self,
@@ -128,28 +129,63 @@ class OnlineLSTMDurationPredictor:
         opened_apps: list[str],
         timestamp: str,
     ) -> list[dict[str, Any]]:
+        return self.predict_bundle(
+            history_apps, history_durations, opened_apps, timestamp
+        )["top_k_outputs"]
+
+    def predict_bundle(
+        self,
+        history_apps: list[str],
+        history_durations: list[float],
+        opened_apps: list[str],
+        timestamp: str,
+    ) -> dict[str, Any]:
+        """Return legacy Top-K rows and probabilities for every vocabulary app."""
         if not history_apps:
-            return []
+            return {
+                "top_k_outputs": [],
+                "all_probabilities": [],
+                "probability_source": "unavailable",
+            }
         encoded = self.encode_inputs(history_apps, history_durations, opened_apps, timestamp)
-        rows: list[dict[str, Any]] = []
+        top_k_rows: list[dict[str, Any]] = []
+        all_rows: list[dict[str, Any]] = []
         torch = self.torch
+        probability_source = (
+            "sigmoid_uncalibrated"
+            if self.score_mode == "sigmoid"
+            else "softmax_uncalibrated"
+        )
         with torch.no_grad():
             outputs = self.model(**encoded["batch"])
             for horizon in sorted(outputs):
-                scores = self.score_logits(outputs[horizon], self.score_mode)
-                values, indices = torch.topk(scores, k=min(self.top_k, scores.shape[1]), dim=1)
-                for rank, (app_id, probability) in enumerate(zip(indices[0].tolist(), values[0].tolist()), start=1):
-                    rows.append(
-                        {
-                            "horizon": int(horizon),
-                            "rank": rank,
-                            "app_id": int(app_id),
-                            "app": self.id_to_app[int(app_id)],
-                            "probability": float(probability),
-                            "score_mode": self.score_mode,
-                        }
-                    )
-        return rows
+                logits = outputs[horizon]
+                scores = self.score_logits(logits, self.score_mode)
+                ranked_indices = torch.argsort(scores, dim=1, descending=True)[0].tolist()
+                for rank, app_id in enumerate(ranked_indices, start=1):
+                    probability = max(0.0, min(1.0, float(scores[0, app_id].item())))
+                    row = {
+                        "horizon": int(horizon),
+                        "rank": rank,
+                        "app_id": int(app_id),
+                        "app": self.id_to_app[int(app_id)],
+                        "raw_score": float(logits[0, app_id].item()),
+                        "probability": probability,
+                        "next_use_probability": probability,
+                        "next_use_probability_fixed": max(
+                            0, min(10000, int(round(probability * 10000)))
+                        ),
+                        "probability_source": probability_source,
+                        "score_mode": self.score_mode,
+                    }
+                    all_rows.append(row)
+                    if rank <= self.top_k:
+                        top_k_rows.append(dict(row))
+        return {
+            "top_k_outputs": top_k_rows,
+            "all_probabilities": all_rows,
+            "probability_source": probability_source,
+        }
 
     @staticmethod
     def _load_json(path: str | Path) -> Any:

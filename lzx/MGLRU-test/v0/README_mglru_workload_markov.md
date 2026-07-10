@@ -141,3 +141,82 @@ cat /sys/kernel/debug/lru_gen_workload_markov
 cd MGLRU-test/v0/mglru_kernel_transfer/linux-hwe-6.17-6.17.0
 make O=../linux-hwe-6.17-mglru-build LOCALVERSION=-mglru mm/vmscan.o
 ```
+
+## 基于 LSTM 的应用级回收预算
+
+这一层只使用应用间 LSTM 的 next-use 概率决定目标 memcg 的扫描强度。应用内
+workload Markov 仍位于 `evict_folios()`，继续预测目标应用自己的下一个
+workload；它没有迁移到 `try_to_shrink_lruvec()`，也没有修改 generation 或
+anon/file 选择。
+
+调用关系如下：
+
+```text
+try_to_shrink_lruvec()
+  -> get_nr_to_scan()
+       -> memory.min 检查
+       -> apply_proportional_protection() 处理 memory.low
+  -> mglru_lstm_prepare_reclaim_policy()  # 每次 lruvec invocation 一次
+  -> mglru_lstm_propose_nr_to_scan()       # 每次基于原始返回值计算
+  -> evict_folios()
+       -> mglru_markov_prepare_reclaim()   # 原位置保留
+       -> isolate_folios()
+```
+
+应用级 hook 位于第一次 `get_nr_to_scan()` 返回正值之后、调用
+`evict_folios()` 之前。该位置已经完成 MGLRU 原生的 `memory.min` 和
+proportional `memory.low` 保护，并且还没有消费扫描预算。policy 是
+`try_to_shrink_lruvec()` 栈上的局部对象，同一 invocation 后续循环复用，不在
+folio 级路径查询 LSTM。
+
+### 概率和绑定
+
+模型使用 `BCEWithLogitsLoss` 训练，Runtime Monitor 对 logits 使用 sigmoid，
+并标记 `probability_source=sigmoid_uncalibrated`。旧 `app predict` 的 rank 分数
+仍用于兼容展示，不参与扫描策略。新命令为：
+
+```text
+app bind <app_id> <cgroup_id> <ttl_ms>
+app probability <app_id> <probability_fixed> <ttl_ms>
+```
+
+用户态对 scope 执行 `stat().st_ino`。64 位 kernfs 中 inode 来自
+`kernfs_node::id`，内核侧使用
+`cgroup_id(lruvec_memcg(lruvec)->css.cgroup)`，两者应一致。运行态仍通过
+`bind` 行和 `target_cgroup_id_last` 交叉核验；不一致时不得启用 apply。
+
+### 策略配置
+
+```text
+policy mode <disabled|observe|apply>
+policy threshold <high> <neutral> <low>
+policy factor <foreground> <high> <neutral> <low> <very_low>
+policy bounds <min_factor> <max_factor> <minimum_scan_pages> <maximum_extra_pages>
+policy default <missing_probability> <unknown_factor> <expired_factor> <markov_min_probability>
+```
+
+默认阈值为 `9000/5000/2000`，默认 factor 为前台 `700`、高概率 `750`、
+中性 `1000`、低概率 `1100`、极低概率 `1250`。缺失概率按 `3000` 选区间，
+预测过期和未知应用使用 `1000`。factor 被限制在配置的 `700..1300`，单次增加
+最多 4096 页。
+
+默认 `mode=observe`：记录 original/proposed，但 actual 始终等于 original。
+`mode=apply` 的有界分支已实现，但只有显式写入该模式才会修改传给
+`evict_folios()` 的扫描页数。本轮不启用 apply。
+
+### 安全边界
+
+- root、未绑定和未知 memcg 使用中性 factor，不改变默认语义；
+- 不修改 `sc->nr_to_reclaim`、`sc->priority`、swappiness 或 swap；
+- 不绕过 `memory.min`/`memory.low`；
+- 不写 `lru_gen_pages`，不调用 promote/depromote/protect；
+- 不修改 folio generation，不修改 anon/file 决策；
+- 不使用 eBPF 或 BPF kfunc；
+- 不引入预取或主动驱逐。
+
+### 新增观测项
+
+debugfs 会展示 `policy_config`、`bind`、`prob`，并记录：目标 cgroup 命中、
+绑定命中/缺失、概率命中/过期、各概率 bucket、original/proposed/applied scan
+pages、factor clamp、额外页上限，以及 Markov 与应用概率的关联计数。
+`per_folio_calls` 仍必须保持为 0。

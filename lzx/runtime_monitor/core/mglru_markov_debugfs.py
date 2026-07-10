@@ -32,6 +32,11 @@ MGLRU_MARKOV_WRITE_FIELDS = [
     "next_workload_ids",
     "confidences",
     "boost_levels",
+    "probability_fixed",
+    "probability_float",
+    "probability_source",
+    "ttl_ms",
+    "policy_command",
     "debugfs_path",
 ]
 
@@ -123,6 +128,15 @@ class MGLRUMarkovDebugfsWriter:
         self.markov_set_write_ok = 0
         self.markov_set_write_error = 0
         self.markov_set_skipped = 0
+        self.app_bind_write_attempts = 0
+        self.app_bind_write_ok = 0
+        self.app_bind_write_error = 0
+        self.app_probability_write_attempts = 0
+        self.app_probability_write_ok = 0
+        self.app_probability_write_error = 0
+        self.policy_config_write_attempts = 0
+        self.policy_config_write_ok = 0
+        self.policy_config_write_error = 0
         self.debugfs_missing_count = 0
         self.write_error_count = 0
         self.skipped_prediction_count = 0
@@ -205,6 +219,125 @@ class MGLRUMarkovDebugfsWriter:
             status="dry_run",
             error=reason,
         )
+
+    def write_app_binding(
+        self,
+        app_key: str,
+        app_id: int,
+        cgroup_id: int | None,
+        ttl_ms: int,
+    ) -> tuple[str, str, str]:
+        if not cgroup_id:
+            status, error, command = "dry_run", "missing_cgroup_id", ""
+        else:
+            command = f"app bind {int(app_id)} {int(cgroup_id)} {int(ttl_ms)}"
+            self.app_bind_write_attempts += 1
+            status, error = self._write_command(command)
+            if status == "ok":
+                self.app_bind_write_ok += 1
+            else:
+                self.app_bind_write_error += 1
+        self._record(
+            event_type="app_bind",
+            command=command,
+            status=status,
+            error=error,
+            app_key=app_key,
+            app_id=app_id,
+            cgroup_id="" if cgroup_id is None else cgroup_id,
+            ttl_ms=ttl_ms,
+        )
+        return command, status, error
+
+    def write_app_probability(
+        self,
+        app_key: str,
+        app_id: int,
+        probability: float | None,
+        probability_source: str,
+        ttl_ms: int,
+    ) -> tuple[str, str, str]:
+        if probability is None or probability_source == "unavailable":
+            command, status, error = "", "dry_run", "probability_unavailable"
+            probability_fixed: int | str = ""
+        else:
+            normalized = max(0.0, min(1.0, float(probability)))
+            probability_fixed = max(0, min(10000, int(round(normalized * 10000))))
+            command = f"app probability {int(app_id)} {probability_fixed} {int(ttl_ms)}"
+            self.app_probability_write_attempts += 1
+            status, error = self._write_command(command)
+            if status == "ok":
+                self.app_probability_write_ok += 1
+            else:
+                self.app_probability_write_error += 1
+        self._record(
+            event_type="app_probability",
+            command=command,
+            status=status,
+            error=error,
+            app_key=app_key,
+            app_id=app_id,
+            probability_fixed=probability_fixed,
+            probability_float="" if probability is None else probability,
+            probability_source=probability_source,
+            ttl_ms=ttl_ms,
+        )
+        return command, status, error
+
+    def write_all_app_probabilities(
+        self,
+        probabilities: Iterable[dict[str, object]],
+        ttl_ms: int,
+    ) -> list[tuple[str, str, str]]:
+        results: list[tuple[str, str, str]] = []
+        for entry in probabilities:
+            raw_probability = entry.get("probability")
+            probability = None if raw_probability in (None, "") else float(raw_probability)
+            results.append(
+                self.write_app_probability(
+                    app_key=str(entry.get("app_key", "")),
+                    app_id=int(entry.get("app_id", 0)),
+                    probability=probability,
+                    probability_source=str(entry.get("probability_source", "unavailable")),
+                    ttl_ms=ttl_ms,
+                )
+            )
+        return results
+
+    def write_policy_command(self, command: str) -> tuple[str, str, str]:
+        self.policy_config_write_attempts += 1
+        status, error = self._write_command(command)
+        if status == "ok":
+            self.policy_config_write_ok += 1
+        else:
+            self.policy_config_write_error += 1
+        self._record(
+            event_type="policy_config",
+            command=command,
+            policy_command=command,
+            status=status,
+            error=error,
+        )
+        return command, status, error
+
+    def read_snapshot(self) -> str:
+        try:
+            return self.debugfs_path.read_text(encoding="utf-8")
+        except PermissionError:
+            pass
+        except OSError:
+            return ""
+        try:
+            result = subprocess.run(
+                ["sudo", "-n", "cat", str(self.debugfs_path)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+        return result.stdout if result.returncode == 0 else ""
 
     def write_workload_update(
         self,
@@ -347,6 +480,22 @@ class MGLRUMarkovDebugfsWriter:
         self.debugfs_exists = True
         try:
             self.debugfs_path.write_text(command + "\n", encoding="utf-8")
+        except PermissionError:
+            try:
+                result = subprocess.run(
+                    ["sudo", "-n", "tee", str(self.debugfs_path)],
+                    input=command + "\n",
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                self.write_error_count += 1
+                return "write_error", str(exc)
+            if result.returncode != 0:
+                self.write_error_count += 1
+                return "write_error", result.stderr.strip() or f"sudo tee exit={result.returncode}"
         except OSError as exc:
             self.write_error_count += 1
             return "write_error", str(exc)
@@ -374,6 +523,11 @@ class MGLRUMarkovDebugfsWriter:
         next_workload_ids: str = "",
         confidences: str = "",
         boost_levels: str = "",
+        probability_fixed: int | str = "",
+        probability_float: float | str = "",
+        probability_source: str = "",
+        ttl_ms: int | str = "",
+        policy_command: str = "",
     ) -> None:
         if status == "dry_run":
             self.dry_run_count += 1
@@ -400,6 +554,11 @@ class MGLRUMarkovDebugfsWriter:
                 "next_workload_ids": next_workload_ids,
                 "confidences": confidences,
                 "boost_levels": boost_levels,
+                "probability_fixed": probability_fixed,
+                "probability_float": probability_float,
+                "probability_source": probability_source,
+                "ttl_ms": ttl_ms,
+                "policy_command": policy_command,
                 "debugfs_path": str(self.debugfs_path),
             }
         )
@@ -451,6 +610,15 @@ class MGLRUMarkovDebugfsWriter:
             f"- markov_set_write_ok: {self.markov_set_write_ok}",
             f"- markov_set_write_error: {self.markov_set_write_error}",
             f"- markov_set_skipped: {self.markov_set_skipped}",
+            f"- app_bind_write_attempts: {self.app_bind_write_attempts}",
+            f"- app_bind_write_ok: {self.app_bind_write_ok}",
+            f"- app_bind_write_error: {self.app_bind_write_error}",
+            f"- app_probability_write_attempts: {self.app_probability_write_attempts}",
+            f"- app_probability_write_ok: {self.app_probability_write_ok}",
+            f"- app_probability_write_error: {self.app_probability_write_error}",
+            f"- policy_config_write_attempts: {self.policy_config_write_attempts}",
+            f"- policy_config_write_ok: {self.policy_config_write_ok}",
+            f"- policy_config_write_error: {self.policy_config_write_error}",
             f"- workload_markov_transitions_csv: `{self.workload_markov_transitions_csv}`",
             f"- workload_markov_summary: `{self.workload_markov_summary}`",
             f"- debugfs_missing_count: {self.debugfs_missing_count}",
@@ -464,7 +632,18 @@ class MGLRUMarkovDebugfsWriter:
 
     def _debugfs_exists(self) -> bool:
         try:
-            return self.debugfs_path.exists()
+            if self.debugfs_path.exists():
+                return True
         except OSError as exc:
             print(f"warning: cannot access MGLRU Markov debugfs path {self.debugfs_path}: {exc}", file=sys.stderr)
+        try:
+            result = subprocess.run(
+                ["sudo", "-n", "test", "-e", str(self.debugfs_path)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            return result.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
             return False

@@ -40,6 +40,7 @@ from core.mglru_markov_debugfs import (
     RANK_BASED_CONFIDENCE,
     resolve_scope_cgroup_id,
 )
+from core.mglru_lstm_reclaim_policy import MGLRULSTMReclaimPolicyController
 from core.operation_tracker import OperationTracker
 from core.review_builder import ReviewBuilder
 from core.runtime_scope import RuntimeAppScope, load_runtime_app_scope
@@ -164,7 +165,10 @@ class RuntimeMonitorV0:
         )
         self.online_lstm = OnlineDurationLSTMRunner(args, self.model_dir, self.review_dir) if args.enable_online_lstm else None
         self.mglru_markov_writer = MGLRUMarkovDebugfsWriter(
-            enabled=args.enable_mglru_markov_debugfs,
+            enabled=(
+                args.enable_mglru_markov_debugfs
+                or args.enable_mglru_lstm_reclaim_policy
+            ),
             strict=args.mglru_markov_strict,
             debugfs_path=args.mglru_markov_debugfs_path,
             session_id=self.session_id,
@@ -172,7 +176,20 @@ class RuntimeMonitorV0:
             review_dir=self.review_dir,
             ttl_ms=args.mglru_markov_ttl_ms,
         )
+        policy_config_path = _resolve_project_path(
+            args.mglru_lstm_reclaim_policy_config, legacy_base=MONITOR_DIR
+        )
+        self.mglru_lstm_policy = MGLRULSTMReclaimPolicyController(
+            enabled=args.enable_mglru_lstm_reclaim_policy,
+            strict=args.mglru_lstm_policy_strict,
+            config_path=policy_config_path,
+            session_id=self.session_id,
+            model_dir=self.model_dir,
+            review_dir=self.review_dir,
+            debugfs_writer=self.mglru_markov_writer,
+        )
         self.last_mglru_foreground_app_key = ""
+        self.last_mglru_binding_refresh_monotonic = 0.0
         self._scope_cgroup_cache: dict[tuple[str, str], int | None] = {}
         self.cgroup_workload_process: subprocess.Popen[Any] | None = None
         self.cgroup_workload_process_started = False
@@ -203,7 +220,7 @@ class RuntimeMonitorV0:
     # main loop
     # ------------------------------------------------------------------
 
-    def run(self) -> None:
+    def run(self) -> int:
         signal.signal(signal.SIGINT, self._request_stop)
         signal.signal(signal.SIGTERM, self._request_stop)
         start = time.monotonic()
@@ -228,7 +245,14 @@ class RuntimeMonitorV0:
             print(f"  MGLRU Markov debugfs path: {self.args.mglru_markov_debugfs_path}")
         else:
             print("  MGLRU Markov debugfs writer: disabled")
-        print("No prefetch, eviction, swap, or kernel policy action will be performed.")
+        if self.args.enable_mglru_lstm_reclaim_policy:
+            self.mglru_lstm_policy.configure_kernel()
+            self._maybe_refresh_mglru_app_bindings(force=True)
+            print("  MGLRU LSTM app reclaim policy: enabled")
+            print(f"  policy config: {self.mglru_lstm_policy.config_path}")
+        else:
+            print("  MGLRU LSTM app reclaim policy: disabled")
+        print("No prefetch, active eviction, swap, generation, or anon/file policy action will be performed.")
         try:
             while not self.stop_requested:
                 now = time.monotonic()
@@ -246,6 +270,7 @@ class RuntimeMonitorV0:
             self._write_workload_state_changes()
             self._run_workload_markov_builder()
             self._write_workload_markov_sets()
+            self.mglru_lstm_policy.close()
             self.mglru_markov_writer.close()
             self._generate_review()
             self._append_cgroup_workload_summary()
@@ -253,8 +278,12 @@ class RuntimeMonitorV0:
                 f"Runtime Monitor v0 stopped."
                 f" model={self.model_dir} review={self.review_dir}"
             )
+        if self.args.mglru_lstm_policy_strict:
+            return 0 if self.mglru_lstm_policy.strict_result() == "PASS" else 1
+        return 0
 
     def sample_once(self) -> None:
+        self._maybe_refresh_mglru_app_bindings()
         window_start_ns = time.time_ns()
         window_end_ns = window_start_ns + int(self.args.sample_interval * 1_000_000_000)
 
@@ -611,6 +640,18 @@ class RuntimeMonitorV0:
             f"- markov_set_write_error: {self.mglru_markov_writer.markov_set_write_error}",
             f"- markov_set_skipped: {self.mglru_markov_writer.markov_set_skipped}",
             f"- mglru_markov_debugfs_final_result: {self.mglru_markov_writer.final_result()}",
+            "",
+            "## MGLRU LSTM 应用级回收策略",
+            f"- mglru_lstm_reclaim_policy_enabled: {str(bool(self.args.enable_mglru_lstm_reclaim_policy)).lower()}",
+            f"- mglru_lstm_reclaim_policy_config: `{self.mglru_lstm_policy.config_path}`",
+            f"- mglru_lstm_reclaim_policy_csv: `{self.mglru_lstm_policy.csv_path}`",
+            f"- mglru_lstm_reclaim_policy_summary: `{self.mglru_lstm_policy.summary_path}`",
+            f"- policy_config_write_ok: {self.mglru_lstm_policy.policy_config_write_ok}",
+            f"- app_bind_write_ok: {self.mglru_lstm_policy.app_bind_write_ok}",
+            f"- app_probability_write_ok: {self.mglru_lstm_policy.app_probability_write_ok}",
+            f"- probability_source: {','.join(sorted(self.mglru_lstm_policy.probability_sources)) or 'none'}",
+            f"- probability_is_rank_based: {str(self.mglru_lstm_policy.probability_is_rank_based()).lower()}",
+            f"- mglru_lstm_policy_strict_result: {self.mglru_lstm_policy.strict_result()}",
         ])
         try:
             self.review_dir.mkdir(parents=True, exist_ok=True)
@@ -620,7 +661,10 @@ class RuntimeMonitorV0:
             print(f"warning: failed to append cgroup workload summary: {exc}", file=sys.stderr)
 
     def _maybe_write_mglru_current_app(self, feature_row: dict[str, Any]) -> None:
-        if not self.args.enable_mglru_markov_debugfs or self.runtime_scope is None:
+        if not (
+            self.args.enable_mglru_markov_debugfs
+            or self.args.enable_mglru_lstm_reclaim_policy
+        ) or self.runtime_scope is None:
             return
         app_key = str(feature_row.get("foreground_app", "")).strip()
         if not app_key or app_key == self.last_mglru_foreground_app_key:
@@ -631,6 +675,20 @@ class RuntimeMonitorV0:
             print(f"warning: MGLRU Markov current app has no app_id: {app_key}", file=sys.stderr)
             return
         cgroup_id = self._resolve_mglru_scope_cgroup_id(scope_name)
+        if self.args.enable_mglru_lstm_reclaim_policy and cgroup_id is not None:
+            binding_ttl_ms = max(
+                self.mglru_lstm_policy.ttl_ms,
+                int(self.args.mglru_app_binding_refresh_s * 3000),
+            )
+            self.mglru_lstm_policy.refresh_bindings(
+                [
+                    app
+                    for app in self.runtime_scope.apps
+                    if app.app_key == app_key
+                ],
+                self._resolve_mglru_scope_cgroup_id,
+                binding_ttl_ms,
+            )
         self.mglru_markov_writer.write_current_app(
             app_key=app_key,
             app_id=app_id,
@@ -641,29 +699,88 @@ class RuntimeMonitorV0:
             self.last_mglru_foreground_app_key = app_key
 
     def _maybe_write_mglru_predictions(self, prediction_result: dict[str, Any]) -> None:
-        if not self.args.enable_mglru_markov_debugfs or self.runtime_scope is None:
+        if self.runtime_scope is None:
             return
         if prediction_result.get("status") != "success":
             return
         outputs = prediction_result.get("outputs", [])
         if not isinstance(outputs, list):
             return
-        rows = [row for row in outputs if int(row.get("horizon", -1)) == 3]
-        rows.sort(key=lambda row: int(row.get("rank", 0)))
-        predictions: list[tuple[int, int]] = []
-        for row in rows:
-            app_name = str(row.get("app", "")).strip()
-            app_id = self.runtime_scope.vocab_name_to_app_id.get(app_name)
-            if not app_id or app_id not in self.runtime_scope.prediction_enabled_app_ids:
-                self.mglru_markov_writer.skip_prediction(f"missing_or_disabled_app_id:{app_name}")
-                print(f"warning: MGLRU Markov skips prediction without app_id: {app_name}", file=sys.stderr)
-                continue
-            rank_index = len(predictions)
-            confidence = RANK_BASED_CONFIDENCE[rank_index] if rank_index < len(RANK_BASED_CONFIDENCE) else 1000
-            predictions.append((app_id, confidence))
-            if len(predictions) >= len(RANK_BASED_CONFIDENCE):
-                break
-        self.mglru_markov_writer.write_predicted_apps(predictions, ttl_ms=self.args.mglru_markov_ttl_ms)
+        if self.args.enable_mglru_markov_debugfs:
+            rows = [row for row in outputs if int(row.get("horizon", -1)) == 3]
+            rows.sort(key=lambda row: int(row.get("rank", 0)))
+            predictions: list[tuple[int, int]] = []
+            for row in rows:
+                app_name = str(row.get("app", "")).strip()
+                app_id = self.runtime_scope.vocab_name_to_app_id.get(app_name)
+                if not app_id or app_id not in self.runtime_scope.prediction_enabled_app_ids:
+                    self.mglru_markov_writer.skip_prediction(f"missing_or_disabled_app_id:{app_name}")
+                    continue
+                rank_index = len(predictions)
+                confidence = RANK_BASED_CONFIDENCE[rank_index] if rank_index < len(RANK_BASED_CONFIDENCE) else 1000
+                predictions.append((app_id, confidence))
+                if len(predictions) >= len(RANK_BASED_CONFIDENCE):
+                    break
+            self.mglru_markov_writer.write_predicted_apps(
+                predictions, ttl_ms=self.args.mglru_markov_ttl_ms
+            )
+
+        if self.args.enable_mglru_lstm_reclaim_policy:
+            all_rows = prediction_result.get("all_probabilities", [])
+            probability_rows: list[dict[str, Any]] = []
+            for row in all_rows if isinstance(all_rows, list) else []:
+                if int(row.get("horizon", -1)) != 3:
+                    continue
+                app_name = str(row.get("app", "")).strip()
+                app_id = self.runtime_scope.vocab_name_to_app_id.get(app_name)
+                if not app_id or app_id not in self.runtime_scope.prediction_enabled_app_ids:
+                    continue
+                app_key = next(
+                    (
+                        app.app_key
+                        for app in self.runtime_scope.apps
+                        if app.app_id == app_id
+                    ),
+                    "",
+                )
+                probability_rows.append(
+                    {
+                        "app_key": app_key,
+                        "app_id": app_id,
+                        "probability": row.get("next_use_probability", row.get("probability")),
+                        "probability_source": row.get("probability_source", "unavailable"),
+                    }
+                )
+            self.mglru_lstm_policy.write_probabilities(probability_rows)
+
+    def _maybe_refresh_mglru_app_bindings(self, *, force: bool = False) -> None:
+        if not self.args.enable_mglru_lstm_reclaim_policy or self.runtime_scope is None:
+            return
+        now = time.monotonic()
+        if not force and now - self.last_mglru_binding_refresh_monotonic < self.args.mglru_app_binding_refresh_s:
+            return
+        ttl_ms = max(
+            self.mglru_lstm_policy.ttl_ms,
+            int(self.args.mglru_app_binding_refresh_s * 3000),
+        )
+        self.mglru_lstm_policy.refresh_bindings(
+            self.runtime_scope.apps,
+            self._resolve_mglru_scope_cgroup_id,
+            ttl_ms,
+        )
+        if self.last_mglru_foreground_app_key:
+            app_key = self.last_mglru_foreground_app_key
+            app_id = self.runtime_scope.app_key_to_app_id.get(app_key)
+            scope_name = self.runtime_scope.app_key_to_scope_name.get(app_key, "")
+            cgroup_id = self._resolve_mglru_scope_cgroup_id(scope_name)
+            if app_id and cgroup_id:
+                self.mglru_markov_writer.write_current_app(
+                    app_key=app_key,
+                    app_id=app_id,
+                    cgroup_id=cgroup_id,
+                    ttl_ms=self.args.mglru_markov_ttl_ms,
+                )
+        self.last_mglru_binding_refresh_monotonic = now
 
     def _resolve_mglru_scope_cgroup_id(self, scope_name: str) -> int | None:
         slice_name = self.args.cgroup_workload_slice or self.args.test_slice
@@ -723,6 +840,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mglru-markov-ttl-ms", type=int, default=180000)
     parser.add_argument("--mglru-markov-strict", action="store_true", help="Mark MGLRU Markov debugfs result FAIL if debugfs writes cannot succeed.")
     parser.add_argument(
+        "--enable-mglru-lstm-reclaim-policy",
+        action="store_true",
+        help="启用基于 LSTM next-use 概率的应用级 MGLRU 扫描预算策略写入。",
+    )
+    parser.add_argument(
+        "--mglru-lstm-reclaim-policy-config",
+        default=PROJECT_ROOT / "configs" / "runtime" / "mglru_lstm_reclaim_policy.json",
+    )
+    parser.add_argument("--mglru-app-binding-refresh-s", type=float, default=30.0)
+    parser.add_argument(
+        "--mglru-lstm-policy-strict",
+        action="store_true",
+        help="要求策略配置、至少一个 app bind 和真实概率写入全部成功。",
+    )
+    parser.add_argument(
         "--lstm-checkpoint",
         default=MONITOR_DIR.parent / "operation_predictor" / "outputs" / "checkpoints" / "app_lstm_duration" / "lsapp_app_lstm_duration_switch.pt",
     )
@@ -739,7 +871,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--history-len", type=int, default=5)
     parser.add_argument("--duration-cap-s", type=float, default=600.0)
     parser.add_argument("--top-k", type=int, default=5)
-    parser.add_argument("--score-mode", choices=["softmax", "sigmoid"], default="softmax")
+    parser.add_argument("--score-mode", choices=["softmax", "sigmoid"], default="sigmoid")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--trigger-mode", choices=["event_plus_ttl", "event_only"], default="event_plus_ttl")
     parser.add_argument("--prediction-ttl-s", type=float, default=180.0)
@@ -837,8 +969,7 @@ def main(argv: list[str] | None = None) -> int:
         print("warning: Wayland foreground collection is not reliable in v0; using manual fallback.", file=sys.stderr)
         args.foreground_backend = "manual"
     monitor = RuntimeMonitorV0(args)
-    monitor.run()
-    return 0
+    return monitor.run()
 
 
 if __name__ == "__main__":

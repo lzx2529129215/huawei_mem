@@ -25,6 +25,12 @@ if ! grep -a -q 'lru_gen_workload_markov' "$BUILD_DIR/vmlinux"; then
   exit 1
 fi
 
+if ! grep -a -q 'policy_config mode' "$BUILD_DIR/vmlinux"; then
+  echo "Built vmlinux does not contain the LSTM reclaim policy commands." >&2
+  echo "Run a full incremental kernel build before installing." >&2
+  exit 1
+fi
+
 timestamp="$(date +%Y%m%d_%H%M%S)"
 backup_dir="/boot/mglru-backup-$timestamp"
 mkdir -p "$backup_dir"

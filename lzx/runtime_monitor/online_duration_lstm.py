@@ -85,8 +85,16 @@ PREDICTION_FIELDS = [
     "horizon",
     "rank",
     "app_id",
+    "app_key",
+    "runtime_app_id",
     "app",
+    "raw_score",
     "probability",
+    "next_use_probability",
+    "next_use_probability_fixed",
+    "probability_source",
+    "prediction_horizon_ms",
+    "prediction_ttl_ms",
     "score_mode",
     "status",
     "skip_reason",
@@ -194,6 +202,13 @@ class OnlineDurationLSTMRunner:
         self.app_name_map = dict(APP_NAME_MAP)
         self.app_name_map.update(_load_app_mapping_aliases(getattr(args, "app_mapping", "")))
         self.app_name_map.update({str(key): str(value) for key, value in configured_map.items()})
+        self.vocab_name_to_app_key = {
+            str(value): str(key) for key, value in configured_map.items()
+        }
+        runtime_scope = getattr(args, "loaded_runtime_scope", None)
+        self.app_key_to_runtime_app_id = (
+            runtime_scope.app_key_to_app_id if runtime_scope is not None else {}
+        )
         self.call_id = 0
         self.skipped: Counter[str] = Counter()
         self.completed_segments: list[dict[str, Any]] = []
@@ -287,10 +302,19 @@ class OnlineDurationLSTMRunner:
         status = "success"
         error = ""
         outputs: list[dict[str, Any]] = []
+        all_probabilities: list[dict[str, Any]] = []
+        bundle: dict[str, Any] = {"probability_source": "unavailable"}
         wall_dt = dt.datetime.now()
         wall_mono = time.perf_counter()
         try:
-            outputs = self.predictor.predict(mapped_history, durations, mapped_opened, str(feature_row["timestamp"]))
+            bundle = self.predictor.predict_bundle(
+                mapped_history,
+                durations,
+                mapped_opened,
+                str(feature_row["timestamp"]),
+            )
+            outputs = list(bundle.get("top_k_outputs", []))
+            all_probabilities = list(bundle.get("all_probabilities", []))
             if not outputs:
                 status = "skipped"
                 error = "predictor_returned_no_rows"
@@ -304,14 +328,24 @@ class OnlineDurationLSTMRunner:
 
         if status == "success":
             self.last_prediction_time = sample_time
-            for output in outputs:
+            for output in all_probabilities:
+                app_name = str(output.get("app", ""))
+                app_key = self.vocab_name_to_app_key.get(app_name, "")
                 self.prediction_writer.write_row({
                     **base_prediction,
                     "horizon": output.get("horizon", ""),
                     "rank": output.get("rank", ""),
                     "app_id": output.get("app_id", ""),
+                    "app_key": app_key,
+                    "runtime_app_id": self.app_key_to_runtime_app_id.get(app_key, ""),
                     "app": output.get("app", ""),
+                    "raw_score": output.get("raw_score", ""),
                     "probability": output.get("probability", ""),
+                    "next_use_probability": output.get("next_use_probability", ""),
+                    "next_use_probability_fixed": output.get("next_use_probability_fixed", ""),
+                    "probability_source": output.get("probability_source", "unavailable"),
+                    "prediction_horizon_ms": int(output.get("horizon", 0)) * 60_000,
+                    "prediction_ttl_ms": int(round(self.args.prediction_ttl_s * 1000)),
                     "score_mode": output.get("score_mode", self.args.score_mode),
                     "status": "success",
                     "skip_reason": "",
@@ -399,6 +433,12 @@ class OnlineDurationLSTMRunner:
             "status": status,
             "skip_reason": error,
             "outputs": outputs,
+            "all_probabilities": all_probabilities if status == "success" else [],
+            "probability_source": (
+                bundle.get("probability_source", "unavailable")
+                if status == "success"
+                else "unavailable"
+            ),
             "mapped_foreground_app": mapped_fg,
             "raw_foreground_app": raw_fg,
         }

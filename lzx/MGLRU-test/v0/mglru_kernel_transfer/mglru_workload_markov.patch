@@ -1,8 +1,9 @@
 --- a/mm/vmscan.c
 +++ b/mm/vmscan.c
-@@ -61,0 +62 @@
+@@ -61,0 +62,2 @@
 +#include <linux/cgroup.h>
-@@ -3831,0 +3833,819 @@
++#include <linux/math64.h>
+@@ -3845,0 +3848,1566 @@
 +/******************************************************************************
 + *                MGLRU workload Markov observe-only MVP
 + *
@@ -20,6 +21,11 @@
 +#define MGLRU_MARKOV_MAX_HISTORIES	64
 +#define MGLRU_MARKOV_MAX_TRANSITIONS	128
 +#define MGLRU_MARKOV_MAX_HINTS		64
++#define MGLRU_LSTM_MAX_BINDINGS		32
++#define MGLRU_LSTM_MAX_PROBABILITIES	32
++#define MGLRU_LSTM_MIN_SAFE_FACTOR	100
++#define MGLRU_LSTM_MAX_SAFE_FACTOR	2000
++#define MGLRU_LSTM_MAX_SCAN_BOUND	(1U << 20)
 +
 +/* Limit observe-only prepare work for the same reclaim target to once per 50ms. */
 +#define MGLRU_MARKOV_PREPARE_THROTTLE_JIFFIES	msecs_to_jiffies(50)
@@ -81,6 +87,83 @@
 +	bool		valid;
 +};
 +
++enum mglru_lstm_policy_mode {
++	MGLRU_LSTM_POLICY_DISABLED = 0,
++	MGLRU_LSTM_POLICY_OBSERVE,
++	MGLRU_LSTM_POLICY_APPLY,
++};
++
++enum mglru_lstm_probability_bucket {
++	MGLRU_LSTM_BUCKET_FOREGROUND = 0,
++	MGLRU_LSTM_BUCKET_HIGH,
++	MGLRU_LSTM_BUCKET_NEUTRAL,
++	MGLRU_LSTM_BUCKET_LOW,
++	MGLRU_LSTM_BUCKET_VERY_LOW,
++	MGLRU_LSTM_BUCKET_MISSING,
++	MGLRU_LSTM_BUCKET_EXPIRED,
++	MGLRU_LSTM_BUCKET_UNKNOWN,
++};
++
++struct mglru_lstm_app_binding {
++	u64		cgroup_id;
++	u32		app_id;
++	unsigned long	ttl_ms;
++	unsigned long	updated_at_jiffies;
++	bool		valid;
++};
++
++struct mglru_lstm_app_probability {
++	u32		app_id;
++	u32		probability;	/* 0 .. 10000 */
++	unsigned long	ttl_ms;
++	unsigned long	updated_at_jiffies;
++	bool		valid;
++};
++
++struct mglru_lstm_foreground_app {
++	u32		app_id;
++	u64		cgroup_id;
++	unsigned long	ttl_ms;
++	unsigned long	updated_at_jiffies;
++	bool		valid;
++};
++
++struct mglru_lstm_policy_config {
++	enum mglru_lstm_policy_mode mode;
++	u32 foreground_factor;
++	u32 high_threshold;
++	u32 neutral_threshold;
++	u32 low_threshold;
++	u32 high_factor;
++	u32 neutral_factor;
++	u32 low_factor;
++	u32 very_low_factor;
++	u32 minimum_factor;
++	u32 maximum_factor;
++	u32 missing_probability;
++	u32 unknown_factor;
++	u32 expired_factor;
++	u32 minimum_scan_pages;
++	u32 maximum_extra_pages;
++	u32 markov_min_probability;
++};
++
++struct mglru_lstm_reclaim_policy {
++	bool valid;
++	bool is_foreground;
++	bool prediction_found;
++	bool prediction_expired;
++	u32 app_id;
++	u64 cgroup_id;
++	u32 probability;
++	u32 scan_factor;
++	enum mglru_lstm_probability_bucket bucket;
++	enum mglru_lstm_policy_mode mode;
++	u32 minimum_scan_pages;
++	u32 maximum_extra_pages;
++	u64 prepared_at_ns;
++};
++
 +/* --- global state --------------------------------------------------- */
 +
 +static struct mglru_markov_app mglru_markov_apps[MGLRU_MARKOV_MAX_APPS];
@@ -88,6 +171,28 @@
 +static struct mglru_markov_transition mglru_markov_transitions[MGLRU_MARKOV_MAX_TRANSITIONS];
 +static struct mglru_markov_hint mglru_markov_hints[MGLRU_MARKOV_MAX_HINTS];
 +static struct mglru_markov_prediction mglru_markov_prediction;
++static struct mglru_lstm_app_binding mglru_lstm_bindings[MGLRU_LSTM_MAX_BINDINGS];
++static struct mglru_lstm_app_probability mglru_lstm_probabilities[MGLRU_LSTM_MAX_PROBABILITIES];
++static struct mglru_lstm_foreground_app mglru_lstm_foreground;
++static struct mglru_lstm_policy_config mglru_lstm_config = {
++	.mode = MGLRU_LSTM_POLICY_OBSERVE,
++	.foreground_factor = 700,
++	.high_threshold = 9000,
++	.neutral_threshold = 5000,
++	.low_threshold = 2000,
++	.high_factor = 750,
++	.neutral_factor = 1000,
++	.low_factor = 1100,
++	.very_low_factor = 1250,
++	.minimum_factor = 700,
++	.maximum_factor = 1300,
++	.missing_probability = 3000,
++	.unknown_factor = 1000,
++	.expired_factor = 1000,
++	.minimum_scan_pages = 1,
++	.maximum_extra_pages = 4096,
++	.markov_min_probability = 0,
++};
 +static unsigned int mglru_markov_app_count;
 +
 +static DEFINE_SPINLOCK(mglru_workload_markov_lock);
@@ -102,6 +207,32 @@
 +static unsigned long mglru_markov_missing_hint;
 +static unsigned long mglru_markov_missing_app;
 +static unsigned long mglru_markov_missing_transition;
++static unsigned long mglru_lstm_app_policy_prepare_calls;
++static unsigned long mglru_lstm_app_policy_disabled;
++static unsigned long mglru_lstm_app_policy_observe;
++static unsigned long mglru_lstm_app_policy_apply;
++static unsigned long mglru_lstm_target_cgroup_seen;
++static u64 mglru_lstm_target_cgroup_id_last;
++static unsigned long mglru_lstm_target_root_memcg;
++static unsigned long mglru_lstm_target_app_lookup_hit;
++static unsigned long mglru_lstm_target_app_lookup_miss;
++static unsigned long mglru_lstm_target_unbound_memcg;
++static unsigned long mglru_lstm_target_foreground_match;
++static unsigned long mglru_lstm_target_foreground_cgroup_mismatch;
++static unsigned long mglru_lstm_probability_lookup_hit;
++static unsigned long mglru_lstm_probability_lookup_miss;
++static unsigned long mglru_lstm_probability_expired;
++static unsigned long mglru_lstm_bucket_counts[MGLRU_LSTM_BUCKET_UNKNOWN + 1];
++static unsigned long mglru_lstm_original_scan_pages;
++static unsigned long mglru_lstm_proposed_scan_pages;
++static unsigned long mglru_lstm_applied_scan_pages;
++static unsigned long mglru_lstm_proposed_scan_reduction_pages;
++static unsigned long mglru_lstm_proposed_scan_increase_pages;
++static unsigned long mglru_lstm_scan_factor_clamped;
++static unsigned long mglru_lstm_scan_extra_pages_capped;
++static unsigned long mglru_lstm_markov_allowed_by_probability;
++static unsigned long mglru_lstm_markov_below_probability_threshold;
++static unsigned long mglru_lstm_markov_target_app_mismatch;
 +
 +/* --- helpers -------------------------------------------------------- */
 +
@@ -131,6 +262,102 @@
 +			return &mglru_markov_apps[i];
 +	}
 +	return NULL;
++}
++
++static bool mglru_lstm_entry_expired(unsigned long updated_at,
++				     unsigned long ttl_ms,
++				     unsigned long now)
++{
++	return !ttl_ms || time_after(now, updated_at + msecs_to_jiffies(ttl_ms));
++}
++
++static struct mglru_lstm_app_binding *mglru_lstm_find_binding_locked(u64 cgroup_id)
++{
++	int i;
++
++	lockdep_assert_held(&mglru_workload_markov_lock);
++	for (i = 0; i < MGLRU_LSTM_MAX_BINDINGS; i++) {
++		if (mglru_lstm_bindings[i].valid &&
++		    mglru_lstm_bindings[i].cgroup_id == cgroup_id)
++			return &mglru_lstm_bindings[i];
++	}
++	return NULL;
++}
++
++static struct mglru_lstm_app_probability *
++mglru_lstm_find_probability_locked(u32 app_id)
++{
++	int i;
++
++	lockdep_assert_held(&mglru_workload_markov_lock);
++	for (i = 0; i < MGLRU_LSTM_MAX_PROBABILITIES; i++) {
++		if (mglru_lstm_probabilities[i].valid &&
++		    mglru_lstm_probabilities[i].app_id == app_id)
++			return &mglru_lstm_probabilities[i];
++	}
++	return NULL;
++}
++
++static u32 mglru_lstm_factor_for_probability_locked(u32 probability)
++{
++	lockdep_assert_held(&mglru_workload_markov_lock);
++	if (probability >= mglru_lstm_config.high_threshold)
++		return mglru_lstm_config.high_factor;
++	if (probability >= mglru_lstm_config.neutral_threshold)
++		return mglru_lstm_config.neutral_factor;
++	if (probability >= mglru_lstm_config.low_threshold)
++		return mglru_lstm_config.low_factor;
++	return mglru_lstm_config.very_low_factor;
++}
++
++static enum mglru_lstm_probability_bucket
++mglru_lstm_bucket_for_probability_locked(u32 probability)
++{
++	lockdep_assert_held(&mglru_workload_markov_lock);
++	if (probability >= mglru_lstm_config.high_threshold)
++		return MGLRU_LSTM_BUCKET_HIGH;
++	if (probability >= mglru_lstm_config.neutral_threshold)
++		return MGLRU_LSTM_BUCKET_NEUTRAL;
++	if (probability >= mglru_lstm_config.low_threshold)
++		return MGLRU_LSTM_BUCKET_LOW;
++	return MGLRU_LSTM_BUCKET_VERY_LOW;
++}
++
++static bool mglru_lstm_validate_config(const struct mglru_lstm_policy_config *config)
++{
++	u32 factors[] = {
++		config->foreground_factor,
++		config->high_factor,
++		config->neutral_factor,
++		config->low_factor,
++		config->very_low_factor,
++		config->minimum_factor,
++		config->maximum_factor,
++		config->unknown_factor,
++		config->expired_factor,
++	};
++	int i;
++
++	if (config->mode > MGLRU_LSTM_POLICY_APPLY)
++		return false;
++	if (config->high_threshold > 10000 ||
++	    config->high_threshold < config->neutral_threshold ||
++	    config->neutral_threshold < config->low_threshold)
++		return false;
++	for (i = 0; i < ARRAY_SIZE(factors); i++) {
++		if (factors[i] < MGLRU_LSTM_MIN_SAFE_FACTOR ||
++		    factors[i] > MGLRU_LSTM_MAX_SAFE_FACTOR)
++			return false;
++	}
++	if (config->minimum_factor > config->maximum_factor)
++		return false;
++	if (config->missing_probability > 10000 ||
++	    config->markov_min_probability > 10000)
++		return false;
++	if (config->minimum_scan_pages > MGLRU_LSTM_MAX_SCAN_BOUND ||
++	    config->maximum_extra_pages > MGLRU_LSTM_MAX_SCAN_BOUND)
++		return false;
++	return true;
 +}
 +
 +static struct mglru_markov_app *mglru_markov_get_or_create_app_locked(
@@ -190,6 +417,143 @@
 +		}
 +	}
 +	return NULL;
++}
++
++static void mglru_lstm_prepare_reclaim_policy(
++	struct lruvec *lruvec, struct scan_control *sc,
++	struct mglru_lstm_reclaim_policy *policy)
++{
++	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
++	struct mglru_lstm_app_binding *binding;
++	struct mglru_lstm_app_probability *probability;
++	unsigned long now = jiffies;
++	u32 factor;
++
++	memset(policy, 0, sizeof(*policy));
++	policy->valid = true;
++	policy->prepared_at_ns = ktime_get_ns();
++
++	spin_lock(&mglru_workload_markov_lock);
++	mglru_lstm_app_policy_prepare_calls++;
++	policy->mode = mglru_lstm_config.mode;
++	policy->minimum_scan_pages = mglru_lstm_config.minimum_scan_pages;
++	policy->maximum_extra_pages = mglru_lstm_config.maximum_extra_pages;
++
++	if (policy->mode == MGLRU_LSTM_POLICY_DISABLED)
++		mglru_lstm_app_policy_disabled++;
++	else if (policy->mode == MGLRU_LSTM_POLICY_OBSERVE)
++		mglru_lstm_app_policy_observe++;
++	else
++		mglru_lstm_app_policy_apply++;
++
++	if (!memcg || mem_cgroup_is_root(memcg)) {
++		mglru_lstm_target_root_memcg++;
++		policy->bucket = MGLRU_LSTM_BUCKET_UNKNOWN;
++		policy->scan_factor = mglru_lstm_config.unknown_factor;
++		goto done;
++	}
++
++	policy->cgroup_id = cgroup_id(memcg->css.cgroup);
++	mglru_lstm_target_cgroup_seen++;
++	mglru_lstm_target_cgroup_id_last = policy->cgroup_id;
++	binding = mglru_lstm_find_binding_locked(policy->cgroup_id);
++	if (!binding || mglru_lstm_entry_expired(binding->updated_at_jiffies,
++						  binding->ttl_ms, now)) {
++		mglru_lstm_target_app_lookup_miss++;
++		mglru_lstm_target_unbound_memcg++;
++		policy->bucket = MGLRU_LSTM_BUCKET_UNKNOWN;
++		policy->scan_factor = mglru_lstm_config.unknown_factor;
++		goto done;
++	}
++
++	mglru_lstm_target_app_lookup_hit++;
++	policy->app_id = binding->app_id;
++	if (mglru_lstm_foreground.valid &&
++	    !mglru_lstm_entry_expired(mglru_lstm_foreground.updated_at_jiffies,
++				       mglru_lstm_foreground.ttl_ms, now) &&
++	    mglru_lstm_foreground.app_id == policy->app_id) {
++		if (mglru_lstm_foreground.cgroup_id == policy->cgroup_id) {
++			mglru_lstm_target_foreground_match++;
++			policy->is_foreground = true;
++			policy->bucket = MGLRU_LSTM_BUCKET_FOREGROUND;
++			policy->scan_factor = mglru_lstm_config.foreground_factor;
++			goto done;
++		}
++		mglru_lstm_target_foreground_cgroup_mismatch++;
++	}
++
++	probability = mglru_lstm_find_probability_locked(policy->app_id);
++	if (!probability) {
++		mglru_lstm_probability_lookup_miss++;
++		policy->bucket = MGLRU_LSTM_BUCKET_MISSING;
++		policy->probability = mglru_lstm_config.missing_probability;
++		policy->scan_factor =
++			mglru_lstm_factor_for_probability_locked(policy->probability);
++		goto done;
++	}
++	if (mglru_lstm_entry_expired(probability->updated_at_jiffies,
++				     probability->ttl_ms, now)) {
++		mglru_lstm_probability_expired++;
++		policy->prediction_expired = true;
++		policy->bucket = MGLRU_LSTM_BUCKET_EXPIRED;
++		policy->scan_factor = mglru_lstm_config.expired_factor;
++		goto done;
++	}
++
++	mglru_lstm_probability_lookup_hit++;
++	policy->prediction_found = true;
++	policy->probability = probability->probability;
++	policy->bucket =
++		mglru_lstm_bucket_for_probability_locked(policy->probability);
++	policy->scan_factor =
++		mglru_lstm_factor_for_probability_locked(policy->probability);
++done:
++	factor = clamp(policy->scan_factor, mglru_lstm_config.minimum_factor,
++		       mglru_lstm_config.maximum_factor);
++	if (factor != policy->scan_factor)
++		mglru_lstm_scan_factor_clamped++;
++	policy->scan_factor = factor;
++	mglru_lstm_bucket_counts[policy->bucket]++;
++	spin_unlock(&mglru_workload_markov_lock);
++}
++
++static unsigned long mglru_lstm_propose_nr_to_scan(
++	unsigned long original, const struct mglru_lstm_reclaim_policy *policy)
++{
++	u64 proposed64;
++	unsigned long proposed;
++	unsigned long actual;
++	bool extra_capped = false;
++
++	if (!original) {
++		return 0;
++	}
++
++	proposed64 = mul_u64_u32_div(original, policy->scan_factor, 1000);
++	proposed = min_t(u64, proposed64, ULONG_MAX);
++	if (!proposed)
++		proposed = policy->minimum_scan_pages;
++	if (proposed > original &&
++	    proposed - original > policy->maximum_extra_pages) {
++		proposed = original + policy->maximum_extra_pages;
++		if (proposed < original)
++			proposed = ULONG_MAX;
++		extra_capped = true;
++	}
++	actual = policy->mode == MGLRU_LSTM_POLICY_APPLY ? proposed : original;
++	spin_lock(&mglru_workload_markov_lock);
++	mglru_lstm_original_scan_pages += original;
++	mglru_lstm_proposed_scan_pages += proposed;
++	mglru_lstm_applied_scan_pages += actual;
++	if (proposed < original)
++		mglru_lstm_proposed_scan_reduction_pages += original - proposed;
++	else
++		mglru_lstm_proposed_scan_increase_pages += proposed - original;
++	if (extra_capped)
++		mglru_lstm_scan_extra_pages_capped++;
++	spin_unlock(&mglru_workload_markov_lock);
++
++	return actual;
 +}
 +
 +/* --- reclaim-cycle entry point -------------------------------------- */
@@ -252,6 +616,26 @@
 +		mglru_markov_missing_app++;
 +		spin_unlock(&mglru_workload_markov_lock);
 +		return;
++	}
++
++	{
++		struct mglru_lstm_app_binding *binding;
++		struct mglru_lstm_app_probability *probability;
++
++		binding = mglru_lstm_find_binding_locked(cg_id);
++		if (!binding || binding->app_id != app->app_id) {
++			mglru_lstm_markov_target_app_mismatch++;
++		} else {
++			probability = mglru_lstm_find_probability_locked(app->app_id);
++			if (probability &&
++			    !mglru_lstm_entry_expired(probability->updated_at_jiffies,
++						      probability->ttl_ms, jiffies) &&
++			    probability->probability <
++				mglru_lstm_config.markov_min_probability)
++				mglru_lstm_markov_below_probability_threshold++;
++			else
++				mglru_lstm_markov_allowed_by_probability++;
++		}
 +	}
 +
 +	if (app->current_workload < 0) {
@@ -341,6 +725,11 @@
 +	return kstrtoul(str, 0, value);
 +}
 +
++static int mglru_markov_parse_u32(const char *str, u32 *value)
++{
++	return kstrtou32(str, 0, value);
++}
++
 +static int mglru_markov_handle_app_current(int argc, char **argv)
 +{
 +	int app_id, err;
@@ -369,8 +758,207 @@
 +	}
 +	app->ttl_ms = ttl_ms;
 +	app->last_update_jiffies = jiffies;
++	app->cgroup_id = cgroup_id;
++	mglru_lstm_foreground.app_id = app_id;
++	mglru_lstm_foreground.cgroup_id = cgroup_id;
++	mglru_lstm_foreground.ttl_ms = ttl_ms;
++	mglru_lstm_foreground.updated_at_jiffies = jiffies;
++	mglru_lstm_foreground.valid = true;
 +	spin_unlock(&mglru_workload_markov_lock);
 +	return 0;
++}
++
++static int mglru_lstm_handle_app_bind(int argc, char **argv)
++{
++	u32 app_id;
++	u64 cgroup_id;
++	unsigned long ttl_ms;
++	struct mglru_lstm_app_binding *binding = NULL;
++	int err, i, free_slot = -1;
++
++	if (argc != 3)
++		return -EINVAL;
++	err = mglru_markov_parse_u32(argv[0], &app_id);
++	if (err || !app_id)
++		return err ?: -EINVAL;
++	err = mglru_markov_parse_u64(argv[1], &cgroup_id);
++	if (err || !cgroup_id)
++		return err ?: -EINVAL;
++	err = mglru_markov_parse_ulong(argv[2], &ttl_ms);
++	if (err || !ttl_ms)
++		return err ?: -EINVAL;
++
++	spin_lock(&mglru_workload_markov_lock);
++	for (i = 0; i < MGLRU_LSTM_MAX_BINDINGS; i++) {
++		if (!mglru_lstm_bindings[i].valid && free_slot < 0)
++			free_slot = i;
++		if (mglru_lstm_bindings[i].valid &&
++		    mglru_lstm_bindings[i].cgroup_id == cgroup_id) {
++			binding = &mglru_lstm_bindings[i];
++			break;
++		}
++	}
++	if (!binding && free_slot >= 0)
++		binding = &mglru_lstm_bindings[free_slot];
++	if (!binding) {
++		spin_unlock(&mglru_workload_markov_lock);
++		return -ENOSPC;
++	}
++	binding->app_id = app_id;
++	binding->cgroup_id = cgroup_id;
++	binding->ttl_ms = ttl_ms;
++	binding->updated_at_jiffies = jiffies;
++	binding->valid = true;
++	spin_unlock(&mglru_workload_markov_lock);
++	return 0;
++}
++
++static int mglru_lstm_handle_app_probability(int argc, char **argv)
++{
++	u32 app_id, value;
++	unsigned long ttl_ms;
++	struct mglru_lstm_app_probability *probability = NULL;
++	int err, i, free_slot = -1;
++
++	if (argc != 3)
++		return -EINVAL;
++	err = mglru_markov_parse_u32(argv[0], &app_id);
++	if (err || !app_id)
++		return err ?: -EINVAL;
++	err = mglru_markov_parse_u32(argv[1], &value);
++	if (err || value > 10000)
++		return err ?: -EINVAL;
++	err = mglru_markov_parse_ulong(argv[2], &ttl_ms);
++	if (err || !ttl_ms)
++		return err ?: -EINVAL;
++
++	spin_lock(&mglru_workload_markov_lock);
++	probability = mglru_lstm_find_probability_locked(app_id);
++	if (!probability) {
++		for (i = 0; i < MGLRU_LSTM_MAX_PROBABILITIES; i++) {
++			if (!mglru_lstm_probabilities[i].valid) {
++				free_slot = i;
++				break;
++			}
++		}
++		if (free_slot >= 0)
++			probability = &mglru_lstm_probabilities[free_slot];
++	}
++	if (!probability) {
++		spin_unlock(&mglru_workload_markov_lock);
++		return -ENOSPC;
++	}
++	probability->app_id = app_id;
++	probability->probability = value;
++	probability->ttl_ms = ttl_ms;
++	probability->updated_at_jiffies = jiffies;
++	probability->valid = true;
++	spin_unlock(&mglru_workload_markov_lock);
++	return 0;
++}
++
++static int mglru_lstm_commit_policy_config(
++	const struct mglru_lstm_policy_config *candidate)
++{
++	if (!mglru_lstm_validate_config(candidate))
++		return -EINVAL;
++	spin_lock(&mglru_workload_markov_lock);
++	mglru_lstm_config = *candidate;
++	spin_unlock(&mglru_workload_markov_lock);
++	return 0;
++}
++
++static void mglru_lstm_copy_policy_config(struct mglru_lstm_policy_config *config)
++{
++	spin_lock(&mglru_workload_markov_lock);
++	*config = mglru_lstm_config;
++	spin_unlock(&mglru_workload_markov_lock);
++}
++
++static int mglru_lstm_handle_policy_mode(int argc, char **argv)
++{
++	struct mglru_lstm_policy_config candidate;
++
++	if (argc != 1)
++		return -EINVAL;
++	mglru_lstm_copy_policy_config(&candidate);
++	if (!strcmp(argv[0], "disabled"))
++		candidate.mode = MGLRU_LSTM_POLICY_DISABLED;
++	else if (!strcmp(argv[0], "observe"))
++		candidate.mode = MGLRU_LSTM_POLICY_OBSERVE;
++	else if (!strcmp(argv[0], "apply"))
++		candidate.mode = MGLRU_LSTM_POLICY_APPLY;
++	else
++		return -EINVAL;
++	return mglru_lstm_commit_policy_config(&candidate);
++}
++
++static int mglru_lstm_handle_policy_threshold(int argc, char **argv)
++{
++	struct mglru_lstm_policy_config candidate;
++	int err;
++
++	if (argc != 3)
++		return -EINVAL;
++	mglru_lstm_copy_policy_config(&candidate);
++	err = mglru_markov_parse_u32(argv[0], &candidate.high_threshold);
++	err |= mglru_markov_parse_u32(argv[1], &candidate.neutral_threshold);
++	err |= mglru_markov_parse_u32(argv[2], &candidate.low_threshold);
++	if (err)
++		return err;
++	return mglru_lstm_commit_policy_config(&candidate);
++}
++
++static int mglru_lstm_handle_policy_factor(int argc, char **argv)
++{
++	struct mglru_lstm_policy_config candidate;
++	int err;
++
++	if (argc != 5)
++		return -EINVAL;
++	mglru_lstm_copy_policy_config(&candidate);
++	err = mglru_markov_parse_u32(argv[0], &candidate.foreground_factor);
++	err |= mglru_markov_parse_u32(argv[1], &candidate.high_factor);
++	err |= mglru_markov_parse_u32(argv[2], &candidate.neutral_factor);
++	err |= mglru_markov_parse_u32(argv[3], &candidate.low_factor);
++	err |= mglru_markov_parse_u32(argv[4], &candidate.very_low_factor);
++	if (err)
++		return err;
++	return mglru_lstm_commit_policy_config(&candidate);
++}
++
++static int mglru_lstm_handle_policy_bounds(int argc, char **argv)
++{
++	struct mglru_lstm_policy_config candidate;
++	int err;
++
++	if (argc != 4)
++		return -EINVAL;
++	mglru_lstm_copy_policy_config(&candidate);
++	err = mglru_markov_parse_u32(argv[0], &candidate.minimum_factor);
++	err |= mglru_markov_parse_u32(argv[1], &candidate.maximum_factor);
++	err |= mglru_markov_parse_u32(argv[2], &candidate.minimum_scan_pages);
++	err |= mglru_markov_parse_u32(argv[3], &candidate.maximum_extra_pages);
++	if (err)
++		return err;
++	return mglru_lstm_commit_policy_config(&candidate);
++}
++
++static int mglru_lstm_handle_policy_default(int argc, char **argv)
++{
++	struct mglru_lstm_policy_config candidate;
++	int err;
++
++	if (argc != 4)
++		return -EINVAL;
++	mglru_lstm_copy_policy_config(&candidate);
++	err = mglru_markov_parse_u32(argv[0], &candidate.missing_probability);
++	err |= mglru_markov_parse_u32(argv[1], &candidate.unknown_factor);
++	err |= mglru_markov_parse_u32(argv[2], &candidate.expired_factor);
++	err |= mglru_markov_parse_u32(argv[3], &candidate.markov_min_probability);
++	if (err)
++		return err;
++	return mglru_lstm_commit_policy_config(&candidate);
 +}
 +
 +static int mglru_markov_handle_app_predict(int argc, char **argv)
@@ -550,6 +1138,9 @@
 +	memset(mglru_markov_transitions, 0, sizeof(mglru_markov_transitions));
 +	memset(mglru_markov_hints, 0, sizeof(mglru_markov_hints));
 +	memset(&mglru_markov_prediction, 0, sizeof(mglru_markov_prediction));
++	memset(mglru_lstm_bindings, 0, sizeof(mglru_lstm_bindings));
++	memset(mglru_lstm_probabilities, 0, sizeof(mglru_lstm_probabilities));
++	memset(&mglru_lstm_foreground, 0, sizeof(mglru_lstm_foreground));
 +	mglru_markov_app_count = 0;
 +	mglru_markov_reclaim_calls = 0;
 +	mglru_markov_prepare_calls = 0;
@@ -560,6 +1151,32 @@
 +	mglru_markov_missing_hint = 0;
 +	mglru_markov_missing_app = 0;
 +	mglru_markov_missing_transition = 0;
++	mglru_lstm_app_policy_prepare_calls = 0;
++	mglru_lstm_app_policy_disabled = 0;
++	mglru_lstm_app_policy_observe = 0;
++	mglru_lstm_app_policy_apply = 0;
++	mglru_lstm_target_cgroup_seen = 0;
++	mglru_lstm_target_cgroup_id_last = 0;
++	mglru_lstm_target_root_memcg = 0;
++	mglru_lstm_target_app_lookup_hit = 0;
++	mglru_lstm_target_app_lookup_miss = 0;
++	mglru_lstm_target_unbound_memcg = 0;
++	mglru_lstm_target_foreground_match = 0;
++	mglru_lstm_target_foreground_cgroup_mismatch = 0;
++	mglru_lstm_probability_lookup_hit = 0;
++	mglru_lstm_probability_lookup_miss = 0;
++	mglru_lstm_probability_expired = 0;
++	memset(mglru_lstm_bucket_counts, 0, sizeof(mglru_lstm_bucket_counts));
++	mglru_lstm_original_scan_pages = 0;
++	mglru_lstm_proposed_scan_pages = 0;
++	mglru_lstm_applied_scan_pages = 0;
++	mglru_lstm_proposed_scan_reduction_pages = 0;
++	mglru_lstm_proposed_scan_increase_pages = 0;
++	mglru_lstm_scan_factor_clamped = 0;
++	mglru_lstm_scan_extra_pages_capped = 0;
++	mglru_lstm_markov_allowed_by_probability = 0;
++	mglru_lstm_markov_below_probability_threshold = 0;
++	mglru_lstm_markov_target_app_mismatch = 0;
 +}
 +
 +static void mglru_markov_clear_histories_locked(void)
@@ -605,6 +1222,26 @@
 +			return mglru_markov_handle_app_current(argc - 2, argv + 2);
 +		if (!strcmp(argv[1], "predict"))
 +			return mglru_markov_handle_app_predict(argc - 2, argv + 2);
++		if (!strcmp(argv[1], "bind"))
++			return mglru_lstm_handle_app_bind(argc - 2, argv + 2);
++		if (!strcmp(argv[1], "probability"))
++			return mglru_lstm_handle_app_probability(argc - 2, argv + 2);
++		return -EINVAL;
++	}
++
++	if (!strcmp(argv[0], "policy")) {
++		if (argc < 2)
++			return -EINVAL;
++		if (!strcmp(argv[1], "mode"))
++			return mglru_lstm_handle_policy_mode(argc - 2, argv + 2);
++		if (!strcmp(argv[1], "threshold"))
++			return mglru_lstm_handle_policy_threshold(argc - 2, argv + 2);
++		if (!strcmp(argv[1], "factor"))
++			return mglru_lstm_handle_policy_factor(argc - 2, argv + 2);
++		if (!strcmp(argv[1], "bounds"))
++			return mglru_lstm_handle_policy_bounds(argc - 2, argv + 2);
++		if (!strcmp(argv[1], "default"))
++			return mglru_lstm_handle_policy_default(argc - 2, argv + 2);
 +		return -EINVAL;
 +	}
 +
@@ -692,6 +1329,24 @@
 +	return err ?: len;
 +}
 +
++static const char *mglru_lstm_policy_mode_name(enum mglru_lstm_policy_mode mode)
++{
++	if (mode == MGLRU_LSTM_POLICY_DISABLED)
++		return "disabled";
++	if (mode == MGLRU_LSTM_POLICY_APPLY)
++		return "apply";
++	return "observe";
++}
++
++static unsigned long mglru_lstm_ttl_remaining_ms(unsigned long updated_at,
++						 unsigned long ttl_ms)
++{
++	unsigned long expires = updated_at + msecs_to_jiffies(ttl_ms);
++
++	return time_after(expires, jiffies) ?
++		jiffies_to_msecs(expires - jiffies) : 0;
++}
++
 +static int mglru_workload_markov_show(struct seq_file *m, void *v)
 +{
 +	int i, j;
@@ -702,9 +1357,63 @@
 +	seq_puts(m, "# commands:\n");
 +	seq_puts(m, "#   app current <app_id> <cgroup_id> <ttl_ms>\n");
 +	seq_puts(m, "#   app predict <ttl_ms> <app_id1> <conf1> [<app_id2> <conf2> ...]\n");
++	seq_puts(m, "#   app bind <app_id> <cgroup_id> <ttl_ms>\n");
++	seq_puts(m, "#   app probability <app_id> <probability_fixed> <ttl_ms>\n");
++	seq_puts(m, "#   policy mode <disabled|observe|apply>\n");
++	seq_puts(m, "#   policy threshold <high> <neutral> <low>\n");
++	seq_puts(m, "#   policy factor <foreground> <high> <neutral> <low> <very_low>\n");
++	seq_puts(m, "#   policy bounds <min_factor> <max_factor> <minimum_scan_pages> <maximum_extra_pages>\n");
++	seq_puts(m, "#   policy default <missing_probability> <unknown_factor> <expired_factor> <markov_min_probability>\n");
 +	seq_puts(m, "#   workload update <cgroup_id> <app_id> <workload_id>\n");
 +	seq_puts(m, "#   markov set <app_id> <prev_workload> <current_workload> <next1> <conf1> <boost1> [...]\n");
 +	seq_puts(m, "#   clear all|histories|markov|hints\n");
++	seq_puts(m, "\n");
++
++	seq_printf(m, "policy_config mode %s\n",
++		   mglru_lstm_policy_mode_name(mglru_lstm_config.mode));
++	seq_printf(m, "policy_config foreground_factor %u\n",
++		   mglru_lstm_config.foreground_factor);
++	seq_printf(m, "policy_config thresholds %u %u %u\n",
++		   mglru_lstm_config.high_threshold,
++		   mglru_lstm_config.neutral_threshold,
++		   mglru_lstm_config.low_threshold);
++	seq_printf(m, "policy_config factors %u %u %u %u\n",
++		   mglru_lstm_config.high_factor,
++		   mglru_lstm_config.neutral_factor,
++		   mglru_lstm_config.low_factor,
++		   mglru_lstm_config.very_low_factor);
++	seq_printf(m, "policy_config bounds %u %u %u %u\n",
++		   mglru_lstm_config.minimum_factor,
++		   mglru_lstm_config.maximum_factor,
++		   mglru_lstm_config.minimum_scan_pages,
++		   mglru_lstm_config.maximum_extra_pages);
++	seq_printf(m, "policy_config defaults %u %u %u %u\n",
++		   mglru_lstm_config.missing_probability,
++		   mglru_lstm_config.unknown_factor,
++		   mglru_lstm_config.expired_factor,
++		   mglru_lstm_config.markov_min_probability);
++	seq_puts(m, "\n# app bindings\n");
++	for (i = 0; i < MGLRU_LSTM_MAX_BINDINGS; i++) {
++		if (!mglru_lstm_bindings[i].valid)
++			continue;
++		seq_printf(m, "bind %u %llu %lu\n",
++			   mglru_lstm_bindings[i].app_id,
++			   mglru_lstm_bindings[i].cgroup_id,
++			   mglru_lstm_ttl_remaining_ms(
++				mglru_lstm_bindings[i].updated_at_jiffies,
++				mglru_lstm_bindings[i].ttl_ms));
++	}
++	seq_puts(m, "\n# app probabilities\n");
++	for (i = 0; i < MGLRU_LSTM_MAX_PROBABILITIES; i++) {
++		if (!mglru_lstm_probabilities[i].valid)
++			continue;
++		seq_printf(m, "prob %u %u %lu userspace\n",
++			   mglru_lstm_probabilities[i].app_id,
++			   mglru_lstm_probabilities[i].probability,
++			   mglru_lstm_ttl_remaining_ms(
++				mglru_lstm_probabilities[i].updated_at_jiffies,
++				mglru_lstm_probabilities[i].ttl_ms));
++	}
 +	seq_puts(m, "\n");
 +
 +	/* --- current app states --- */
@@ -804,6 +1513,45 @@
 +	seq_printf(m, "stat missing_hint       %lu\n", mglru_markov_missing_hint);
 +	seq_printf(m, "stat missing_app        %lu\n", mglru_markov_missing_app);
 +	seq_printf(m, "stat missing_transition %lu\n", mglru_markov_missing_transition);
++	seq_printf(m, "stat app_policy_prepare_calls %lu\n", mglru_lstm_app_policy_prepare_calls);
++	seq_printf(m, "stat app_policy_disabled %lu\n", mglru_lstm_app_policy_disabled);
++	seq_printf(m, "stat app_policy_observe %lu\n", mglru_lstm_app_policy_observe);
++	seq_printf(m, "stat app_policy_apply %lu\n", mglru_lstm_app_policy_apply);
++	seq_printf(m, "stat target_cgroup_seen %lu\n", mglru_lstm_target_cgroup_seen);
++	seq_printf(m, "stat target_cgroup_id_last %llu\n", mglru_lstm_target_cgroup_id_last);
++	seq_printf(m, "stat target_root_memcg %lu\n", mglru_lstm_target_root_memcg);
++	seq_printf(m, "stat target_app_lookup_hit %lu\n", mglru_lstm_target_app_lookup_hit);
++	seq_printf(m, "stat target_app_lookup_miss %lu\n", mglru_lstm_target_app_lookup_miss);
++	seq_printf(m, "stat target_unbound_memcg %lu\n", mglru_lstm_target_unbound_memcg);
++	seq_printf(m, "stat target_foreground_match %lu\n", mglru_lstm_target_foreground_match);
++	seq_printf(m, "stat target_foreground_cgroup_mismatch %lu\n",
++		   mglru_lstm_target_foreground_cgroup_mismatch);
++	seq_printf(m, "stat probability_lookup_hit %lu\n", mglru_lstm_probability_lookup_hit);
++	seq_printf(m, "stat probability_lookup_miss %lu\n", mglru_lstm_probability_lookup_miss);
++	seq_printf(m, "stat probability_expired %lu\n", mglru_lstm_probability_expired);
++	seq_printf(m, "stat bucket_foreground %lu\n", mglru_lstm_bucket_counts[MGLRU_LSTM_BUCKET_FOREGROUND]);
++	seq_printf(m, "stat bucket_high %lu\n", mglru_lstm_bucket_counts[MGLRU_LSTM_BUCKET_HIGH]);
++	seq_printf(m, "stat bucket_neutral %lu\n", mglru_lstm_bucket_counts[MGLRU_LSTM_BUCKET_NEUTRAL]);
++	seq_printf(m, "stat bucket_low %lu\n", mglru_lstm_bucket_counts[MGLRU_LSTM_BUCKET_LOW]);
++	seq_printf(m, "stat bucket_very_low %lu\n", mglru_lstm_bucket_counts[MGLRU_LSTM_BUCKET_VERY_LOW]);
++	seq_printf(m, "stat bucket_missing %lu\n", mglru_lstm_bucket_counts[MGLRU_LSTM_BUCKET_MISSING]);
++	seq_printf(m, "stat bucket_expired %lu\n", mglru_lstm_bucket_counts[MGLRU_LSTM_BUCKET_EXPIRED]);
++	seq_printf(m, "stat bucket_unknown %lu\n", mglru_lstm_bucket_counts[MGLRU_LSTM_BUCKET_UNKNOWN]);
++	seq_printf(m, "stat original_scan_pages %lu\n", mglru_lstm_original_scan_pages);
++	seq_printf(m, "stat proposed_scan_pages %lu\n", mglru_lstm_proposed_scan_pages);
++	seq_printf(m, "stat applied_scan_pages %lu\n", mglru_lstm_applied_scan_pages);
++	seq_printf(m, "stat proposed_scan_reduction_pages %lu\n",
++		   mglru_lstm_proposed_scan_reduction_pages);
++	seq_printf(m, "stat proposed_scan_increase_pages %lu\n",
++		   mglru_lstm_proposed_scan_increase_pages);
++	seq_printf(m, "stat scan_factor_clamped %lu\n", mglru_lstm_scan_factor_clamped);
++	seq_printf(m, "stat scan_extra_pages_capped %lu\n", mglru_lstm_scan_extra_pages_capped);
++	seq_printf(m, "stat markov_allowed_by_probability %lu\n",
++		   mglru_lstm_markov_allowed_by_probability);
++	seq_printf(m, "stat markov_below_probability_threshold %lu\n",
++		   mglru_lstm_markov_below_probability_threshold);
++	seq_printf(m, "stat markov_target_app_mismatch %lu\n",
++		   mglru_lstm_markov_target_app_mismatch);
 +
 +	spin_unlock(&mglru_workload_markov_lock);
 +	return 0;
@@ -822,9 +1570,18 @@
 +	.release	= single_release,
 +};
 +
-@@ -5262,0 +6083,2 @@
+@@ -5276,0 +6845,2 @@
 +	mglru_markov_prepare_reclaim(lruvec, sc, __func__);
 +
-@@ -6313,0 +7136,2 @@
+@@ -5445,0 +7016,2 @@
++	bool policy_prepared = false;
++	struct mglru_lstm_reclaim_policy policy;
+@@ -5452,0 +7025,5 @@
++		if (!policy_prepared) {
++			mglru_lstm_prepare_reclaim_policy(lruvec, sc, &policy);
++			policy_prepared = true;
++		}
++		nr_to_scan = mglru_lstm_propose_nr_to_scan(nr_to_scan, &policy);
+@@ -6327,0 +7905,2 @@
 +	debugfs_create_file("lru_gen_workload_markov", 0644, NULL, NULL,
 +			    &mglru_workload_markov_fops);
