@@ -1,0 +1,1 @@
+cat /sys/kernel/debug/lru_gen >1.txt
