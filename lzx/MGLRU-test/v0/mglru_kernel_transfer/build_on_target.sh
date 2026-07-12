@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SRC_DIR="${1:-$PWD/linux-hwe-6.17-6.17.0}"
-BUILD_DIR="${2:-$PWD/linux-hwe-6.17-mglru-build}"
+SRC_DIR="$(realpath -m "${1:-$PWD/linux-hwe-6.17-6.17.0}")"
+BUILD_DIR="$(realpath -m "${2:-$PWD/linux-hwe-6.17-mglru-build}")"
 JOBS="${JOBS:-$(nproc)}"
 
 missing=()

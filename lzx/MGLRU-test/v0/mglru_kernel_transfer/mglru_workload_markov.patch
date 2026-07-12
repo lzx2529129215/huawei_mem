@@ -3,7 +3,7 @@
 @@ -61,0 +62,2 @@
 +#include <linux/cgroup.h>
 +#include <linux/math64.h>
-@@ -3845,0 +3848,1566 @@
+@@ -3845,0 +3848,1570 @@
 +/******************************************************************************
 + *                MGLRU workload Markov observe-only MVP
 + *
@@ -439,9 +439,12 @@
 +	policy->minimum_scan_pages = mglru_lstm_config.minimum_scan_pages;
 +	policy->maximum_extra_pages = mglru_lstm_config.maximum_extra_pages;
 +
-+	if (policy->mode == MGLRU_LSTM_POLICY_DISABLED)
++	if (policy->mode == MGLRU_LSTM_POLICY_DISABLED) {
 +		mglru_lstm_app_policy_disabled++;
-+	else if (policy->mode == MGLRU_LSTM_POLICY_OBSERVE)
++		policy->bucket = MGLRU_LSTM_BUCKET_UNKNOWN;
++		policy->scan_factor = 1000;
++		goto done;
++	} else if (policy->mode == MGLRU_LSTM_POLICY_OBSERVE)
 +		mglru_lstm_app_policy_observe++;
 +	else
 +		mglru_lstm_app_policy_apply++;
@@ -1033,6 +1036,7 @@
 +		spin_unlock(&mglru_workload_markov_lock);
 +		return -ENOSPC;
 +	}
++	app->cgroup_id = cgroup_id;
 +
 +	/* record history: previous workload -> current workload transition */
 +	app->prev_workload = app->current_workload;
@@ -1570,18 +1574,18 @@
 +	.release	= single_release,
 +};
 +
-@@ -5276,0 +6845,2 @@
+@@ -5276,0 +6849,2 @@
 +	mglru_markov_prepare_reclaim(lruvec, sc, __func__);
 +
-@@ -5445,0 +7016,2 @@
+@@ -5445,0 +7020,2 @@
 +	bool policy_prepared = false;
 +	struct mglru_lstm_reclaim_policy policy;
-@@ -5452,0 +7025,5 @@
+@@ -5452,0 +7029,5 @@
 +		if (!policy_prepared) {
 +			mglru_lstm_prepare_reclaim_policy(lruvec, sc, &policy);
 +			policy_prepared = true;
 +		}
 +		nr_to_scan = mglru_lstm_propose_nr_to_scan(nr_to_scan, &policy);
-@@ -6327,0 +7905,2 @@
+@@ -6327,0 +7909,2 @@
 +	debugfs_create_file("lru_gen_workload_markov", 0644, NULL, NULL,
 +			    &mglru_workload_markov_fops);
