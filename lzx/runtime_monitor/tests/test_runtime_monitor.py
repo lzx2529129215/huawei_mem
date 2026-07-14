@@ -12,11 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from collectors.file_events import path_for_mode
-from collectors.foreground import ForegroundState
-from core.app_mapper import AppMapper, ProcessIdentity, load_config
-from core.lifecycle import LifecycleEventBuilder
-from core.schema import (
+from runtime_monitor.collectors.file_events import path_for_mode
+from runtime_monitor.collectors.foreground import ForegroundState
+from runtime_monitor.core.app_mapper import AppMapper, ProcessIdentity, load_config
+from runtime_monitor.core.lifecycle import LifecycleEventBuilder
+from runtime_monitor.core.schema import (
     APP_LIFECYCLE_EVENT_FIELDS,
     APP_STATE_1S_FIELDS,
     EVENT_FIELDS,
@@ -25,7 +25,7 @@ from core.schema import (
     GLOBAL_STATE_1S_FIELDS,
     PROCESS_EVENT_FIELDS,
 )
-from monitor import RuntimeMonitorV0, parse_args
+from runtime_monitor.monitor import RuntimeMonitorV0, parse_args
 
 
 class RuntimeMonitorV0Tests(unittest.TestCase):

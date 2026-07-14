@@ -89,7 +89,9 @@ PREDICTION_FIELDS = [
     "runtime_app_id",
     "app",
     "raw_score",
+    "raw_logit",
     "probability",
+    "probability_fixed",
     "next_use_probability",
     "next_use_probability_fixed",
     "probability_source",
@@ -120,6 +122,7 @@ APP_NAME_MAP = {
     "WPS": "WPS",
     "QQ": "腾讯QQ",
     "FILES": "图库",
+    "BILIBILI": "哔哩哔哩",
 }
 UNKNOWN_VALUES = {"", "UNKNOWN", "None", "none", "null", "NULL"}
 
@@ -180,6 +183,8 @@ def json_rows_for_horizon(outputs: list[dict[str, Any]], horizon: int) -> str:
             "app_id": int(row["app_id"]),
             "app": str(row["app"]),
             "probability": float(row["probability"]),
+            "raw_logit": float(row.get("raw_logit", row.get("raw_score", 0.0))),
+            "probability_fixed": int(row.get("next_use_probability_fixed", 0)),
         }
         for row in outputs
         if int(row.get("horizon", -1)) == horizon
@@ -340,7 +345,9 @@ class OnlineDurationLSTMRunner:
                     "runtime_app_id": self.app_key_to_runtime_app_id.get(app_key, ""),
                     "app": output.get("app", ""),
                     "raw_score": output.get("raw_score", ""),
+                    "raw_logit": output.get("raw_logit", output.get("raw_score", "")),
                     "probability": output.get("probability", ""),
+                    "probability_fixed": output.get("probability_fixed", output.get("next_use_probability_fixed", "")),
                     "next_use_probability": output.get("next_use_probability", ""),
                     "next_use_probability_fixed": output.get("next_use_probability_fixed", ""),
                     "probability_source": output.get("probability_source", "unavailable"),

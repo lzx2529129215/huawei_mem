@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.workload_classifier import (
+from runtime_monitor.core.workload_classifier import (
     INPUT_METRIC_FIELDS,
     classify_metrics,
     classify_session,

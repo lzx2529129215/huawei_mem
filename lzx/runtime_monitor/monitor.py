@@ -41,6 +41,10 @@ from core.mglru_markov_debugfs import (
     resolve_scope_cgroup_id,
 )
 from core.mglru_lstm_reclaim_policy import MGLRULSTMReclaimPolicyController
+from core.online_causal_workload_markov import OnlineCausalWorkloadMarkov
+from core.online_cgroup_workload import OnlineCgroupWorkloadSampler
+from core.online_markov_debugfs_audit import OnlineMarkovDebugfsAuditWriter
+from core.dual_workload_markov import DualWorkloadMarkov
 from core.operation_tracker import OperationTracker
 from core.review_builder import ReviewBuilder
 from core.runtime_scope import RuntimeAppScope, load_runtime_app_scope
@@ -215,6 +219,52 @@ class RuntimeMonitorV0:
         self.workload_markov_summary = (
             self.review_dir / "workload_markov_summary.md"
         )
+        self.online_workload_markov_enabled = bool(
+            args.enable_online_workload_markov and self.workload_classifier_enabled
+        )
+        self.dual_workload_markov_enabled = bool(
+            args.enable_dual_workload_markov and self.workload_classifier_enabled
+        )
+        self.dual_workload_markov = None
+        self.current_foreground_app_key = ""
+        self.current_foreground_app_id = ""
+        if self.dual_workload_markov_enabled:
+            self.mglru_markov_writer.write_dual_runtime_mode("dual")
+            self.dual_workload_markov = DualWorkloadMarkov(
+                enabled=True,
+                session_id=self.session_id,
+                model_dir=self.model_dir,
+                review_dir=self.review_dir,
+                # Writer stays attached in disabled mode so the dual audit CSV
+                # is still produced without touching debugfs.
+                debugfs_writer=self.mglru_markov_writer,
+                reentry_window_s=args.dual_markov_reentry_window_s,
+                ignore_initial_low_activity_s=args.dual_markov_ignore_initial_low_activity_s,
+            )
+        self.online_markov_debugfs_writer = None
+        self.online_workload_markov = None
+        self.live_cgroup_sampler = None
+        if self.online_workload_markov_enabled:
+            self.online_markov_debugfs_writer = OnlineMarkovDebugfsAuditWriter(
+                self.mglru_markov_writer, self.session_id, self.model_dir
+            )
+            self.online_workload_markov = OnlineCausalWorkloadMarkov(
+                enabled=True,
+                session_id=self.session_id,
+                model_dir=self.model_dir,
+                review_dir=self.review_dir,
+                debugfs_writer=self.online_markov_debugfs_writer,
+            )
+        if self.online_workload_markov_enabled or self.dual_workload_markov_enabled:
+            scopes = self.runtime_scope.workload_scopes if self.runtime_scope else _parse_app_list(args.cgroup_workload_scopes)
+            self.live_cgroup_sampler = OnlineCgroupWorkloadSampler(
+                session_id=self.session_id,
+                model_dir=self.model_dir,
+                slice_name=args.cgroup_workload_slice,
+                scopes=scopes,
+                runtime_scope=self.runtime_scope,
+                on_observed=self._on_live_workload_observed,
+            )
 
     # ------------------------------------------------------------------
     # main loop
@@ -240,6 +290,10 @@ class RuntimeMonitorV0:
             print(f"  cgroup workload delta_csv: {self.cgroup_workload_delta_csv}")
         else:
             print("  cgroup workload collector: disabled")
+        print(
+            "  online causal workload Markov: "
+            + ("enabled" if self.online_workload_markov_enabled else "disabled")
+        )
         if self.args.enable_mglru_markov_debugfs:
             print("  MGLRU Markov debugfs writer: enabled")
             print(f"  MGLRU Markov debugfs path: {self.args.mglru_markov_debugfs_path}")
@@ -266,12 +320,21 @@ class RuntimeMonitorV0:
         finally:
             self._close_writers(close_mglru=False)
             self._stop_cgroup_workload_collector()
+            if self.live_cgroup_sampler is not None:
+                self.live_cgroup_sampler.close()
             self._run_workload_classifier()
             self._write_workload_state_changes()
             self._run_workload_markov_builder()
             self._write_workload_markov_sets()
+            if self.dual_workload_markov is not None:
+                self.dual_workload_markov.close()
+            if self.online_workload_markov is not None:
+                self.online_workload_markov.close()
+            if self.online_markov_debugfs_writer is not None:
+                self.online_markov_debugfs_writer.close()
             self.mglru_lstm_policy.close()
             self.mglru_markov_writer.close()
+            self._write_lstm_debugfs_audit()
             self._generate_review()
             self._append_cgroup_workload_summary()
             print(
@@ -360,10 +423,23 @@ class RuntimeMonitorV0:
             test_mem_max=test_mem.get("max", 0),
         )
         self.global_state_writer.write_row(feature_row)
+        self.current_foreground_app_key = str(feature_row.get("foreground_app", "")).strip()
+        self.current_foreground_app_id = str(
+            self.runtime_scope.app_key_to_app_id.get(self.current_foreground_app_key, "")
+            if self.runtime_scope else ""
+        )
+        if self.dual_workload_markov is not None:
+            self.dual_workload_markov.observe_foreground(
+                foreground_app_key=self.current_foreground_app_key,
+                foreground_app_id=self.current_foreground_app_id,
+                timestamp_ns=window_start_ns,
+            )
         self._maybe_write_mglru_current_app(feature_row)
         if self.online_lstm is not None:
             prediction_result = self.online_lstm.process_sample(feature_row)
             self._maybe_write_mglru_predictions(prediction_result)
+        if self.live_cgroup_sampler is not None:
+            self.live_cgroup_sampler.sample(window_start_ns)
 
         if self.args.verbose:
             print(
@@ -472,6 +548,8 @@ class RuntimeMonitorV0:
             print(f"warning: workload classifier failed: {exc}", file=sys.stderr)
 
     def _write_workload_state_changes(self) -> None:
+        if self.online_workload_markov_enabled:
+            return
         if not self.args.enable_mglru_markov_debugfs:
             return
         if not self.cgroup_workload_state_csv.exists():
@@ -506,6 +584,8 @@ class RuntimeMonitorV0:
             )
 
     def _run_workload_markov_builder(self) -> None:
+        if self.online_workload_markov_enabled:
+            return
         if not self.workload_markov_builder_enabled:
             return
         if not self.cgroup_workload_state_csv.exists():
@@ -525,7 +605,88 @@ class RuntimeMonitorV0:
         except Exception as exc:
             print(f"warning: workload Markov builder 失败: {exc}", file=sys.stderr)
 
+    def _on_live_workload_observed(self, row: dict[str, Any]) -> None:
+        if self.online_workload_markov is None and self.dual_workload_markov is None:
+            return
+        try:
+            workload_id = _optional_int(row.get("observed_workload_id"))
+            app_id = _optional_int(row.get("app_id"))
+            cgroup_id = _optional_int(row.get("cgroup_id"))
+            if workload_id is None or app_id is None:
+                return
+            timestamp_ns = _optional_int(row.get("timestamp_ns")) or time.time_ns()
+            if self.online_workload_markov is not None:
+                self.online_workload_markov.observe_workload(
+                    app_key=str(row.get("app_key", "")),
+                    app_id=str(app_id),
+                    scope_name=str(row.get("scope_name", "")),
+                    workload_id=workload_id,
+                    cgroup_id=cgroup_id,
+                    workload_name=str(row.get("observed_workload_name", "")),
+                    timestamp_ns=timestamp_ns,
+                )
+            if self.dual_workload_markov is not None:
+                if cgroup_id is not None:
+                    self.mglru_markov_writer.write_runtime_workload(
+                        cgroup_id=cgroup_id, app_id=app_id, workload_id=workload_id,
+                        app_key=str(row.get("app_key", "")),
+                        workload_name=str(row.get("observed_workload_name", "")),
+                    )
+                self.dual_workload_markov.observe_workload(
+                    app_key=str(row.get("app_key", "")),
+                    app_id=app_id,
+                    scope_name=str(row.get("scope_name", "")),
+                    workload_id=workload_id,
+                    cgroup_id=cgroup_id,
+                    workload_name=str(row.get("observed_workload_name", "")),
+                    timestamp_ns=timestamp_ns,
+                    foreground_app_key=self.current_foreground_app_key,
+                    foreground_app_id=self.current_foreground_app_id,
+                    state_changed=_bool_text(row.get("state_changed", "true")),
+                    sample_valid_scope=str(row.get("status", "ok")).strip().lower() == "ok",
+                )
+        except Exception as exc:
+            print(f"warning: online workload Markov update failed: {exc}", file=sys.stderr)
+
+    def _write_lstm_debugfs_audit(self) -> None:
+        """合并 LSTM 相关用户态 debugfs 写入，便于逐行复核。"""
+        fields = [
+            "session_id", "timestamp_ns", "write_type", "command", "app_id", "cgroup_id",
+            "probability_fixed", "ttl_ms", "status", "error",
+        ]
+        rows: list[dict[str, Any]] = []
+        for path in (
+            self.model_dir / "mglru_markov_debugfs_writes.csv",
+            self.model_dir / "mglru_lstm_reclaim_policy_writes.csv",
+        ):
+            if not path.exists():
+                continue
+            try:
+                with path.open("r", encoding="utf-8", newline="") as f:
+                    for row in csv.DictReader(f):
+                        event = str(row.get("event_type", "") or row.get("write_type", ""))
+                        if event not in {"current_app", "app_bind", "app_probability", "policy_config"}:
+                            continue
+                        rows.append({
+                            "session_id": row.get("session_id", self.session_id),
+                            "timestamp_ns": row.get("timestamp_ns", "") or _timestamp_text_to_ns(row.get("timestamp", "")),
+                            "write_type": event,
+                            "command": row.get("command", "") or row.get("policy_command", ""),
+                            "app_id": row.get("app_id", "") or row.get("foreground_app_id", ""),
+                            "cgroup_id": row.get("cgroup_id", "") or row.get("foreground_cgroup_id", ""),
+                            "probability_fixed": row.get("probability_fixed", ""),
+                            "ttl_ms": row.get("ttl_ms", ""),
+                            "status": row.get("status", ""), "error": row.get("error", ""),
+                        })
+            except OSError as exc:
+                print(f"warning: failed to audit LSTM debugfs writes: {exc}", file=sys.stderr)
+        with (self.model_dir / "lstm_debugfs_writes.csv").open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fields)
+            writer.writeheader(); writer.writerows(rows)
+
     def _write_workload_markov_sets(self) -> None:
+        if self.online_workload_markov_enabled:
+            return
         if not self.args.enable_mglru_markov_debugfs:
             return
         if not self.workload_markov_transitions_csv.exists():
@@ -624,6 +785,28 @@ class RuntimeMonitorV0:
             f"- workload_markov_transitions_csv: `{self.workload_markov_transitions_csv}`",
             f"- workload_markov_summary: `{self.workload_markov_summary}`",
             f"- workload_markov_builder_final_result: {self.workload_markov_result.final_result if self.workload_markov_result else 'NOT_RUN'}",
+            f"- online_workload_markov_enabled: {str(self.online_workload_markov_enabled).lower()}",
+            f"- dual_workload_markov_enabled: {str(self.dual_workload_markov_enabled).lower()}",
+            f"- dual_markov_runtime_mode: {'dual' if self.dual_workload_markov_enabled else 'not_configured'}",
+            f"- dual_markov_reentry_window_s: {self.args.dual_markov_reentry_window_s}",
+            f"- dual_markov_ignore_initial_low_activity_s: {self.args.dual_markov_ignore_initial_low_activity_s}",
+            f"- dual_markov_foreground_history: `{self.model_dir / 'foreground_workload_history.csv'}`",
+            f"- dual_markov_foreground_epochs: `{self.model_dir / 'foreground_epochs.csv'}`",
+            f"- dual_markov_continue_transitions: `{self.model_dir / 'continue_markov_transitions.csv'}`",
+            f"- dual_markov_reentry_transitions: `{self.model_dir / 'reentry_markov_transitions.csv'}`",
+            f"- dual_markov_reentry_events: `{self.model_dir / 'reentry_events.csv'}`",
+            f"- dual_markov_policy_suggestions: `{self.model_dir / 'dual_markov_policy_suggestions.csv'}`",
+            f"- dual_markov_debugfs_writes: `{self.model_dir / 'dual_markov_debugfs_writes.csv'}`",
+            f"- dual_foreground_workload_update_ok: {self.mglru_markov_writer.foreground_workload_update_ok}",
+            f"- dual_continue_markov_set_ok: {self.mglru_markov_writer.continue_markov_set_ok}",
+            f"- dual_reentry_markov_set_ok: {self.mglru_markov_writer.reentry_markov_set_ok}",
+            f"- dual_markov_result: {self.dual_workload_markov.result().get('final_result', 'NOT_RUN') if self.dual_workload_markov else 'NOT_RUN'}",
+            f"- workload_markov_online_updates: `{self.model_dir / 'workload_markov_online_updates.csv'}`",
+            f"- workload_markov_online_transitions: `{self.model_dir / 'workload_markov_online_transitions.csv'}`",
+            f"- workload_markov_online_predictions: `{self.model_dir / 'workload_markov_online_predictions.csv'}`",
+            f"- workload_markov_online_debugfs_writes: `{self.model_dir / 'workload_markov_online_debugfs_writes.csv'}`",
+            f"- markov_live_causality_audit: `{self.model_dir / 'markov_live_causality_audit.csv'}`",
+            f"- online_markov_final_result: {self.online_workload_markov.result().final_result if self.online_workload_markov else 'NOT_RUN'}",
             f"- markov_set_write_ok: {self.mglru_markov_writer.markov_set_write_ok}",
             "",
             "## MGLRU Markov Debugfs",
@@ -828,6 +1011,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="禁用离线 workload 二阶 Markov 转移构建。",
     )
+    parser.add_argument(
+        "--enable-online-workload-markov",
+        action="store_true",
+        help="在同一 monitor 采样时钟内实时分类 workload 并更新 Online Causal Markov。",
+    )
+    parser.add_argument(
+        "--enable-dual-workload-markov",
+        action="store_true",
+        help="启用前台 CONTINUE 与后台回切 REENTRY 的双模式 workload Markov 观测。",
+    )
+    parser.add_argument(
+        "--dual-markov-reentry-window-s", type=float, default=5.0,
+        help="REENTRY 回切观察窗口，默认 5 秒。",
+    )
+    parser.add_argument(
+        "--dual-markov-ignore-initial-low-activity-s", type=float, default=2.0,
+        help="REENTRY 窗口内忽略初始 LOW_ACTIVITY 的时间，默认 2 秒。",
+    )
     parser.add_argument("--cgroup-workload-interval-s", type=float, default=1.0, help="Cgroup workload sampling interval in seconds.")
     parser.add_argument(
         "--cgroup-workload-scopes",
@@ -915,6 +1116,20 @@ def _optional_int(value: Any) -> int | None:
         return int(str(value).strip())
     except (TypeError, ValueError):
         return None
+
+
+def _bool_text(value: Any) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _timestamp_text_to_ns(value: Any) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    try:
+        return int(dt.datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp() * 1_000_000_000)
+    except ValueError:
+        return 0
 
 
 def _resolve_session_id(args: argparse.Namespace) -> str:

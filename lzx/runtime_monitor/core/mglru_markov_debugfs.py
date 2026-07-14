@@ -12,6 +12,7 @@ from typing import Iterable
 
 MGLRU_MARKOV_WRITE_FIELDS = [
     "session_id",
+    "timestamp_ns",
     "timestamp",
     "event_type",
     "command",
@@ -41,6 +42,13 @@ MGLRU_MARKOV_WRITE_FIELDS = [
 ]
 
 RANK_BASED_CONFIDENCE = [8000, 5000, 3000, 1000]
+
+DUAL_MARKOV_WRITE_FIELDS = [
+    "session_id", "timestamp_ns", "mode", "event_type", "app_key",
+    "runtime_app_id", "cgroup_id", "previous_workload_id",
+    "current_workload_id", "next_workload_id", "confidence_fixed",
+    "boost_level", "command", "status", "error",
+]
 
 
 def resolve_scope_cgroup_id(slice_name: str, scope_name: str) -> int | None:
@@ -108,6 +116,7 @@ class MGLRUMarkovDebugfsWriter:
         self.session_id = session_id
         self.ttl_ms = int(ttl_ms)
         self.csv_path = model_dir / "mglru_markov_debugfs_writes.csv"
+        self.dual_csv_path = model_dir / "dual_markov_debugfs_writes.csv"
         self.summary_path = review_dir / "mglru_markov_debugfs_summary.md"
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
         self.summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -115,6 +124,12 @@ class MGLRUMarkovDebugfsWriter:
         self._writer = csv.DictWriter(self._file, fieldnames=MGLRU_MARKOV_WRITE_FIELDS)
         self._writer.writeheader()
         self._file.flush()
+        self._dual_file = self.dual_csv_path.open("w", encoding="utf-8", newline="")
+        self._dual_writer = csv.DictWriter(
+            self._dual_file, fieldnames=DUAL_MARKOV_WRITE_FIELDS
+        )
+        self._dual_writer.writeheader()
+        self._dual_file.flush()
 
         self.debugfs_exists = self._debugfs_exists()
         self.total_write_attempts = 0
@@ -147,6 +162,18 @@ class MGLRUMarkovDebugfsWriter:
             model_dir / "workload_markov_transitions.csv"
         )
         self.workload_markov_summary = review_dir / "workload_markov_summary.md"
+        self.foreground_workload_update_attempts = 0
+        self.foreground_workload_update_ok = 0
+        self.foreground_workload_update_error = 0
+        self.continue_markov_set_attempts = 0
+        self.continue_markov_set_ok = 0
+        self.continue_markov_set_error = 0
+        self.reentry_markov_set_attempts = 0
+        self.reentry_markov_set_ok = 0
+        self.reentry_markov_set_error = 0
+        self.runtime_mode_write_attempts = 0
+        self.runtime_mode_write_ok = 0
+        self.runtime_mode_write_error = 0
 
         if self.enabled and not self.debugfs_exists:
             msg = f"mglru markov debugfs not found: {self.debugfs_path}"
@@ -156,6 +183,8 @@ class MGLRUMarkovDebugfsWriter:
     def close(self) -> None:
         self._file.flush()
         self._file.close()
+        self._dual_file.flush()
+        self._dual_file.close()
         self.write_summary()
 
     def write_current_app(self, app_key: str, app_id: int, cgroup_id: int | None, ttl_ms: int | None = None) -> None:
@@ -248,6 +277,25 @@ class MGLRUMarkovDebugfsWriter:
             ttl_ms=ttl_ms,
         )
         return command, status, error
+
+    def clear_app_bindings(self) -> tuple[str, str]:
+        """仅清理内核 App Bind 表，保留 probability、Markov 与 policy 状态。"""
+        command = "clear bind"
+        status, error = self._write_command(command)
+        self._record(
+            event_type="app_bind_clear",
+            command=command,
+            status=status,
+            error=error,
+        )
+        self._record_dual(
+            mode="BIND",
+            event_type="app_bind_clear",
+            command=command,
+            status=status,
+            error=error,
+        )
+        return status, error
 
     def write_app_probability(
         self,
@@ -347,7 +395,7 @@ class MGLRUMarkovDebugfsWriter:
         *,
         app_key: str = "",
         workload_name: str = "",
-    ) -> None:
+    ) -> tuple[str, str]:
         if not cgroup_id or not app_id or workload_id is None:
             self.workload_update_skipped += 1
             missing = [
@@ -370,7 +418,13 @@ class MGLRUMarkovDebugfsWriter:
                 workload_id="" if workload_id is None else workload_id,
                 workload_name=workload_name,
             )
-            return
+            self._record_dual(
+                mode="RUNTIME", event_type="runtime_workload_update", command="",
+                status="dry_run", error=f"missing_{'_'.join(missing)}", app_key=app_key,
+                runtime_app_id=app_id, cgroup_id=cgroup_id,
+                current_workload_id=workload_id,
+            )
+            return "dry_run", "missing_required_field"
         command = (
             f"workload update {int(cgroup_id)} {int(app_id)} {int(workload_id)}"
         )
@@ -391,6 +445,166 @@ class MGLRUMarkovDebugfsWriter:
             workload_id=workload_id,
             workload_name=workload_name,
         )
+        self._record_dual(
+            mode="RUNTIME", event_type="runtime_workload_update", command=command,
+            status=status, error=error, app_key=app_key, runtime_app_id=app_id,
+            cgroup_id=cgroup_id, current_workload_id=workload_id,
+        )
+        return status, error
+
+    def write_runtime_workload(self, **kwargs: object) -> tuple[str, str]:
+        """新 ABI 名称；保留 write_workload_update 作为兼容别名。"""
+        return self.write_workload_update(**kwargs)
+
+    def write_dual_runtime_mode(self, mode: str = "dual") -> tuple[str, str]:
+        valid_modes = {"disabled", "legacy", "dual", "both_observe"}
+        if mode not in valid_modes:
+            self.runtime_mode_write_error += 1
+            self._record_dual(
+                mode=mode.upper(), event_type="runtime_mode", command="",
+                status="dry_run", error="invalid_runtime_mode",
+            )
+            return "dry_run", "invalid_runtime_mode"
+        command = f"markov runtime_mode {mode}"
+        self.runtime_mode_write_attempts += 1
+        status, error = self._write_command(command)
+        if status == "ok":
+            self.runtime_mode_write_ok += 1
+        else:
+            self.runtime_mode_write_error += 1
+        self._record_dual(
+            mode=mode.upper(), event_type="runtime_mode", command=command,
+            status=status, error=error,
+        )
+        return status, error
+
+    @staticmethod
+    def _valid_workload(workload_id: int | None) -> bool:
+        return workload_id is not None and 0 <= int(workload_id) <= 6
+
+    def write_foreground_workload(
+        self,
+        *,
+        cgroup_id: int | None,
+        app_id: int | None,
+        workload_id: int | None,
+        ttl_ms: int | None = None,
+        app_key: str = "",
+    ) -> tuple[str, str]:
+        ttl = self.ttl_ms if ttl_ms is None else int(ttl_ms)
+        if not cgroup_id or not app_id or not self._valid_workload(workload_id) or ttl <= 0:
+            self.foreground_workload_update_error += 1
+            self._record_dual(
+                mode="CONTINUE", event_type="foreground_workload_update", command="",
+                status="dry_run", error="invalid_cgroup_app_workload_or_ttl",
+                app_key=app_key, runtime_app_id=app_id, cgroup_id=cgroup_id,
+                current_workload_id=workload_id,
+            )
+            return "dry_run", "invalid_arguments"
+        command = f"foreground workload {int(cgroup_id)} {int(app_id)} {int(workload_id)} {ttl}"
+        self.foreground_workload_update_attempts += 1
+        status, error = self._write_command(command)
+        if status == "ok":
+            self.foreground_workload_update_ok += 1
+        else:
+            self.foreground_workload_update_error += 1
+        self._record_dual(
+            mode="CONTINUE", event_type="foreground_workload_update", command=command,
+            status=status, error=error, app_key=app_key, runtime_app_id=app_id,
+            cgroup_id=cgroup_id, current_workload_id=workload_id,
+        )
+        return status, error
+
+    def write_continue_markov(
+        self,
+        *,
+        app_id: int | None,
+        previous_workload_id: int | None,
+        current_workload_id: int | None,
+        next_workload_id: int | None,
+        confidence_fixed: int,
+        boost_level: int,
+        app_key: str = "",
+    ) -> tuple[str, str]:
+        valid = (
+            app_id is not None and int(app_id) > 0
+            and self._valid_workload(previous_workload_id)
+            and self._valid_workload(current_workload_id)
+            and self._valid_workload(next_workload_id)
+            and 0 <= int(confidence_fixed) <= 10000
+            and 0 <= int(boost_level) <= 3
+        )
+        if not valid:
+            self.continue_markov_set_error += 1
+            self._record_dual(
+                mode="CONTINUE", event_type="continue_markov_set", command="",
+                status="dry_run", error="invalid_arguments", app_key=app_key,
+                runtime_app_id=app_id, previous_workload_id=previous_workload_id,
+                current_workload_id=current_workload_id, next_workload_id=next_workload_id,
+                confidence_fixed=confidence_fixed, boost_level=boost_level,
+            )
+            return "dry_run", "invalid_arguments"
+        command = (
+            f"markov continue set {int(app_id)} {int(previous_workload_id)} "
+            f"{int(current_workload_id)} {int(next_workload_id)} "
+            f"{int(confidence_fixed)} {int(boost_level)}"
+        )
+        self.continue_markov_set_attempts += 1
+        status, error = self._write_command(command)
+        if status == "ok":
+            self.continue_markov_set_ok += 1
+        else:
+            self.continue_markov_set_error += 1
+        self._record_dual(
+            mode="CONTINUE", event_type="continue_markov_set", command=command,
+            status=status, error=error, app_key=app_key, runtime_app_id=app_id,
+            previous_workload_id=previous_workload_id,
+            current_workload_id=current_workload_id, next_workload_id=next_workload_id,
+            confidence_fixed=confidence_fixed, boost_level=boost_level,
+        )
+        return status, error
+
+    def write_reentry_markov(
+        self,
+        *,
+        app_id: int | None,
+        next_workload_id: int | None,
+        confidence_fixed: int,
+        boost_level: int,
+        app_key: str = "",
+    ) -> tuple[str, str]:
+        valid = (
+            app_id is not None and int(app_id) > 0
+            and self._valid_workload(next_workload_id)
+            and 0 <= int(confidence_fixed) <= 10000
+            and 0 <= int(boost_level) <= 3
+        )
+        if not valid:
+            self.reentry_markov_set_error += 1
+            self._record_dual(
+                mode="REENTRY", event_type="reentry_markov_set", command="",
+                status="dry_run", error="invalid_arguments", app_key=app_key,
+                runtime_app_id=app_id, next_workload_id=next_workload_id,
+                confidence_fixed=confidence_fixed, boost_level=boost_level,
+            )
+            return "dry_run", "invalid_arguments"
+        command = (
+            f"markov reentry set {int(app_id)} {int(next_workload_id)} "
+            f"{int(confidence_fixed)} {int(boost_level)}"
+        )
+        self.reentry_markov_set_attempts += 1
+        status, error = self._write_command(command)
+        if status == "ok":
+            self.reentry_markov_set_ok += 1
+        else:
+            self.reentry_markov_set_error += 1
+        self._record_dual(
+            mode="REENTRY", event_type="reentry_markov_set", command=command,
+            status=status, error=error, app_key=app_key, runtime_app_id=app_id,
+            next_workload_id=next_workload_id, confidence_fixed=confidence_fixed,
+            boost_level=boost_level,
+        )
+        return status, error
 
     def write_markov_set(
         self,
@@ -400,7 +614,7 @@ class MGLRUMarkovDebugfsWriter:
         entries: Iterable[dict[str, int]],
         *,
         app_key: str = "",
-    ) -> None:
+    ) -> tuple[str, str]:
         normalized: list[tuple[int, int, int]] = []
         for entry in entries:
             try:
@@ -433,7 +647,7 @@ class MGLRUMarkovDebugfsWriter:
                     "" if current_workload_id is None else current_workload_id
                 ),
             )
-            return
+            return "dry_run", "missing_key_or_entries"
         args = " ".join(
             f"{next_id} {confidence} {boost}"
             for next_id, confidence, boost in normalized
@@ -467,6 +681,7 @@ class MGLRUMarkovDebugfsWriter:
                 str(boost) for _, _, boost in normalized
             ),
         )
+        return status, error
 
     def _write_command(self, command: str) -> tuple[str, str]:
         self.total_write_attempts += 1
@@ -534,6 +749,7 @@ class MGLRUMarkovDebugfsWriter:
         self._writer.writerow(
             {
                 "session_id": self.session_id,
+                "timestamp_ns": __import__("time").time_ns(),
                 "timestamp": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "event_type": event_type,
                 "command": command,
@@ -564,6 +780,42 @@ class MGLRUMarkovDebugfsWriter:
         )
         self._file.flush()
 
+    def _record_dual(
+        self,
+        *,
+        mode: str,
+        event_type: str,
+        command: str,
+        status: str,
+        error: str,
+        app_key: str = "",
+        runtime_app_id: int | str | None = "",
+        cgroup_id: int | str | None = "",
+        previous_workload_id: int | str | None = "",
+        current_workload_id: int | str | None = "",
+        next_workload_id: int | str | None = "",
+        confidence_fixed: int | str | None = "",
+        boost_level: int | str | None = "",
+    ) -> None:
+        self._dual_writer.writerow({
+            "session_id": self.session_id,
+            "timestamp_ns": __import__("time").time_ns(),
+            "mode": mode,
+            "event_type": event_type,
+            "app_key": app_key,
+            "runtime_app_id": "" if runtime_app_id is None else runtime_app_id,
+            "cgroup_id": "" if cgroup_id is None else cgroup_id,
+            "previous_workload_id": "" if previous_workload_id is None else previous_workload_id,
+            "current_workload_id": "" if current_workload_id is None else current_workload_id,
+            "next_workload_id": "" if next_workload_id is None else next_workload_id,
+            "confidence_fixed": "" if confidence_fixed is None else confidence_fixed,
+            "boost_level": "" if boost_level is None else boost_level,
+            "command": command,
+            "status": status,
+            "error": error,
+        })
+        self._dual_file.flush()
+
     def final_result(self) -> str:
         if not self.enabled:
             return "PASS"
@@ -575,6 +827,10 @@ class MGLRUMarkovDebugfsWriter:
                 and self.write_error_count == 0
                 and self.workload_update_write_error == 0
                 and self.markov_set_write_error == 0
+                and self.foreground_workload_update_error == 0
+                and self.continue_markov_set_error == 0
+                and self.reentry_markov_set_error == 0
+                and self.runtime_mode_write_error == 0
                 and (
                     self.workload_update_write_attempts == 0
                     or self.workload_update_write_ok > 0
@@ -606,6 +862,19 @@ class MGLRUMarkovDebugfsWriter:
             f"- workload_update_write_ok: {self.workload_update_write_ok}",
             f"- workload_update_write_error: {self.workload_update_write_error}",
             f"- workload_update_skipped: {self.workload_update_skipped}",
+            f"- foreground_workload_update_attempts: {self.foreground_workload_update_attempts}",
+            f"- foreground_workload_update_ok: {self.foreground_workload_update_ok}",
+            f"- foreground_workload_update_error: {self.foreground_workload_update_error}",
+            f"- continue_markov_set_attempts: {self.continue_markov_set_attempts}",
+            f"- continue_markov_set_ok: {self.continue_markov_set_ok}",
+            f"- continue_markov_set_error: {self.continue_markov_set_error}",
+            f"- reentry_markov_set_attempts: {self.reentry_markov_set_attempts}",
+            f"- reentry_markov_set_ok: {self.reentry_markov_set_ok}",
+            f"- reentry_markov_set_error: {self.reentry_markov_set_error}",
+            f"- runtime_mode_write_attempts: {self.runtime_mode_write_attempts}",
+            f"- runtime_mode_write_ok: {self.runtime_mode_write_ok}",
+            f"- runtime_mode_write_error: {self.runtime_mode_write_error}",
+            f"- dual_markov_debugfs_csv: `{self.dual_csv_path}`",
             f"- markov_set_write_attempts: {self.markov_set_write_attempts}",
             f"- markov_set_write_ok: {self.markov_set_write_ok}",
             f"- markov_set_write_error: {self.markov_set_write_error}",

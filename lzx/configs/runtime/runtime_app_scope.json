@@ -70,6 +70,24 @@
         "nautilus",
         "org.gnome.Nautilus"
       ]
+    },
+    {
+      "app_key": "BILIBILI",
+      "app_id": 4,
+      "vocab_name": "哔哩哔哩",
+      "scope_name": "automation-bilibili.scope",
+      "unit_name": "automation-bilibili",
+      "workload_enabled": true,
+      "prediction_enabled": true,
+      "window_keywords": [
+        "bilibili",
+        "哔哩哔哩",
+        "B站"
+      ],
+      "process_keywords": [
+        "bilibili",
+        "哔哩哔哩"
+      ]
     }
   ]
 }

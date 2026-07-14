@@ -257,6 +257,8 @@ def infer_app(action: dict[str, Any]) -> str:
         return "QQ"
     if "nautilus" in text or "files" in text:
         return "FILES"
+    if "bilibili" in text or "哔哩哔哩" in text:
+        return "BILIBILI"
     if "firefox" in text:
         return "FIREFOX"
     return "UNKNOWN"
@@ -282,6 +284,10 @@ def default_label(action: dict[str, Any], app: str) -> str:
         return "QQ_CLOSE"
     if action_type == "close" and app == "FILES":
         return "FILES_CLOSE"
+    if action_type == "close" and app == "BILIBILI":
+        return "BILIBILI_CLOSE"
+    if action_type in {"switch", "focus", "verify_foreground"} and app == "BILIBILI":
+        return f"APP_{action_type.upper()}_BILIBILI"
     if action_type in {"key", "hotkey"}:
         return "APP_KEY"
     if action_type == "wait":
@@ -343,6 +349,8 @@ def map_window_app(title: str, wm_class: str, pid_comm: str, cgroup_path: str = 
         or "主文件夹" in text
     ):
         return "FILES"
+    if "bilibili" in text or "哔哩哔哩" in text:
+        return "BILIBILI"
     return "UNKNOWN"
 
 

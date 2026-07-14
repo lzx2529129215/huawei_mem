@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.mglru_lstm_reclaim_policy import (
+from runtime_monitor.core.mglru_lstm_reclaim_policy import (
     ReclaimPolicyConfig,
     calculate_scan_budget,
     choose_scan_factor,
