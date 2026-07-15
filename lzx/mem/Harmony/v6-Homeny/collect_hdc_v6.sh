@@ -192,8 +192,23 @@ else
 fi
 
 echo "==> Device and /proc permission check"
+TARGETS="$(hdc list targets | tr -d '\r' | awk 'NF && $1 !~ /^\[/ {print $1}')"
+if [[ -z "$TARGETS" ]]; then
+    echo "No hdc target is connected." >&2
+    exit 1
+fi
+if [[ "$(printf '%s\n' "$TARGETS" | wc -l | tr -d ' ')" -ne 1 ]]; then
+    echo "Multiple hdc targets are connected; use a single-target environment." >&2
+    printf '%s\n' "$TARGETS" >&2
+    exit 1
+fi
 run hdc list targets
-run hdc shell "id; ls -l /proc/self/smaps /proc/self/clear_refs"
+IDENTITY="$(run hdc shell "id")"
+if [[ "$IDENTITY" != *"uid=0"* ]]; then
+    echo "v6 requires a root hdc shell; got: $IDENTITY" >&2
+    exit 1
+fi
+run hdc shell "test -r /proc/self/smaps -a -w /proc/self/clear_refs"
 
 echo "==> Clearing referenced bits"
 run hdc shell "'$DEVICE_BIN' --clear-refs ${TARGET_ARGS[*]}"
@@ -204,7 +219,7 @@ if [[ -z "$OPERATION_CMD" ]]; then
     read -r -p "Press Enter to sample smaps..."
 else
     echo "==> Running operation command"
-    eval "$OPERATION_CMD"
+    bash -lc "$OPERATION_CMD"
 fi
 
 echo "==> Sampling smaps"

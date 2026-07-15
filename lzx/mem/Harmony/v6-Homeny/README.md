@@ -64,6 +64,54 @@ bash lzx-Test1/v6-Homeny/collect_hdc_v6.sh 12345
 bash lzx-Test1/v6-Homeny/collect_hdc_v6.sh com.example.app --no-build --no-push
 ```
 
+### WPS 鸿蒙 PC 自动化采集
+
+远端 `lzx/automation/app_automation.py` 面向 Linux X11，使用 `xdotool`，不能直接控制当前通过 HDC 连接的鸿蒙 PC。当前设备使用 `aa` + `uitest`，推荐使用新的会话入口：
+
+```bash
+bash lzx/mem/Harmony/v6-Homeny/collect_wps_v6.sh \
+  --session-id wps_$(date +%Y%m%d_%H%M%S)
+```
+
+单命令入口（自动启动 WPS 自动化、编译/推送 `mem_analyze-v6`、逐阶段采集全部 WPS PID、拉回并校验报告）：
+
+```bash
+./lzx/mem/Harmony/v6-Homeny/run_wps_v6.sh
+```
+
+默认设备为 `3QC0124C03000514`，固定写入 Word 的测试序列号为 `WPS-TEST-0001`；可用 `--test-serial` 覆盖。脚本不依赖人工查看图片，截图仅作为自动失败证据保存。
+
+WPS 报告先写入设备侧 `/data/local/tmp/mem_analyze_v6/wps_reports`，每个阶段完成后立即通过 HDC 拉回主机，避免不同 HarmonyOS 版本的媒体目录权限/挂载差异。
+
+该入口会执行并逐阶段记录：
+
+1. 打开 WPS，启动完成后采集空闲窗口；
+2. 通过 WPS 新建菜单创建 Word；
+3. 写入固定测试序列号、本次时间、目的、操作链和初步结论；
+4. 写入较大文本并执行换行、翻页、滚动和光标移动；
+5. 保存到 Desktop，验证真实文件路径/大小/修改时间；
+6. Home 切后台，再启动 WPS 切回前台；
+7. 关闭、重新打开已保存文档，执行少量编辑/滚动后最终关闭 WPS。
+
+每个可测阶段都执行 `clear_refs -> 操作 -> 等待 -> smaps/Referenced`，输出目录包含 `referenced_<stage>*pid*<pid>.md`、`operations.csv`、`memory_summary.csv`、`experiment_summary.md`、`report_hashes.csv` 和 `session_metadata.json`。`operations.csv` 同时记录操作耗时、稳定等待、采集耗时、报告拉回耗时、阶段总耗时、PID 集合和逐阶段报告数量。WPS 主界面是 XComponent；脚本采用固定坐标和文件系统/进程结果判定，不依赖人工图像识别。
+
+### 重复 workload 向量实验
+
+参考 `wps_workload_vector_package` 的逻辑，项目内新增 `build_workload_feature_vector.py`、`analyze_wps_workload.py` 和 `run_wps_workload.sh`。一行命令即可将完整 WPS 工作流重复执行 3 次，并对每个操作建立 56 维操作级 workload 向量：
+
+```bash
+./lzx/mem/Harmony/v6-Homeny/run_wps_workload.sh --repeats 3
+```
+
+每一轮保存在 `hdc_out/wps_workload_experiment_<timestamp>/trial_XX/`，不会覆盖原有会话。每个操作内的所有 WPS PID 报告先按 7 个逻辑段聚合，再生成一条 56 维向量。实验根目录额外输出：
+
+- `operation_workload_mapping.json`：操作到每轮 raw/log1p 向量的完整映射；
+- `workload_vectors_raw_56d.csv`、`workload_vectors_log1p_56d.csv`：可直接用于后续聚类/分类；
+- `operation_workload_summary.csv`、`workload_stability.md`：精确相同、5% 容差内稳定性和最不稳定维度；
+- `operation_workload_vectors/`：每个操作、每次重复的可审计 JSON 向量。
+
+稳定性不把连续内存指标强行要求为逐字节不变，而是同时报告 `fixed`（逐维完全相同）和 `stable_within_tolerance`（默认逐维相对范围不超过 5%）。`Size/RSS/PSS/Swap` 仍表示操作后绝对快照，`Referenced` 表示 `clear_refs` 后观察窗口内的访问量。
+
 传入操作命令：
 
 ```bash
