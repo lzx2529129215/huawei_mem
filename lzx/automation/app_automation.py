@@ -55,6 +55,9 @@ class Context:
     scenario_id: str = ""
     test_slice: str = ""
     validation_mode: bool = False
+    calibration_only: bool = False
+    calibration_output_dir: Path | None = None
+    screenshot_output_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +92,23 @@ TRACE_FIELDS = [
     "window_id",
     "window_title",
     "error",
+    "phase_id",
+    "action_id",
+    "foreground_epoch_id",
+    "operation_domain",
+    "operation_id",
+    "operation_name",
+    "requested_operation",
+    "start_time_ns",
+    "end_time_ns",
+    "duration_ms",
+    "side_effect_level",
+    "scope_name",
+    "command_or_action",
+    "error_type",
+    "error_message",
+    "screenshot_path",
+    "metadata_json",
 ]
 
 
@@ -113,6 +133,12 @@ class TraceWriter:
             **row,
         }
         payload.setdefault("timestamp", payload["ts_iso"])
+        payload.setdefault("start_time_ns", now_ns)
+        payload.setdefault("end_time_ns", now_ns)
+        payload.setdefault("duration_ms", "0")
+        metadata = payload.get("metadata_json", "")
+        if isinstance(metadata, (dict, list)):
+            payload["metadata_json"] = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
         self._writer.writerow({field: payload.get(field, "") for field in TRACE_FIELDS})
         self._file.flush()
 
@@ -247,6 +273,9 @@ def log(message: str) -> None:
 
 
 def infer_app(action: dict[str, Any]) -> str:
+    explicit = str(action.get("app_key", "")).strip()
+    if explicit:
+        return explicit
     text = " ".join(
         str(action.get(key, ""))
         for key in ("name", "class", "command", "shell_command", "title")
@@ -260,7 +289,9 @@ def infer_app(action: dict[str, Any]) -> str:
     if "bilibili" in text or "哔哩哔哩" in text:
         return "BILIBILI"
     if "firefox" in text:
-        return "FIREFOX"
+        return "BROWSER"
+    if "wechat" in text or "weixin" in text or "微信" in text:
+        return "WECHAT"
     return "UNKNOWN"
 
 
@@ -301,6 +332,25 @@ def action_command(action: dict[str, Any]) -> str:
         if value:
             return str(value)
     return ""
+
+
+def _semantic_trace_fields(action: dict[str, Any]) -> dict[str, Any]:
+    """Return optional semantic fields without imposing them on legacy actions."""
+    metadata = action.get("metadata", action.get("metadata_json", ""))
+    return {
+        "phase_id": action.get("phase_id", ""),
+        "action_id": action.get("action_id", ""),
+        "foreground_epoch_id": action.get("foreground_epoch_id", ""),
+        "operation_domain": action.get("operation_domain", ""),
+        "operation_id": action.get("operation_id", ""),
+        "operation_name": action.get("operation_name", ""),
+        "requested_operation": action.get("requested_operation", ""),
+        "side_effect_level": action.get("side_effect_level", ""),
+        "scope_name": action.get("scope_name", ""),
+        "command_or_action": action.get("command_or_action", action_command(action)),
+        "screenshot_path": action.get("screenshot_path", ""),
+        "metadata_json": metadata,
+    }
 
 
 def action_window_match(action: dict[str, Any]) -> str:
@@ -577,7 +627,10 @@ def trace_marker(
         "command": action_command(action),
         "window_match": action_window_match(action),
         "error": error,
+        "error_type": "AutomationError" if error else "",
+        "error_message": error,
     }
+    row.update(_semantic_trace_fields(action))
     ctx.trace.write(row)
 
 
@@ -585,7 +638,7 @@ def trace_action(ctx: Context, step_id: int, phase: str, status: str, action: di
     if ctx.trace is None:
         return
     app = infer_app(action)
-    event_type = "OP_START" if phase == "start" else "OP_DONE"
+    event_type = "OP_START" if phase == "start" else ("OP_FAILED" if status == "failed" else "OP_DONE")
     row: dict[str, Any] = {
         "step_id": step_id,
         "phase": phase,
@@ -601,7 +654,10 @@ def trace_action(ctx: Context, step_id: int, phase: str, status: str, action: di
         "command": action_command(action),
         "window_match": action_window_match(action),
         "error": error,
+        "error_type": "AutomationError" if error else "",
+        "error_message": error,
     }
+    row.update(_semantic_trace_fields(action))
     if phase == "end":
         row.update(quiet_window_trace(action))
         name = get_str(action, "name")
@@ -609,6 +665,22 @@ def trace_action(ctx: Context, step_id: int, phase: str, status: str, action: di
         if isinstance(tracked, str):
             row.setdefault("cgroup_path", tracked)
     ctx.trace.write(row)
+
+
+def trace_marker_action(action: dict[str, Any], ctx: Context) -> None:
+    """Write a semantic trace event only; this action intentionally has no UI effect."""
+    event_type = get_str(action, "event_type")
+    if not event_type:
+        raise AutomationError("trace_marker 需要 event_type")
+    trace_marker(
+        ctx,
+        event_type=event_type,
+        status=get_str(action, "status", "success"),
+        step_id=get_int(action, "step_id", 0),
+        action=action,
+        op_type=get_str(action, "op_type", "trace_marker"),
+        error=get_str(action, "error_message", ""),
+    )
 
 
 def require_tool(name: str) -> str:
@@ -996,10 +1068,43 @@ def wait_window(action: dict[str, Any], ctx: Context) -> None:
 
 def verify_foreground(action: dict[str, Any], ctx: Context) -> None:
     app = infer_app(action)
+    if ctx.dry_run:
+        log(f"dry-run: verify_foreground {app}")
+        return
     active = get_foreground_window_info()
     if active.mapped_app != app:
         raise AutomationError(f"foreground verify failed: expected={app} active={format_window_info(active)}")
     log(f"verify_foreground {app}: {format_window_info(active)}")
+
+
+def verify_window_profile(action: dict[str, Any], ctx: Context) -> None:
+    """Validate class/title/geometry before a profile-dependent UI operation."""
+    profile_path = Path(get_str(action, "profile"))
+    if not profile_path.exists():
+        raise AutomationError(f"窗口 profile 不存在: {profile_path}")
+    try:
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AutomationError(f"无法读取窗口 profile: {exc}") from exc
+    app = infer_app(action)
+    candidate = best_window_candidate(action, app)
+    if candidate is None:
+        raise AutomationError(f"profile verify failed: 未找到 {app} 窗口")
+    expected = profile.get("window", {}) if isinstance(profile, dict) else {}
+    expected_width = int(expected.get("width", 0) or 0)
+    expected_height = int(expected.get("height", 0) or 0)
+    tolerance = get_float(action, "geometry_tolerance_ratio", float(profile.get("geometry_tolerance_ratio", 0.25) if isinstance(profile, dict) else 0.25))
+    if expected_width and abs(candidate.width - expected_width) / expected_width > tolerance:
+        raise AutomationError(f"profile verify failed: width={candidate.width}, expected={expected_width}, tolerance={tolerance}")
+    if expected_height and abs(candidate.height - expected_height) / expected_height > tolerance:
+        raise AutomationError(f"profile verify failed: height={candidate.height}, expected={expected_height}, tolerance={tolerance}")
+    action["metadata"] = {
+        **(action.get("metadata", {}) if isinstance(action.get("metadata"), dict) else {}),
+        "profile": str(profile_path), "window_id": candidate.window_id,
+        "window_title": candidate.title, "window_class": candidate.wm_class,
+        "window_geometry": {"width": candidate.width, "height": candidate.height},
+    }
+    log(f"verify_window_profile {app}: {format_window_info(candidate)}")
 
 
 def read_proc_text(path: Path) -> str:
@@ -1149,6 +1254,7 @@ def close(action: dict[str, Any], ctx: Context) -> None:
 
 
 ACTION_HANDLERS = {
+    "trace_marker": trace_marker_action,
     "launch": launch,
     "wait": wait,
     "key": key,
@@ -1164,6 +1270,7 @@ ACTION_HANDLERS = {
     "switch": switch,
     "wait_window": wait_window,
     "verify_foreground": verify_foreground,
+    "verify_window_profile": verify_window_profile,
     "close": close,
     "shell": lambda action, ctx: _handle_shell(action, ctx),
 }
@@ -1196,7 +1303,46 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--session-id", default="", help="实验 session id")
     parser.add_argument("--scenario-id", default="", help="场景 id，默认使用 scenario 文件名")
     parser.add_argument("--test-slice", default="huawei-test.slice", help="systemd --slice 参数，所有自动化 scope 挂到此 slice 下")
+    parser.add_argument("--calibration-only", action="store_true", help="只采集窗口信息，不执行 UI 操作")
+    parser.add_argument("--calibration-output-dir", default="", help="calibration 截图目录（可选）")
+    parser.add_argument("--screenshot-output-dir", default="", help="失败时截图目录（可选）")
     return parser.parse_args(argv)
+
+
+def calibration_trace(action: dict[str, Any], ctx: Context) -> None:
+    """Collect a best-effort window snapshot while keeping the desktop untouched."""
+    details = quiet_window_trace(action)
+    screenshot_path = ""
+    if ctx.calibration_output_dir is not None and not ctx.dry_run and shutil.which("gnome-screenshot"):
+        ctx.calibration_output_dir.mkdir(parents=True, exist_ok=True)
+        stem = str(action.get("action_id") or action.get("operation_id") or "window")
+        destination = ctx.calibration_output_dir / f"{stem}.png"
+        result = subprocess.run(
+            ["gnome-screenshot", "-f", str(destination)],
+            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        if result.returncode == 0 and destination.exists():
+            screenshot_path = str(destination)
+    calibration_action = dict(action)
+    calibration_action.update(details)
+    calibration_action["screenshot_path"] = screenshot_path
+    trace_marker(
+        ctx,
+        event_type="OP_DONE",
+        status="calibration_only",
+        action=calibration_action,
+        op_type="calibration",
+    )
+
+
+def capture_failure_screenshot(action: dict[str, Any], ctx: Context) -> str:
+    if ctx.screenshot_output_dir is None or ctx.dry_run or not shutil.which("gnome-screenshot"):
+        return ""
+    ctx.screenshot_output_dir.mkdir(parents=True, exist_ok=True)
+    stem = str(action.get("action_id") or action.get("operation_id") or "failed")
+    destination = ctx.screenshot_output_dir / f"{stem}_failed.png"
+    result = subprocess.run(["gnome-screenshot", "-f", str(destination)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return str(destination) if result.returncode == 0 and destination.exists() else ""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1216,6 +1362,9 @@ def main(argv: list[str] | None = None) -> int:
             scenario_id=scenario_id,
             test_slice=args.test_slice,
             validation_mode=scenario.validation_mode,
+            calibration_only=args.calibration_only,
+            calibration_output_dir=Path(args.calibration_output_dir) if args.calibration_output_dir else None,
+            screenshot_output_dir=Path(args.screenshot_output_dir) if args.screenshot_output_dir else None,
         )
         log(f"scenario={args.scenario}")
         try:
@@ -1226,8 +1375,15 @@ def main(argv: list[str] | None = None) -> int:
                 if handler is None:
                     raise AutomationError(f"不支持的 action type: {action_type}")
                 log(f"action #{index}: {action_type}")
+                if action_type == "trace_marker":
+                    handler(action, ctx)
+                    continue
                 trace_action(ctx, index, "start", "running", action)
                 try:
+                    calibration_safe_actions = {"launch", "shell", "wait", "wait_window", "focus", "switch", "verify_foreground", "verify_window_profile", "close"}
+                    if ctx.calibration_only and action_type not in calibration_safe_actions:
+                        calibration_trace(action, ctx)
+                        continue
                     handler(action, ctx)
                     trace_action(ctx, index, "end", "success", action)
                     is_named_app_action = bool(get_str(action, "name")) or action_type == "launch"
@@ -1254,7 +1410,19 @@ def main(argv: list[str] | None = None) -> int:
                         message = exc.stderr.strip() or exc.stdout.strip() or str(exc)
                     else:
                         message = str(exc)
-                    trace_action(ctx, index, "end", "failed", action, message)
+                    failed_action = dict(action)
+                    failed_action["screenshot_path"] = capture_failure_screenshot(action, ctx)
+                    trace_action(ctx, index, "end", "failed", failed_action, message)
+                    if get_str(action, "operation_id"):
+                        trace_marker(
+                            ctx,
+                            event_type="OP_FAILED",
+                            status="failed",
+                            step_id=index,
+                            action=failed_action,
+                            op_type="semantic_operation",
+                            error=message,
+                        )
                     if action.get("optional"):
                         log(f"optional action skipped: {message}")
                         continue
@@ -1263,6 +1431,15 @@ def main(argv: list[str] | None = None) -> int:
             trace_marker(ctx, event_type="SCENARIO_DONE", status="success", op_type="scenario")
             log("done")
             return 0
+        except (AutomationError, subprocess.CalledProcessError) as exc:
+            trace_marker(
+                ctx,
+                event_type="SCENARIO_FAILED",
+                status="failed",
+                op_type="scenario",
+                error=str(exc),
+            )
+            raise
         finally:
             if ctx.trace is not None:
                 ctx.trace.close()
