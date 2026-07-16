@@ -13,6 +13,7 @@ import argparse
 import csv
 import datetime as dt
 import json
+import mimetypes
 import os
 import re
 import signal
@@ -50,6 +51,7 @@ class Context:
     dry_run: bool
     processes: dict[str, subprocess.Popen[Any] | str] = field(default_factory=dict)
     """Tracked processes. Value is either a Popen object or a systemd unit name (str)."""
+    clipboard_process: subprocess.Popen[bytes] | None = None
     trace: "TraceWriter | None" = None
     session_id: str = ""
     scenario_id: str = ""
@@ -809,6 +811,30 @@ def get_str_list(action: dict[str, Any], key: str) -> list[str]:
     raise AutomationError(f"{key} 必须是字符串或字符串数组")
 
 
+_VARIABLE_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def expand_scenario_value(value: Any, variables: dict[str, str]) -> Any:
+    if isinstance(value, str):
+        expanded = value
+        for _ in range(10):
+            replaced = _VARIABLE_RE.sub(
+                lambda match: variables.get(match.group(1), match.group(0)), expanded
+            )
+            if replaced == expanded:
+                break
+            expanded = replaced
+        unresolved = sorted(set(_VARIABLE_RE.findall(expanded)))
+        if unresolved:
+            raise AutomationError(f"未设置场景变量：{', '.join(unresolved)}")
+        return os.path.expanduser(expanded)
+    if isinstance(value, list):
+        return [expand_scenario_value(item, variables) for item in value]
+    if isinstance(value, dict):
+        return {key: expand_scenario_value(item, variables) for key, item in value.items()}
+    return value
+
+
 def _expand_actions(actions: list[Any], *, prefix: str = "") -> list[dict[str, Any]]:
     expanded: list[dict[str, Any]] = []
     for index, action in enumerate(actions, start=1):
@@ -842,6 +868,9 @@ def load_scenario(path: Path) -> Scenario:
         validation_mode = False
     elif isinstance(data, dict) and isinstance(data.get("actions"), list):
         raw_actions = data["actions"]
+        raw_variables = data.get("variables", {})
+        if not isinstance(raw_variables, dict):
+            raise AutomationError("场景 variables 必须是对象")
         try:
             keep_alive_after_s = float(data.get("keep_alive_after_s", 0.0) or 0.0)
         except (TypeError, ValueError) as exc:
@@ -849,6 +878,18 @@ def load_scenario(path: Path) -> Scenario:
         validation_mode = bool(data.get("validation_mode", False))
     else:
         raise AutomationError("场景文件必须是 action 数组，或包含 actions 数组的对象")
+    if isinstance(data, list):
+        raw_variables = {}
+    workspace_root = path.resolve().parent.parent.parent
+    variables = {
+        "HOME": str(Path.home()),
+        "USER": os.environ.get("USER", ""),
+        "PROJECT_ROOT": str(workspace_root),
+        "SCENARIO_DIR": str(path.resolve().parent),
+        **{key: str(value) for key, value in raw_variables.items()},
+        **os.environ,
+    }
+    raw_actions = expand_scenario_value(raw_actions, variables)
     actions = _expand_actions(raw_actions)
     for index, action in enumerate(actions, start=1):
         if not isinstance(action, dict):
@@ -873,6 +914,7 @@ def keep_alive(seconds: float, ctx: Context) -> None:
 def launch(action: dict[str, Any], ctx: Context) -> None:
     command = get_str(action, "command")
     name = get_str(action, "name") or command
+    scope_name = get_str(action, "scope_name") or name
     if not command:
         raise AutomationError("launch 需要 command")
     if ctx.dry_run:
@@ -880,7 +922,7 @@ def launch(action: dict[str, Any], ctx: Context) -> None:
         return
     env = os.environ.copy()
     if _cgroup_available():
-        unit_name = _cgroup_launch(command, name, env, test_slice=ctx.test_slice)
+        unit_name = _cgroup_launch(command, scope_name, env, test_slice=ctx.test_slice)
         log(f"launch {command}  (cgroup: {unit_name})")
         ctx.processes[name] = unit_name
     else:
@@ -900,17 +942,90 @@ def key(action: dict[str, Any], ctx: Context) -> None:
     value = get_str(action, "key")
     if not value:
         raise AutomationError("key 需要 key，例如 ctrl+o 或 Escape")
+    repeat = max(1, get_int(action, "repeat", 1))
+    interval = max(0.0, get_float(action, "interval", 0.1))
     if not ctx.dry_run:
         require_xdotool()
-    run(["xdotool", "key", value], ctx)
+    for index in range(repeat):
+        run(["xdotool", "key", "--clearmodifiers", value], ctx)
+        if index + 1 < repeat and not ctx.dry_run and interval:
+            time.sleep(interval)
 
 
 def type_text(action: dict[str, Any], ctx: Context) -> None:
     text = get_str(action, "text")
     delay = str(get_int(action, "delay_ms", 20))
+    repeat = max(1, get_int(action, "repeat", 1))
     if not ctx.dry_run:
         require_xdotool()
-    run(["xdotool", "type", "--delay", delay, text], ctx)
+    for _ in range(repeat):
+        run(["xdotool", "type", "--clearmodifiers", "--delay", delay, text], ctx)
+
+
+def _stop_clipboard_process(ctx: Context) -> None:
+    process = ctx.clipboard_process
+    ctx.clipboard_process = None
+    if process is None or process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=1)
+
+
+def _set_clipboard(payload: bytes, mime: str, ctx: Context) -> None:
+    if ctx.dry_run:
+        log(f"dry-run: set clipboard ({mime}, {len(payload)} bytes)")
+        return
+    _stop_clipboard_process(ctx)
+    require_tool("xclip")
+    process = subprocess.Popen(
+        ["xclip", "-selection", "clipboard", "-target", mime, "-in", "-silent"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if process.stdin is None:
+        process.terminate()
+        raise AutomationError("无法打开 xclip 标准输入")
+    try:
+        process.stdin.write(payload)
+        process.stdin.close()
+    except (BrokenPipeError, OSError) as exc:
+        process.terminate()
+        raise AutomationError(f"xclip 写入失败：{exc}") from exc
+    time.sleep(0.2)
+    if process.poll() not in (None, 0):
+        raise AutomationError(f"xclip 启动失败，退出码 {process.returncode}")
+    ctx.clipboard_process = process
+
+
+def paste_text(action: dict[str, Any], ctx: Context) -> None:
+    text = get_str(action, "text")
+    repeat = max(1, get_int(action, "repeat", 1))
+    separator = get_str(action, "separator")
+    _set_clipboard(separator.join(text for _ in range(repeat)).encode("utf-8"), "UTF8_STRING", ctx)
+    key({"key": get_str(action, "paste_key", "ctrl+v")}, ctx)
+
+
+def clipboard_file(action: dict[str, Any], ctx: Context) -> None:
+    path = Path(get_str(action, "path"))
+    if not ctx.dry_run and not path.is_file():
+        raise AutomationError(f"剪贴板文件不存在：{path}")
+    mime = get_str(action, "mime") or mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+    _set_clipboard(path.read_bytes() if not ctx.dry_run else b"", mime, ctx)
+
+
+def assert_file(action: dict[str, Any], ctx: Context) -> None:
+    path = Path(get_str(action, "path"))
+    if ctx.dry_run:
+        log(f"dry-run: require file {path}")
+        return
+    if not path.is_file():
+        raise AutomationError(f"所需样本文件不存在：{path}")
+    log(f"sample file ready: {path}")
 
 
 def click(action: dict[str, Any], ctx: Context) -> None:
@@ -954,6 +1069,48 @@ def drag(action: dict[str, Any], ctx: Context) -> None:
     run(["xdotool", "mousemove", x1, y1, "mousedown", "1", "mousemove", "--sync", x2, y2, "sleep", str(int(delay) / 1000), "mouseup", "1"], ctx)
 
 
+def scroll(action: dict[str, Any], ctx: Context) -> None:
+    direction = get_str(action, "direction", "down").lower()
+    if direction not in {"up", "down"}:
+        raise AutomationError("scroll direction 必须是 up 或 down")
+    amount = max(1, get_int(action, "amount", 3))
+    if ctx.dry_run:
+        log(f"dry-run: scroll {direction} x{amount}")
+        return
+    require_xdotool()
+    if any(action.get(key_name) for key_name in ("class", "title", "name")):
+        candidate = best_window_candidate(action, infer_app(action))
+        if candidate is None:
+            raise AutomationError(f"scroll 找不到窗口：{action_window_match(action)}")
+        x = get_int(action, "x", int(candidate.width * get_float(action, "x_ratio", 0.5)))
+        y = get_int(action, "y", int(candidate.height * get_float(action, "y_ratio", 0.5)))
+        run(["xdotool", "mousemove", "--window", candidate.window_id, str(x), str(y)], ctx)
+    button = "4" if direction == "up" else "5"
+    for _ in range(amount):
+        run(["xdotool", "click", button], ctx)
+
+
+def drag_window(action: dict[str, Any], ctx: Context) -> None:
+    if ctx.dry_run:
+        log(f"dry-run: drag_window {infer_app(action)}")
+        return
+    require_xdotool()
+    candidate = best_window_candidate(action, infer_app(action))
+    if candidate is None:
+        raise AutomationError(f"drag_window 找不到窗口：{action_window_match(action)}")
+    x1 = get_int(action, "x1", int(candidate.width * get_float(action, "x1_ratio", 0.45)))
+    y1 = get_int(action, "y1", int(candidate.height * get_float(action, "y1_ratio", 0.45)))
+    x2 = get_int(action, "x2", int(candidate.width * get_float(action, "x2_ratio", 0.70)))
+    y2 = get_int(action, "y2", int(candidate.height * get_float(action, "y2_ratio", 0.70)))
+    duration_s = max(0.0, get_float(action, "duration_ms", 500.0) / 1000.0)
+    button = str(get_int(action, "button", 1))
+    run([
+        "xdotool", "mousemove", "--window", candidate.window_id, str(x1), str(y1),
+        "mousedown", button, "mousemove", "--sync", "--window", candidate.window_id,
+        str(x2), str(y2), "sleep", str(duration_s), "mouseup", button,
+    ], ctx)
+
+
 def find_window(action: dict[str, Any], ctx: Context) -> str:
     if not ctx.dry_run:
         require_xdotool()
@@ -986,6 +1143,87 @@ def focus(action: dict[str, Any], ctx: Context) -> None:
         log("dry-run: focus window")
         return
     run(["xdotool", "windowactivate", "--sync", window_id], ctx)
+
+
+def window_state(action: dict[str, Any], ctx: Context) -> None:
+    state = get_str(action, "state").lower()
+    if state not in {"maximize", "minimize", "restore"}:
+        raise AutomationError("window_state state 必须是 maximize、minimize 或 restore")
+    if ctx.dry_run:
+        log(f"dry-run: window_state {state}")
+        return
+    search_action = dict(action)
+    if state == "restore":
+        search_action["include_hidden"] = True
+    candidate = best_window_candidate(search_action, infer_app(search_action))
+    window_id = candidate.window_id if candidate is not None else find_window(search_action, ctx)
+    if state == "minimize":
+        run(["xdotool", "windowminimize", window_id], ctx)
+        return
+    require_tool("wmctrl")
+    if state == "restore":
+        run(["xdotool", "windowmap", window_id], ctx, check=False)
+    run([
+        "wmctrl", "-i", "-r", window_id, "-b",
+        f"{'add' if state == 'maximize' else 'remove'},maximized_vert,maximized_horz",
+    ], ctx)
+    if state == "restore":
+        run(["xdotool", "windowactivate", "--sync", window_id], ctx)
+
+
+def dialog_path(action: dict[str, Any], ctx: Context) -> None:
+    path = Path(get_str(action, "path"))
+    if bool(action.get("must_exist", True)) and not ctx.dry_run and not path.is_file():
+        raise AutomationError(f"对话框所需文件不存在：{path}")
+    wait_before = max(0.0, get_float(action, "wait_before", 1.0))
+    if wait_before:
+        wait({"seconds": wait_before}, ctx)
+    location_shortcut = get_str(action, "location_shortcut", "ctrl+l")
+    if location_shortcut:
+        key({"key": location_shortcut}, ctx)
+    key({"key": "ctrl+a"}, ctx)
+    _set_clipboard(str(path).encode("utf-8"), "UTF8_STRING", ctx)
+    key({"key": "ctrl+v"}, ctx)
+    key({"key": "Return"}, ctx)
+    for _ in range(max(1, get_int(action, "confirm_count", 1)) - 1):
+        wait({"seconds": get_float(action, "confirm_interval", 0.8)}, ctx)
+        key({"key": "Return"}, ctx)
+    wait_after = max(0.0, get_float(action, "wait_after", 3.0))
+    if wait_after:
+        wait({"seconds": wait_after}, ctx)
+
+
+def open_file(action: dict[str, Any], ctx: Context) -> None:
+    path = Path(get_str(action, "path"))
+    if not ctx.dry_run and not path.is_file():
+        raise AutomationError(f"要打开的文件不存在：{path}")
+    if any(action.get(key_name) for key_name in ("class", "title", "name")):
+        focus(action, ctx)
+    key({"key": get_str(action, "shortcut", "ctrl+o")}, ctx)
+    dialog_path({**action, "path": str(path), "must_exist": True}, ctx)
+
+
+def save_as(action: dict[str, Any], ctx: Context) -> None:
+    path = Path(get_str(action, "path"))
+    if not ctx.dry_run:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    if any(action.get(key_name) for key_name in ("class", "title", "name")):
+        focus(action, ctx)
+    key({"key": get_str(action, "shortcut", "ctrl+shift+s")}, ctx)
+    dialog_path({**action, "path": str(path), "must_exist": False}, ctx)
+    if bool(action.get("confirm_overwrite")):
+        key({"key": get_str(action, "overwrite_key", "Left")}, ctx)
+        key({"key": "Return"}, ctx)
+
+
+def goto_cell(action: dict[str, Any], ctx: Context) -> None:
+    reference = get_str(action, "reference")
+    if not reference:
+        raise AutomationError("goto_cell 需要 reference，例如 A1 或 A1:C100")
+    key({"key": get_str(action, "shortcut", "ctrl+g")}, ctx)
+    _set_clipboard(reference.encode("utf-8"), "UTF8_STRING", ctx)
+    key({"key": "ctrl+v"}, ctx)
+    key({"key": "Return"}, ctx)
 
 
 def robust_switch_to_app(action: dict[str, Any], ctx: Context, app: str) -> None:
@@ -1051,6 +1289,9 @@ def switch(action: dict[str, Any], ctx: Context) -> None:
 
 def wait_window(action: dict[str, Any], ctx: Context) -> None:
     app = infer_app(action)
+    if ctx.dry_run:
+        log(f"dry-run: wait_window {app}")
+        return
     timeout = get_float(action, "timeout", 15.0)
     deadline = time.monotonic() + timeout
     last_error = ""
@@ -1261,16 +1502,26 @@ ACTION_HANDLERS = {
     "hotkey": key,
     "type": type_text,
     "text": type_text,
+    "paste_text": paste_text,
+    "clipboard_file": clipboard_file,
+    "assert_file": assert_file,
     "click": click,
     "tap": click,
     "click_window": click_window,
+    "scroll": scroll,
     "drag": drag,
     "swipe": drag,
+    "drag_window": drag_window,
     "focus": focus,
+    "window_state": window_state,
     "switch": switch,
     "wait_window": wait_window,
     "verify_foreground": verify_foreground,
     "verify_window_profile": verify_window_profile,
+    "dialog_path": dialog_path,
+    "open_file": open_file,
+    "save_as": save_as,
+    "goto_cell": goto_cell,
     "close": close,
     "shell": lambda action, ctx: _handle_shell(action, ctx),
 }
@@ -1441,6 +1692,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             raise
         finally:
+            _stop_clipboard_process(ctx)
             if ctx.trace is not None:
                 ctx.trace.close()
     except (AutomationError, subprocess.CalledProcessError) as exc:

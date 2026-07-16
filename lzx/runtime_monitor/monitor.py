@@ -202,6 +202,12 @@ class RuntimeMonitorV0:
         self.cgroup_workload_delta_csv = self.model_dir / "cgroup_memory_workload_delta_1s.csv"
         self.cgroup_workload_summary = self.review_dir / "cgroup_memory_workload_summary.md"
         self.cgroup_workload_log = self.review_dir / "cgroup_memory_workload_collector.log"
+        self.region_monitor_process: subprocess.Popen[Any] | None = None
+        self.region_monitor_process_started = False
+        self.region_monitor_exit_code: int | None = None
+        self.region_monitor_dir = self.output_dir / "region_monitor"
+        self.region_monitor_summary = self.region_monitor_dir / "region_monitor_summary.md"
+        self.region_monitor_log = self.review_dir / "region_monitor.log"
         self.workload_classifier_enabled = (
             args.enable_cgroup_workload and not args.disable_workload_classifier
         )
@@ -290,6 +296,12 @@ class RuntimeMonitorV0:
             print(f"  cgroup workload delta_csv: {self.cgroup_workload_delta_csv}")
         else:
             print("  cgroup workload collector: disabled")
+        if self.args.enable_region_monitor:
+            self._start_region_monitor()
+            print("  region monitor: enabled")
+            print(f"  region monitor output: {self.region_monitor_dir}")
+        else:
+            print("  region monitor: disabled")
         print(
             "  online causal workload Markov: "
             + ("enabled" if self.online_workload_markov_enabled else "disabled")
@@ -320,6 +332,7 @@ class RuntimeMonitorV0:
         finally:
             self._close_writers(close_mglru=False)
             self._stop_cgroup_workload_collector()
+            self._stop_region_monitor()
             if self.live_cgroup_sampler is not None:
                 self.live_cgroup_sampler.close()
             self._run_workload_classifier()
@@ -523,6 +536,51 @@ class RuntimeMonitorV0:
                 proc.kill()
                 proc.wait(timeout=5)
         self.cgroup_workload_exit_code = proc.returncode
+
+    def _start_region_monitor(self) -> None:
+        cmd = [
+            sys.executable,
+            "-m",
+            "runtime_monitor.region_monitor.region_monitor",
+            "--session-dir",
+            str(self.output_dir),
+            "--config",
+            str(self.args.region_monitor_config),
+            "--app-scope-config",
+            str(self.args.app_scope_config),
+        ]
+        self.review_dir.mkdir(parents=True, exist_ok=True)
+        log_f = self.region_monitor_log.open("w", encoding="utf-8")
+        try:
+            self.region_monitor_process = subprocess.Popen(
+                cmd,
+                stdout=log_f,
+                stderr=subprocess.STDOUT,
+                cwd=MONITOR_DIR.parent,
+                text=True,
+            )
+            log_f.close()
+            self.region_monitor_process_started = True
+        except Exception as exc:
+            log_f.write(f"failed to start region monitor: {exc}\n")
+            log_f.close()
+            self.region_monitor_process = None
+            self.region_monitor_process_started = False
+            self.region_monitor_exit_code = -1
+            print(f"warning: failed to start region monitor: {exc}", file=sys.stderr)
+
+    def _stop_region_monitor(self) -> None:
+        proc = self.region_monitor_process
+        if proc is None:
+            return
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+        self.region_monitor_exit_code = proc.returncode
 
     def _run_workload_classifier(self) -> None:
         if not self.workload_classifier_enabled:
@@ -774,6 +832,14 @@ class RuntimeMonitorV0:
             f"- cgroup_workload_summary: `{self.cgroup_workload_summary}`",
             f"- cgroup_workload_exit_code: {'' if self.cgroup_workload_exit_code is None else self.cgroup_workload_exit_code}",
             "",
+            "## Region Monitor",
+            f"- region_monitor_enabled: {str(bool(self.args.enable_region_monitor)).lower()}",
+            f"- region_monitor_config: `{self.args.region_monitor_config}`",
+            f"- region_monitor_process_started: {str(self.region_monitor_process_started).lower()}",
+            f"- region_monitor_dir: `{self.region_monitor_dir}`",
+            f"- region_monitor_summary: `{self.region_monitor_summary}`",
+            f"- region_monitor_exit_code: {'' if self.region_monitor_exit_code is None else self.region_monitor_exit_code}",
+            "",
             "## Cgroup Workload 分类器",
             f"- workload_classifier_enabled: {str(self.workload_classifier_enabled).lower()}",
             f"- cgroup_workload_state_csv: `{self.cgroup_workload_state_csv}`",
@@ -1001,6 +1067,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--close-grace-windows", type=int, default=2, help="Consecutive empty windows before APP_CLOSE.")
     parser.add_argument("--enable-online-lstm", action="store_true", help="Enable online duration-aware switch LSTM prediction.")
     parser.add_argument("--enable-cgroup-workload", action="store_true", help="Enable lightweight cgroup v2 memory workload collector.")
+    parser.add_argument("--enable-region-monitor", action="store_true", help="Enable observe-only cgroup + DAMON region monitor sidecar.")
+    parser.add_argument(
+        "--region-monitor-config",
+        default=MONITOR_DIR / "config" / "region_monitor.json",
+        help="Region monitor JSON config. The feature remains disabled unless --enable-region-monitor is set.",
+    )
     parser.add_argument(
         "--disable-workload-classifier",
         action="store_true",
