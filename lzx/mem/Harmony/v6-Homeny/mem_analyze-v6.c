@@ -33,6 +33,22 @@ typedef enum {
     SEG_COUNT
 } SegmentKind;
 
+typedef enum {
+    MAP_FILE = 0,
+    MAP_SHARED_LIBRARY,
+    MAP_HAP_FILE,
+    MAP_FONT_FILE,
+    MAP_DOCUMENT_FILE,
+    MAP_ANON_HEAP,
+    MAP_ANON_STACK,
+    MAP_NAMED_ANON,
+    MAP_ANON_OTHER,
+    MAP_GRAPHICS_DEVICE,
+    MAP_OTHER_DEVICE,
+    MAP_GUARD,
+    MAP_UNKNOWN
+} MappingType;
+
 typedef struct {
     uint64_t start;
     uint64_t end;
@@ -42,6 +58,7 @@ typedef struct {
     char dev[32];
     char path[PATH_MAX];
     SegmentKind segment;
+    MappingType mapping_type;
     long size_kb;
     long rss_kb;
     long pss_kb;
@@ -70,6 +87,8 @@ typedef struct {
     const Vma *v;
 } VmaRefRow;
 
+static unsigned long long kb_to_pages(long kb, long page_size);
+
 static const char *segment_name(SegmentKind s)
 {
     switch (s) {
@@ -89,16 +108,36 @@ static const char *segment_name(SegmentKind s)
     }
 }
 
+static const char *mapping_type_name(MappingType type)
+{
+    switch (type) {
+    case MAP_FILE: return "FILE";
+    case MAP_SHARED_LIBRARY: return "SHARED_LIBRARY";
+    case MAP_HAP_FILE: return "HAP_FILE";
+    case MAP_FONT_FILE: return "FONT_FILE";
+    case MAP_DOCUMENT_FILE: return "DOCUMENT_FILE";
+    case MAP_ANON_HEAP: return "ANON_HEAP";
+    case MAP_ANON_STACK: return "ANON_STACK";
+    case MAP_NAMED_ANON: return "NAMED_ANON";
+    case MAP_ANON_OTHER: return "ANON_OTHER";
+    case MAP_GRAPHICS_DEVICE: return "GRAPHICS_DEVICE";
+    case MAP_OTHER_DEVICE: return "OTHER_DEVICE";
+    case MAP_GUARD: return "GUARD";
+    default: return "UNKNOWN";
+    }
+}
+
 static void usage(const char *argv0)
 {
     fprintf(stderr,
             "用法:\n"
             "  sudo %s --clear-refs <pid>\n"
             "  sudo %s --clear-refs --app firefox\n"
-            "  sudo %s <pid> -o referenced.md\n\n"
-            "  sudo %s --app firefox -o referenced.md\n\n"
+            "  sudo %s <pid> -o referenced.md --jsonl-output referenced.jsonl\n\n"
+            "  sudo %s --app firefox -o referenced.md --jsonl-output referenced.jsonl\n\n"
             "可选:\n"
-            "  --with-vma    额外输出 `## Referenced VMA 定位` 明细表\n\n"
+            "  --with-vma              额外输出 `## Referenced VMA 定位` 明细表\n"
+            "  --jsonl-output <path>    输出全量 VMA JSONL（包括 Referenced=0）\n\n"
             "v6 只做 Referenced 工作流：clear_refs 后执行用户操作，再读取 smaps，输出 VMA/segment 表。\n",
             argv0, argv0, argv0, argv0);
 }
@@ -299,6 +338,7 @@ static bool parse_maps_header(const char *line, Vma *vma)
 
     memset(vma, 0, sizeof(*vma));
     vma->segment = SEG_UNKNOWN;
+    vma->mapping_type = MAP_UNKNOWN;
     vma->size_kb = -1;
     vma->rss_kb = -1;
     vma->pss_kb = -1;
@@ -535,6 +575,47 @@ static void classify_segments(VmaList *list, const char *exe_path)
     }
 }
 
+static bool is_document_path(const char *path)
+{
+    return has_file_suffix(path, ".doc") || has_file_suffix(path, ".docx") ||
+           has_file_suffix(path, ".wps") || has_file_suffix(path, ".pdf") ||
+           has_file_suffix(path, ".txt") || has_file_suffix(path, ".rtf");
+}
+
+static MappingType classify_mapping_type(const Vma *v)
+{
+    bool inode_file = v->inode != 0 && v->path[0] != '\0' && !is_dev_path(v->path);
+
+    if (is_guard_path(v->path, v->perms)) return MAP_GUARD;
+    if (starts_with(v->path, "[stack")) return MAP_ANON_STACK;
+    if (strcmp(v->path, "[heap]") == 0 || is_native_heap_path(v->path) ||
+        is_ark_ts_heap_path(v->path)) return MAP_ANON_HEAP;
+    if (is_dev_path(v->path)) {
+        return (is_graph_path(v->path) || is_gl_path(v->path)) ?
+               MAP_GRAPHICS_DEVICE : MAP_OTHER_DEVICE;
+    }
+    if (inode_file && (has_file_suffix(v->path, ".so") || contains_ci(v->path, ".so."))) {
+        return MAP_SHARED_LIBRARY;
+    }
+    if (inode_file && has_file_suffix(v->path, ".hap")) return MAP_HAP_FILE;
+    if (inode_file && (has_file_suffix(v->path, ".ttf") || has_file_suffix(v->path, ".otf"))) {
+        return MAP_FONT_FILE;
+    }
+    if (inode_file && is_document_path(v->path)) return MAP_DOCUMENT_FILE;
+    if (inode_file) return MAP_FILE;
+    if (starts_with(v->path, "[anon:") || starts_with(v->path, "/anon_hugepage") ||
+        starts_with(v->path, "anon_inode:")) return MAP_NAMED_ANON;
+    if (v->inode == 0 && v->path[0] == '\0') return MAP_ANON_OTHER;
+    return MAP_UNKNOWN;
+}
+
+static void classify_mapping_types(VmaList *list)
+{
+    for (size_t i = 0; i < list->count; i++) {
+        list->items[i].mapping_type = classify_mapping_type(&list->items[i]);
+    }
+}
+
 static bool clear_referenced_bits(pid_t pid, char *err, size_t err_len)
 {
     char path[64];
@@ -563,6 +644,147 @@ static void print_md_text_cell(FILE *out, const char *s)
         if (*p == '|') fputs("\\|", out);
         else if (*p == '\n' || *p == '\r') fputc(' ', out);
         else fputc(*p, out);
+    }
+}
+
+static void json_write_string(FILE *out, const char *s)
+{
+    const unsigned char *p = (const unsigned char *)(s != NULL ? s : "");
+    fputc('"', out);
+    while (*p != '\0') {
+        switch (*p) {
+        case '"': fputs("\\\"", out); break;
+        case '\\': fputs("\\\\", out); break;
+        case '\b': fputs("\\b", out); break;
+        case '\f': fputs("\\f", out); break;
+        case '\n': fputs("\\n", out); break;
+        case '\r': fputs("\\r", out); break;
+        case '\t': fputs("\\t", out); break;
+        default:
+            if (*p < 0x20U) fprintf(out, "\\u%04x", (unsigned int)*p);
+            else fputc((int)*p, out);
+            break;
+        }
+        p++;
+    }
+    fputc('"', out);
+}
+
+static bool path_has_deleted_suffix(const char *path)
+{
+    return ends_with(path, " (deleted)");
+}
+
+static bool parse_device_numbers(const char *device, unsigned int *major_num, unsigned int *minor_num)
+{
+    unsigned int major_value = 0;
+    unsigned int minor_value = 0;
+    if (sscanf(device, "%x:%x", &major_value, &minor_value) != 2) return false;
+    *major_num = major_value;
+    *minor_num = minor_value;
+    return true;
+}
+
+static void format_wall_time(char *buf, size_t len, const struct timespec *ts)
+{
+    struct tm tm_value;
+    char base[32];
+    if (gmtime_r(&ts->tv_sec, &tm_value) == NULL ||
+        strftime(base, sizeof(base), "%Y-%m-%dT%H:%M:%S", &tm_value) == 0) {
+        snprintf(buf, len, "unknown");
+        return;
+    }
+    snprintf(buf, len, "%s.%09ldZ", base, ts->tv_nsec);
+}
+
+static void json_write_nullable_long(FILE *out, long value)
+{
+    if (value < 0) fputs("null", out);
+    else fprintf(out, "%ld", value);
+}
+
+static void json_write_ratio(FILE *out, long numerator, long denominator)
+{
+    double ratio;
+    if (numerator < 0 || denominator <= 0) {
+        fputs("null", out);
+        return;
+    }
+    ratio = (double)numerator / (double)denominator;
+    if (ratio < 0.0) ratio = 0.0;
+    if (ratio > 1.0) ratio = 1.0;
+    fprintf(out, "%.12g", ratio);
+}
+
+static void print_jsonl(FILE *out, pid_t pid, const char *comm, const char *exe_path,
+                        const VmaList *list, long page_size)
+{
+    struct timespec wall_ts;
+    struct timespec mono_ts;
+    char wall_time[64];
+    uint64_t monotonic_ns;
+
+    if (clock_gettime(CLOCK_REALTIME, &wall_ts) != 0) memset(&wall_ts, 0, sizeof(wall_ts));
+    if (clock_gettime(CLOCK_MONOTONIC, &mono_ts) != 0) memset(&mono_ts, 0, sizeof(mono_ts));
+    format_wall_time(wall_time, sizeof(wall_time), &wall_ts);
+    monotonic_ns = (uint64_t)mono_ts.tv_sec * 1000000000ULL + (uint64_t)mono_ts.tv_nsec;
+
+    for (size_t i = 0; i < list->count; i++) {
+        const Vma *v = &list->items[i];
+        uint64_t address_size = v->end >= v->start ? v->end - v->start : 0;
+        uint64_t offset_end = UINT64_MAX - v->offset < address_size ? UINT64_MAX : v->offset + address_size;
+        unsigned int dev_major = 0;
+        unsigned int dev_minor = 0;
+        bool device_available = parse_device_numbers(v->dev, &dev_major, &dev_minor);
+        bool deleted = path_has_deleted_suffix(v->path);
+        char normalized_path[PATH_MAX];
+        char start_hex[32];
+        char end_hex[32];
+
+        clean_deleted_suffix(v->path, normalized_path, sizeof(normalized_path));
+        snprintf(start_hex, sizeof(start_hex), "0x%" PRIx64, v->start);
+        snprintf(end_hex, sizeof(end_hex), "0x%" PRIx64, v->end);
+
+        fputs("{\"schema_version\":\"homeny.vma.v1\",\"record_type\":\"vma\",", out);
+        fprintf(out, "\"pid\":%ld,\"process_name\":", (long)pid);
+        json_write_string(out, comm);
+        fputs(",\"exe_path\":", out);
+        json_write_string(out, exe_path);
+        fprintf(out, ",\"page_size_bytes\":%ld,\"start_address\":%" PRIu64
+                     ",\"end_address\":%" PRIu64 ",\"start_address_hex\":",
+                page_size, v->start, v->end);
+        json_write_string(out, start_hex);
+        fputs(",\"end_address_hex\":", out);
+        json_write_string(out, end_hex);
+        fprintf(out, ",\"address_size_bytes\":%" PRIu64 ",\"permissions\":", address_size);
+        json_write_string(out, v->perms);
+        fprintf(out, ",\"file_offset_bytes\":%" PRIu64 ",\"file_offset_end_bytes\":%" PRIu64
+                     ",\"device\":", v->offset, offset_end);
+        json_write_string(out, v->dev);
+        fputs(",\"dev_major\":", out);
+        if (device_available) fprintf(out, "%u", dev_major); else fputs("null", out);
+        fputs(",\"dev_minor\":", out);
+        if (device_available) fprintf(out, "%u", dev_minor); else fputs("null", out);
+        fprintf(out, ",\"inode\":%llu,\"path\":", v->inode);
+        json_write_string(out, v->path);
+        fputs(",\"normalized_path\":", out);
+        json_write_string(out, normalized_path);
+        fprintf(out, ",\"path_deleted\":%s,\"segment\":", deleted ? "true" : "false");
+        json_write_string(out, segment_name(v->segment));
+        fputs(",\"mapping_type\":", out);
+        json_write_string(out, mapping_type_name(v->mapping_type));
+        fputs(",\"size_kib\":", out); json_write_nullable_long(out, v->size_kb);
+        fputs(",\"rss_kib\":", out); json_write_nullable_long(out, v->rss_kb);
+        fputs(",\"pss_kib\":", out); json_write_nullable_long(out, v->pss_kb);
+        fputs(",\"referenced_kib\":", out); json_write_nullable_long(out, v->referenced_kb);
+        fputs(",\"referenced_pages\":", out);
+        if (v->referenced_kb < 0) fputs("null", out);
+        else fprintf(out, "%llu", kb_to_pages(v->referenced_kb, page_size));
+        fputs(",\"swap_kib\":", out); json_write_nullable_long(out, v->swap_kb);
+        fputs(",\"referenced_size_ratio\":", out); json_write_ratio(out, v->referenced_kb, v->size_kb);
+        fputs(",\"referenced_rss_ratio\":", out); json_write_ratio(out, v->referenced_kb, v->rss_kb);
+        fputs(",\"sample_wall_time\":", out); json_write_string(out, wall_time);
+        fprintf(out, ",\"sample_monotonic_ns\":%" PRIu64 "}\n", monotonic_ns);
     }
 }
 
@@ -680,8 +902,8 @@ static void print_report(FILE *out, pid_t pid, const char *comm, const char *exe
     qsort(rows, list->count, sizeof(rows[0]), compare_vma_ref_rows);
 
     fprintf(out, "## Referenced VMA 定位\n\n");
-    fprintf(out, "| VMA | 一级段 | 权限 | Size(KiB) | Rss(KiB) | Pss(KiB) | Referenced(KiB) | Referenced页 | Referenced/Size | 路径 |\n");
-    fprintf(out, "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
+    fprintf(out, "| VMA | 一级段 | 权限 | Size(KiB) | Rss(KiB) | Pss(KiB) | Referenced(KiB) | Referenced页 | Referenced/Size | 路径 | File Offset | Device | Inode | Referenced/Rss | Mapping Type |\n");
+    fprintf(out, "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | --- | ---: | ---: | --- |\n");
     for (size_t i = 0; i < list->count; i++) {
         const Vma *v = rows[i].v;
         long size = v->size_kb >= 0 ? v->size_kb : 0;
@@ -689,17 +911,20 @@ static void print_report(FILE *out, pid_t pid, const char *comm, const char *exe
         long pss = v->pss_kb >= 0 ? v->pss_kb : 0;
         long ref = v->referenced_kb >= 0 ? v->referenced_kb : 0;
         double pct = size > 0 ? 100.0 * (double)ref / (double)size : 0.0;
+        double rss_pct = rss > 0 ? 100.0 * (double)ref / (double)rss : 0.0;
         fprintf(out, "| `%012" PRIx64 "-%012" PRIx64 "` | %s | `%s` | %ld | %ld | %ld | %ld | %llu | %.2f%% | `",
                 v->start, v->end, segment_name(v->segment), v->perms,
                 size, rss, pss, ref, kb_to_pages(ref, page_size), pct);
         print_md_text_cell(out, v->path[0] ? v->path : "(anonymous)");
-        fprintf(out, "` |\n");
+        fprintf(out, "` | `0x%" PRIx64 "` | `%s` | %llu | %.2f%% | %s |\n",
+                v->offset, v->dev, v->inode, rss_pct, mapping_type_name(v->mapping_type));
     }
     fprintf(out, "\n");
     free(rows);
 }
 
-static void make_pid_output_path(const char *out_path, pid_t pid, int total_count, char *buf, size_t len)
+static void make_pid_output_path(const char *out_path, pid_t pid, int total_count,
+                                 const char *default_ext, char *buf, size_t len)
 {
     const char *dot;
     if (total_count <= 1) {
@@ -714,20 +939,25 @@ static void make_pid_output_path(const char *out_path, pid_t pid, int total_coun
         buf[stem_len] = '\0';
         snprintf(buf + stem_len, len - stem_len, "_pid_%ld%s", (long)pid, dot);
     } else {
-        snprintf(buf, len, "%s_pid_%ld.md", out_path, (long)pid);
+        snprintf(buf, len, "%s_pid_%ld%s", out_path, (long)pid, default_ext);
     }
 }
 
-static bool analyze_pid(pid_t pid, const char *out_path, bool include_vma_table)
+static bool analyze_pid(pid_t pid, const char *md_path, const char *jsonl_path,
+                        bool include_vma_table)
 {
     VmaList list = {0};
     char err[256] = {0};
     char comm[256];
     char exe_path[PATH_MAX];
     long page_size = sysconf(_SC_PAGESIZE);
-    FILE *out;
+    FILE *md_out;
+    FILE *jsonl_out = NULL;
 
-    if (page_size <= 0) page_size = 4096;
+    if (page_size <= 0) {
+        fprintf(stderr, "sysconf(_SC_PAGESIZE) failed\n");
+        return false;
+    }
     read_comm(pid, comm, sizeof(comm));
     read_exe_path(pid, exe_path, sizeof(exe_path));
 
@@ -736,21 +966,46 @@ static bool analyze_pid(pid_t pid, const char *out_path, bool include_vma_table)
         return false;
     }
     classify_segments(&list, exe_path);
+    classify_mapping_types(&list);
 
-    if (!ensure_parent_dir(out_path)) {
-        fprintf(stderr, "cannot create parent dir for %s: %s\n", out_path, strerror(errno));
+    if (!ensure_parent_dir(md_path)) {
+        fprintf(stderr, "cannot create parent dir for %s: %s\n", md_path, strerror(errno));
         vma_list_free(&list);
         return false;
     }
 
-    out = fopen(out_path, "w");
-    if (out == NULL) {
-        fprintf(stderr, "cannot create %s: %s\n", out_path, strerror(errno));
+    md_out = fopen(md_path, "w");
+    if (md_out == NULL) {
+        fprintf(stderr, "cannot create %s: %s\n", md_path, strerror(errno));
         vma_list_free(&list);
         return false;
     }
-    print_report(out, pid, comm, exe_path, &list, page_size, include_vma_table);
-    fclose(out);
+    print_report(md_out, pid, comm, exe_path, &list, page_size, include_vma_table);
+    if (fclose(md_out) != 0) {
+        fprintf(stderr, "cannot finish %s: %s\n", md_path, strerror(errno));
+        vma_list_free(&list);
+        return false;
+    }
+
+    if (jsonl_path != NULL) {
+        if (!ensure_parent_dir(jsonl_path)) {
+            fprintf(stderr, "cannot create parent dir for %s: %s\n", jsonl_path, strerror(errno));
+            vma_list_free(&list);
+            return false;
+        }
+        jsonl_out = fopen(jsonl_path, "w");
+        if (jsonl_out == NULL) {
+            fprintf(stderr, "cannot create %s: %s\n", jsonl_path, strerror(errno));
+            vma_list_free(&list);
+            return false;
+        }
+        print_jsonl(jsonl_out, pid, comm, exe_path, &list, page_size);
+        if (fclose(jsonl_out) != 0) {
+            fprintf(stderr, "cannot finish %s: %s\n", jsonl_path, strerror(errno));
+            vma_list_free(&list);
+            return false;
+        }
+    }
     vma_list_free(&list);
     return true;
 }
@@ -761,6 +1016,7 @@ int main(int argc, char **argv)
     bool include_vma_table = false;
     const char *app_keyword = NULL;
     const char *out_path = "referenced.md";
+    const char *jsonl_path = NULL;
     pid_t pids[256];
     int pid_count = 0;
 
@@ -796,6 +1052,14 @@ int main(int argc, char **argv)
                 return 1;
             }
             out_path = argv[++i];
+            continue;
+        }
+        if (strcmp(argv[i], "--jsonl-output") == 0 || strcmp(argv[i], "--jsonl-out") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "--jsonl-output 后面需要报告路径\n");
+                return 1;
+            }
+            jsonl_path = argv[++i];
             continue;
         }
         char *end = NULL;
@@ -853,10 +1117,19 @@ int main(int argc, char **argv)
 
     int ok_count = 0;
     for (int i = 0; i < pid_count; i++) {
-        char one_out[PATH_MAX];
-        make_pid_output_path(out_path, pids[i], pid_count, one_out, sizeof(one_out));
-        if (analyze_pid(pids[i], one_out, include_vma_table)) {
-            printf("Referenced 报告已写入: %s\n", one_out);
+        char one_md[PATH_MAX];
+        char one_jsonl[PATH_MAX];
+        const char *one_jsonl_ptr = NULL;
+        make_pid_output_path(out_path, pids[i], pid_count, ".md", one_md, sizeof(one_md));
+        if (jsonl_path != NULL) {
+            make_pid_output_path(jsonl_path, pids[i], pid_count, ".jsonl",
+                                 one_jsonl, sizeof(one_jsonl));
+            one_jsonl_ptr = one_jsonl;
+        }
+        if (analyze_pid(pids[i], one_md, one_jsonl_ptr, include_vma_table)) {
+            printf("Referenced 报告已写入: %s\n", one_md);
+            printf("REPORT_MD=%s\n", one_md);
+            if (one_jsonl_ptr != NULL) printf("REPORT_JSONL=%s\n", one_jsonl_ptr);
             ok_count++;
         }
     }

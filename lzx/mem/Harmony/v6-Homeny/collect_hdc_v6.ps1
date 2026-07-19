@@ -85,6 +85,7 @@ $LocalBin = Join-Path $ScriptDir "mem_analyze-v6-ohos"
 $DeviceBin = "$DeviceDir/mem_analyze-v6"
 $Timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $DeviceReport = "$DeviceOut/referenced_$Timestamp.md"
+$DeviceJsonl = "$DeviceOut/referenced_$Timestamp.jsonl"
 
 if (-not $NoBuild) {
     $sdk = $env:OHOS_SDK
@@ -148,7 +149,7 @@ if ([string]::IsNullOrWhiteSpace($OperationCommand)) {
 }
 
 Write-Host "==> Sampling smaps"
-$sampleCmd = @("'$DeviceBin'") + $TargetArgs + @("-o", "'$DeviceReport'")
+$sampleCmd = @("'$DeviceBin'") + $TargetArgs + @("-o", "'$DeviceReport'", "--jsonl-output", "'$DeviceJsonl'")
 if ($WithVma) {
     $sampleCmd += "--with-vma"
 }

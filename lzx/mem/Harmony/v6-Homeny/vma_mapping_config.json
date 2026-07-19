@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "fixed_windows": {
+    "enabled": true,
+    "target_window_s": 5.0,
+    "ok_tolerance_s": 0.5,
+    "minor_tolerance_s": 1.0,
+    "baseline_window_count": 2,
+    "use_baseline_median": true,
+    "exclude_partial_windows_from_support": true,
+    "exclude_overrun_windows_from_support": true,
+    "max_action_overrun_s": 1.0,
+    "collect_after_each_window": true
+  },
+  "idle_baseline": {
+    "enabled": true,
+    "window_s": 5.0,
+    "min_valid_window_s": 1.0,
+    "normalize_by_time": true,
+    "normal_duration_ratio_min": 0.5,
+    "normal_duration_ratio_max": 2.0,
+    "mismatch_duration_ratio_min": 0.25,
+    "mismatch_duration_ratio_max": 4.0
+  },
+  "activity_thresholds": {
+    "strong_absolute_pages": 64,
+    "strong_min_pages": 8,
+    "strong_excess_rss_ratio": 0.05,
+    "weak_min_pages": 4,
+    "weak_excess_rss_ratio": 0.02
+  },
+  "support_thresholds": {
+    "core": 0.8,
+    "common": 0.5,
+    "occasional": 0.2,
+    "include_weak_as_active": true
+  },
+  "file_vma": {
+    "long_term_mapping": true,
+    "protection_eligible": false,
+    "split_into_offset_buckets": false
+  },
+  "anonymous_vma": {
+    "auxiliary_only": true,
+    "long_term_page_mapping": false,
+    "protection_eligible": false,
+    "prefetch_eligible": false
+  }
+}

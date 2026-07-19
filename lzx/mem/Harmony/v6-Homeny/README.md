@@ -1,14 +1,18 @@
 # mem_analyze v6：鸿蒙 hdc Referenced 采集流程
 
-v6 只关注一条采集链路：
+v6 保留原 Referenced 链路，并为 WPS 自动化增加操作前 idle baseline：
 
 ```text
-clear_refs -> 执行目标操作 -> 读取 smaps -> 生成 Referenced 报告
+baseline clear_refs -> idle wait -> Markdown/JSONL
+-> operation clear_refs -> 执行目标操作 -> Markdown/JSONL
+-> VMA 配对 -> TIME_NORMALIZED_REFERENCED_HEURISTIC
 ```
 
 `Referenced(KiB)` 来自 `/proc/<pid>/smaps`。它只表示从清空 `/proc/<pid>/clear_refs` 到读取 `smaps` 这段观察窗口内，被访问过的驻留页规模。
 
-注意：v6 不做 pagemap、PFN、page_idle 级别的逐页追踪；这部分仍然属于 v7 的方向。
+注意：v6 不做 pagemap、PFN、page_idle 级别的逐页追踪，也不执行保护、预取或回收策略。文件映射粒度只到真实 VMA 的 mapped file-offset interval；不把活跃 VMA 伪装成 256 KiB bucket。
+
+`mem_analyze-v6` 的 `--jsonl-output <path>` 输出全量 `homeny.vma.v1` JSONL，包括 `Referenced=0` 的 VMA。多 PID 时 Markdown 和 JSONL 都使用 `_pid_<pid>` 后缀，并输出稳定状态行 `REPORT_MD=` 与 `REPORT_JSONL=`。
 
 ## 环境要求
 
@@ -93,7 +97,18 @@ WPS 报告先写入设备侧 `/data/local/tmp/mem_analyze_v6/wps_reports`，每�
 6. Home 切后台，再启动 WPS 切回前台；
 7. 关闭、重新打开已保存文档，执行少量编辑/滚动后最终关闭 WPS。
 
-每个可测阶段都执行 `clear_refs -> 操作 -> 等待 -> smaps/Referenced`，输出目录包含 `referenced_<stage>*pid*<pid>.md`、`operations.csv`、`memory_summary.csv`、`experiment_summary.md`、`report_hashes.csv` 和 `session_metadata.json`。`operations.csv` 同时记录操作耗时、稳定等待、采集耗时、报告拉回耗时、阶段总耗时、PID 集合和逐阶段报告数量。WPS 主界面是 XComponent；脚本采用固定坐标和文件系统/进程结果判定，不依赖人工图像识别。
+普通可测阶段执行 `idle baseline -> operation` 两个独立 clear_refs 窗口；`01_open_wps` 使用 `POST_LAUNCH` 语义，`08_reopen_saved_document` 的 baseline 是 WPS 已启动但尚未打开目标文档的空闲状态。输出目录新增 `baseline_reports/`、`operation_reports/`、`post_launch_reports/` 和 `vma_mapping/`。原 `operations.csv.report` 仍只供 operation/POST_LAUNCH Markdown 与 56 维流程使用。
+
+可配置参数：
+
+```bash
+./run_wps_v6.sh --baseline-window-s 5.0
+./run_wps_v6.sh --no-idle-baseline
+./run_wps_v6.sh --vma-mapping-config ./vma_mapping_config.json
+./run_wps_v6.sh --disable-vma-mapping
+```
+
+匿名 VMA 仅输出 `OPERATION_RECOGNITION_AUXILIARY` 特征，固定 `long_term_page_mapping=false`、`protection_eligible=false`、`prefetch_eligible=false`。本项目固定保持 `ready_for_operation_recognition=false` 和 `ready_for_apply=false`。
 
 ### 重复 workload 向量实验
 
@@ -109,6 +124,9 @@ WPS 报告先写入设备侧 `/data/local/tmp/mem_analyze_v6/wps_reports`，每�
 - `workload_vectors_raw_56d.csv`、`workload_vectors_log1p_56d.csv`：可直接用于后续聚类/分类；
 - `operation_workload_summary.csv`、`workload_stability.md`：精确相同、5% 容差内稳定性和最不稳定维度；
 - `operation_workload_vectors/`：每个操作、每次重复的可审计 JSON 向量。
+- `operation_file_vma_mapping.json`、`operation_file_vma_support.csv`：文件 VMA exact/semantic identity 和跨 trial support；
+- `operation_anon_vma_features.json`、`operation_anon_vma_support.csv`：匿名辅助特征及独立 support；
+- `operation_vma_analysis.json`、`operation_vma_analysis.md`：baseline、质量、支持率与 readiness。
 
 稳定性不把连续内存指标强行要求为逐字节不变，而是同时报告 `fixed`（逐维完全相同）和 `stable_within_tolerance`（默认逐维相对范围不超过 5%）。`Size/RSS/PSS/Swap` 仍表示操作后绝对快照，`Referenced` 表示 `clear_refs` 后观察窗口内的访问量。
 
@@ -145,7 +163,7 @@ bash lzx-Test1/v6-Homeny/collect_hdc_v6.sh com.example.app \
 
 ```bash
 hdc shell "/data/local/tmp/mem_analyze_v6/mem_analyze-v6 --clear-refs 12345"
-hdc shell "/data/local/tmp/mem_analyze_v6/mem_analyze-v6 12345 -o /storage/media/100/local/files/Docs/Desktop/output-lzx/referenced.md --with-vma"
+hdc shell "/data/local/tmp/mem_analyze_v6/mem_analyze-v6 12345 -o /storage/media/100/local/files/Docs/Desktop/output-lzx/referenced.md --jsonl-output /storage/media/100/local/files/Docs/Desktop/output-lzx/referenced.jsonl --with-vma"
 ```
 
 按应用关键字匹配：

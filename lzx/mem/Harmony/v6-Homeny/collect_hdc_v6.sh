@@ -143,6 +143,7 @@ LOCAL_BIN="${SCRIPT_DIR}/mem_analyze-v6-ohos"
 DEVICE_BIN="${DEVICE_DIR}/mem_analyze-v6"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 DEVICE_REPORT="${DEVICE_OUT}/referenced_${TIMESTAMP}.md"
+DEVICE_JSONL="${DEVICE_OUT}/referenced_${TIMESTAMP}.jsonl"
 
 if ((NO_BUILD == 0)); then
     SDK="${OHOS_SDK:-$(default_sdk_path)}"
@@ -224,6 +225,7 @@ fi
 
 echo "==> Sampling smaps"
 SAMPLE_CMD="'$DEVICE_BIN' ${TARGET_ARGS[*]} -o '$DEVICE_REPORT'"
+SAMPLE_CMD+=" --jsonl-output '$DEVICE_JSONL'"
 if ((WITH_VMA == 1)); then
     SAMPLE_CMD+=" --with-vma"
 fi

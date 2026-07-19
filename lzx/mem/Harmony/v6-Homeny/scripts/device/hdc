@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -e
+
+HDC_EXE="/mnt/d/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/toolchains/hdc.exe"
+args=("$@")
+for ((index = 0; index + 1 < ${#args[@]}; index++)); do
+    [[ ${args[index]} == "file" ]] || continue
+    if [[ ${args[index + 1]} == "send" ]] && ((index + 2 < ${#args[@]})) && [[ ${args[index + 2]} == /* ]]; then
+        args[index + 2]="$(wslpath -w "${args[index + 2]}")"
+    elif [[ ${args[index + 1]} == "recv" ]] && ((index + 3 < ${#args[@]})) && [[ ${args[index + 3]} == /* ]]; then
+        args[index + 3]="$(wslpath -w "${args[index + 3]}")"
+    fi
+    break
+done
+exec "${HDC_EXE}" "${args[@]}"
