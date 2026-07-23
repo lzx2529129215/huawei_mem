@@ -8,9 +8,14 @@
 项目包含四个核心 Python 脚本：
 
 1. **`bpf_tracer.py`**: 核心追踪器。使用 eBPF 在内核挂载 kprobe/kretprobe，监听指定 Cgroup 内的 `folio` 操作及 `vfs_read/vfs_write` 事件，将收集到的二进制数据高效输出到 `raw_trace.bin`。
+
 2. **`cgroup_watcher.py`**: 进程守卫程序。监控指定的应用进程名（如 `wps`），一旦发现新进程启动，立刻将其 PID 移动到指定的 Cgroup 中，以便 `bpf_tracer.py` 进行追踪。
+
 3. **`app_logger.py`**: 应用场景时间戳记录器。提供简单的交互界面，用于记录具体业务操作（如“新建保存”）的精准起止时间，并保存为 `app_operations.json`。
+
 4. **`trace_parser.py`**: 数据解析与对齐工具。将 `bpf_tracer.py` 产生的高效二进制数据 (`raw_trace.bin`) 解析并与 `app_logger.py` 记录的时间戳对齐，最终生成易于分析的 CSV 文件 (`aligned_trace.csv`)。
+
+---
 
 ## 🛠️ 环境依赖
 
@@ -18,11 +23,15 @@
 - **BCC (BPF Compiler Collection)**: 需要安装 `python3-bpfcc`（例如在 Ubuntu 上：`sudo apt-get install bpfcc-tools linux-headers-$(uname -r) python3-bpfcc`）。
 - **Python 3**: 需要具备 root 权限来执行 eBPF 脚本。
 
-## 🚀 快速开始 / 使用指南
+---
+
+# 🚀 快速开始 / 使用指南
 
 为了保证测试的连贯性，建议准备 **4 个终端窗口 (A, B, C, D)**。所有操作均在同一个文件夹下进行（例如当前目录）。
 
-### 1. 准备工作 (准备词表)
+---
+
+## 1. 准备工作 (准备词表)
 
 在项目目录下，根据你的自动化测试脚本，生成操作词表文件 `op_vocab.json`。以 WPS 测试为例：
 
@@ -39,3 +48,4 @@ cat << 'EOF' > op_vocab.json
     "场景 0070_PDF 翻页": 70
   }
 }
+EOF
