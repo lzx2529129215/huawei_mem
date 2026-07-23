@@ -39,8 +39,23 @@ class WpsOperationDatasetTest(unittest.TestCase):
         catalog_path = Path(__file__).parents[1] / "wps_operation_catalog.json"
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
         labels = catalog["operations"]
-        self.assertEqual([item["label_id"] for item in labels], [0, 1, 2, 3])
-        self.assertEqual(len({item["label"] for item in labels}), 4)
+        self.assertEqual([item["label_id"] for item in labels], list(range(18)))
+        self.assertEqual(len({item["label"] for item in labels}), 18)
+
+    def test_catalog_covers_common_writer_operations(self):
+        catalog_path = Path(__file__).parents[1] / "wps_operation_catalog.json"
+        labels = {
+            item["label"]
+            for item in json.loads(catalog_path.read_text(encoding="utf-8"))["operations"]
+        }
+        self.assertGreaterEqual(len(labels), 10)
+        self.assertTrue({
+            "NEW_DOCUMENT", "WRITE_TEXT", "SELECT_ALL", "COPY_SELECTION",
+            "PASTE_SELECTION", "CUT_SELECTION", "UNDO_EDIT", "REDO_EDIT",
+            "FIND_TEXT", "REPLACE_TEXT", "INSERT_PAGE_BREAK", "INSERT_TABLE",
+            "FORMAT_BOLD", "FORMAT_ITALIC", "FORMAT_UNDERLINE", "ALIGN_CENTER",
+            "SAVE_DOCUMENT", "CLOSE_DOCUMENT",
+        } <= labels)
 
     def test_hash_is_deterministic_and_namespaced(self):
         file_index = stable_hash_index("FILE", "/data/wps/lib.so")

@@ -1,7 +1,7 @@
 param(
     [string]$Out,
     [string]$Target = "",
-    [int]$Trials = 25,
+    [int]$Trials = 6,
     [double]$ActionWindowS = 15,
     [double]$PostWindowS = 5,
     [int]$BaselineWindowCount = 2,

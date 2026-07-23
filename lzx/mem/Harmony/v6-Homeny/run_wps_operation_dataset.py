@@ -6,8 +6,9 @@ One trial is deliberately serial:
     start WPS -> NEW_DOCUMENT -> WRITE_TEXT -> preparation Save As
     -> dirty marker -> SAVE_DOCUMENT -> CLOSE_DOCUMENT -> force-stop
 
-The default is 25 trials, i.e. 100 labelled operation samples.  Use
-``--trials 1`` for a device smoke run.
+The default is 6 trials, i.e. 108 labelled operation samples across 18
+common Writer operations. Use ``--trials 1`` for a device smoke run and
+``--trials 25`` for a longer 450-sample collection.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ DEFAULT_BASELINE_WINDOW_COUNT = 2
 DEFAULT_BASELINE_WINDOW_S = 5.0
 DEFAULT_ACTION_WINDOW_S = 15.0
 DEFAULT_POST_WINDOW_S = 5.0
-DEFAULT_TRIALS = 25
+DEFAULT_TRIALS = 6
 
 
 def _safe_json(value: Any) -> Any:
@@ -225,6 +226,7 @@ def collect_labeled_operation(
     label_id: int,
     operation_label: str,
     precondition: str,
+    catalog_entry: dict[str, Any] | None = None,
     action_callback: Callable[[], Any],
     action_window_s: float,
     post_window_s: float,
@@ -257,6 +259,9 @@ def collect_labeled_operation(
             "sample_id": sample_id,
             "label_id": label_id,
             "operation_label": operation_label,
+            "operation_category": (catalog_entry or {}).get("category", ""),
+            "catalog_description": (catalog_entry or {}).get("description", ""),
+            "input_method": (catalog_entry or {}).get("input_method", ""),
             "phase": "ACTION",
         },
     )
@@ -274,6 +279,9 @@ def collect_labeled_operation(
             "sample_id": sample_id,
             "label_id": label_id,
             "operation_label": operation_label,
+            "operation_category": (catalog_entry or {}).get("category", ""),
+            "catalog_description": (catalog_entry or {}).get("description", ""),
+            "input_method": (catalog_entry or {}).get("input_method", ""),
             "phase": "POST_ACTION",
         },
     )
@@ -338,6 +346,53 @@ def _device_metadata(session: DatasetSession) -> tuple[str, str]:
     return system_version, wps_version
 
 
+def _load_operation_catalog(script_dir: Path) -> dict[str, Any]:
+    path = script_dir / "wps_operation_catalog.json"
+    catalog = json.loads(path.read_text(encoding="utf-8"))
+    operations = catalog.get("operations")
+    if not isinstance(operations, list) or len(operations) < 10:
+        raise ValueError("WPS operation catalog must contain at least 10 operations")
+    labels = [item.get("label") for item in operations]
+    ids = [item.get("label_id") for item in operations]
+    if len(set(labels)) != len(labels) or len(set(ids)) != len(ids):
+        raise ValueError("WPS operation catalog contains duplicate labels or label_id values")
+    return catalog
+
+
+def _operation_plan(
+    session: DatasetSession,
+    trial_number: int,
+) -> list[tuple[dict[str, Any], Callable[[], Any]]]:
+    """Return the stable serial Writer action plan for one trial.
+
+    SAVE_DOCUMENT and CLOSE_DOCUMENT are appended by ``_run_trial`` because
+    Save As must first establish a per-trial existing path. The plan keeps
+    setup actions outside the measured ACTION window so every labelled sample
+    still contains exactly one target operation.
+    """
+    return [
+        ({"label_id": 0, "label": "NEW_DOCUMENT", "precondition": "WPS_HOME_IDLE"}, session.new_word),
+        (
+            {"label_id": 1, "label": "WRITE_TEXT", "precondition": "BLANK_DOCUMENT_IDLE"},
+            lambda: session.write_dataset_text(f"WPS_VMA_WRITE_{trial_number:03d}_001"),
+        ),
+        ({"label_id": 4, "label": "SELECT_ALL", "precondition": "TEXT_DOCUMENT_IDLE"}, session.select_all),
+        ({"label_id": 5, "label": "COPY_SELECTION", "precondition": "TEXT_SELECTED_IDLE"}, session.copy_selection),
+        ({"label_id": 6, "label": "PASTE_SELECTION", "precondition": "TEXT_SELECTED_IDLE"}, session.paste_selection),
+        ({"label_id": 7, "label": "CUT_SELECTION", "precondition": "TEXT_SELECTED_IDLE"}, session.cut_selection),
+        ({"label_id": 8, "label": "UNDO_EDIT", "precondition": "DIRTY_DOCUMENT_IDLE"}, session.undo_edit),
+        ({"label_id": 9, "label": "REDO_EDIT", "precondition": "UNDO_AVAILABLE_IDLE"}, session.redo_edit),
+        ({"label_id": 10, "label": "FIND_TEXT", "precondition": "TEXT_DOCUMENT_IDLE"}, session.find_text),
+        ({"label_id": 11, "label": "REPLACE_TEXT", "precondition": "TEXT_DOCUMENT_IDLE"}, session.replace_text),
+        ({"label_id": 12, "label": "INSERT_PAGE_BREAK", "precondition": "TEXT_DOCUMENT_IDLE"}, session.insert_page_break),
+        ({"label_id": 13, "label": "INSERT_TABLE", "precondition": "TEXT_DOCUMENT_IDLE"}, session.insert_table),
+        ({"label_id": 14, "label": "FORMAT_BOLD", "precondition": "TEXT_SELECTED_IDLE"}, session.format_bold),
+        ({"label_id": 15, "label": "FORMAT_ITALIC", "precondition": "TEXT_SELECTED_IDLE"}, session.format_italic),
+        ({"label_id": 16, "label": "FORMAT_UNDERLINE", "precondition": "TEXT_SELECTED_IDLE"}, session.format_underline),
+        ({"label_id": 17, "label": "ALIGN_CENTER", "precondition": "TEXT_SELECTED_IDLE"}, session.align_center),
+    ]
+
+
 def _append_sequence(root: Path, sequence: dict[str, Any]) -> None:
     path = root / "operation_window_sequences.jsonl"
     with path.open("a", encoding="utf-8") as handle:
@@ -376,17 +431,44 @@ def _run_trial(args: argparse.Namespace, root: Path, trial_number: int) -> dict[
             "startup_state": "WPS_HOME_IDLE",
         })
 
-        catalog = [
-            (0, "NEW_DOCUMENT", "WPS_HOME_IDLE", session.new_word),
-            (1, "WRITE_TEXT", "BLANK_DOCUMENT_IDLE", lambda: session.write_dataset_text(f"WPS_VMA_WRITE_{trial_number:03d}_001")),
-        ]
-        for label_id, label, precondition, action in catalog:
+        catalog = _load_operation_catalog(session.script_dir)
+        catalog_by_label = {item["label"]: item for item in catalog["operations"]}
+        operation_plan = _operation_plan(session, trial_number)
+        planned_labels = {str(spec["label"]) for spec, _ in operation_plan} | {
+            "SAVE_DOCUMENT",
+            "CLOSE_DOCUMENT",
+        }
+        if planned_labels != set(catalog_by_label):
+            missing = sorted(set(catalog_by_label) - planned_labels)
+            extra = sorted(planned_labels - set(catalog_by_label))
+            raise ValueError(f"operation catalog/runner mismatch; missing={missing}, extra={extra}")
+        trial_record.update({
+            "catalog_schema_version": catalog.get("schema_version", ""),
+            "formal_samples_expected": len(operation_plan) + 2,
+        })
+        for spec, action in operation_plan:
+            label = str(spec["label"])
+            label_id = int(spec["label_id"])
+            precondition = str(spec["precondition"])
+            catalog_entry = {**catalog_by_label.get(label, {}), **spec}
+            # These operations require an explicit selected-text precondition.
+            # Setup is outside the measured window, so the ACTION window still
+            # contains exactly one labelled operation.
+            if label in {"COPY_SELECTION", "PASTE_SELECTION", "CUT_SELECTION"}:
+                session.select_all()
+            if label == "UNDO_EDIT":
+                session.write_dataset_text(f"WPS_VMA_UNDO_{trial_number:03d}_001")
+            if label == "FIND_TEXT":
+                session.write_dataset_text("WPS_FIND_TARGET")
+            if label in {"FORMAT_BOLD", "FORMAT_ITALIC", "FORMAT_UNDERLINE", "ALIGN_CENTER"}:
+                session.select_all()
             sample = collect_labeled_operation(
                 session,
                 trial_id=trial_id,
                 label_id=label_id,
                 operation_label=label,
                 precondition=precondition,
+                catalog_entry=catalog_entry,
                 action_callback=action,
                 action_window_s=args.action_window_s,
                 post_window_s=args.post_window_s,
@@ -410,6 +492,7 @@ def _run_trial(args: argparse.Namespace, root: Path, trial_number: int) -> dict[
             label_id=2,
             operation_label="SAVE_DOCUMENT",
             precondition="DIRTY_SAVED_DOCUMENT_IDLE",
+            catalog_entry=catalog_by_label["SAVE_DOCUMENT"],
             action_callback=session.save_existing_document,
             action_window_s=args.action_window_s,
             post_window_s=args.post_window_s,
@@ -428,6 +511,7 @@ def _run_trial(args: argparse.Namespace, root: Path, trial_number: int) -> dict[
             label_id=3,
             operation_label="CLOSE_DOCUMENT",
             precondition="SAVED_DOCUMENT_IDLE",
+            catalog_entry=catalog_by_label["CLOSE_DOCUMENT"],
             action_callback=session.close_document,
             action_window_s=args.action_window_s,
             post_window_s=args.post_window_s,
@@ -464,7 +548,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, help="数据集根目录；默认写入 hdc_out/wps_operation_dataset_<timestamp>")
     parser.add_argument("--target", default=os.environ.get("HDC_TARGET", ""), help="hdc target；单设备时可省略")
-    parser.add_argument("--trials", type=int, default=DEFAULT_TRIALS, help="完整 trial 数；默认 25，即 100 个正式操作样本")
+    parser.add_argument(
+        "--trials",
+        type=int,
+        default=DEFAULT_TRIALS,
+        help="完整 trial 数；默认 6，即 108 个正式操作样本",
+    )
     parser.add_argument("--action-window-s", type=float, default=DEFAULT_ACTION_WINDOW_S)
     parser.add_argument("--post-window-s", type=float, default=DEFAULT_POST_WINDOW_S)
     parser.add_argument("--baseline-window-count", type=int, default=DEFAULT_BASELINE_WINDOW_COUNT)
@@ -501,6 +590,8 @@ def main(argv: list[str] | None = None) -> int:
 
     trial_results = []
     next_trial = _next_trial_number(root)
+    catalog = _load_operation_catalog(script_dir)
+    formal_samples_per_trial = len(catalog["operations"])
     for offset in range(args.trials):
         trial_number = next_trial + offset
         print(f"[wps-dataset] trial {offset + 1}/{args.trials}: trial_{trial_number:03d}", flush=True)
@@ -520,8 +611,8 @@ def main(argv: list[str] | None = None) -> int:
         "created_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         "target": args.target,
         "trials_requested": args.trials,
-        "formal_samples_per_trial": 4,
-        "formal_samples_expected": args.trials * 4,
+        "formal_samples_per_trial": formal_samples_per_trial,
+        "formal_samples_expected": args.trials * formal_samples_per_trial,
         "action_window_s": args.action_window_s,
         "post_window_s": args.post_window_s,
         "baseline_window_count": args.baseline_window_count,
@@ -531,6 +622,7 @@ def main(argv: list[str] | None = None) -> int:
         "build_error": build_error,
         "notes": [
             "第一轮 Save As 仅用于建立 SAVE_DOCUMENT 的既有路径，不计入正式 SAVE_DOCUMENT 样本。",
+            f"每个 trial 包含 {formal_samples_per_trial} 个 WPS Writer 常用操作；默认 6 个 trial 产生至少 100 个正式带标签样本。",
             "每个正式操作保留两个 baseline、一个 ACTION 和一个 POST_ACTION 窗口；ACTION/POST_ACTION 的同一语义特征取最大 baseline-relative excess pages。",
             "失败 trial 目录保留；重复执行同一输出目录会从下一个 trial 编号继续，不覆盖原始报告。",
         ],

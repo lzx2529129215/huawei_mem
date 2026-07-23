@@ -119,15 +119,25 @@ bash lzx-Test1/v6-Homeny/collect_hdc_v6.sh com.example.app \
   --operation-cmd 'hdc shell "aa start -a EntryAbility -b com.example.app"'
 ```
 
-### WPS 四类操作—VMA 带标签数据集
+### WPS 18 类操作—VMA 带标签数据集
 
-`run_wps_operation_dataset.py` 面向通过 USB 长期连接鸿蒙 PC 的 Windows 主机，严格串行采集四类正式操作：
+`run_wps_operation_dataset.py` 面向通过 USB 长期连接鸿蒙 PC 的 Windows 主机，严格串行采集 18 类常用 WPS Writer 操作。首版覆盖文档生命周期、编辑、导航、版式和格式化：
 
 ```text
-NEW_DOCUMENT -> WRITE_TEXT -> SAVE_DOCUMENT -> CLOSE_DOCUMENT
+NEW_DOCUMENT -> WRITE_TEXT -> SELECT_ALL -> COPY_SELECTION
+-> PASTE_SELECTION -> CUT_SELECTION -> UNDO_EDIT -> REDO_EDIT
+-> FIND_TEXT -> REPLACE_TEXT -> INSERT_PAGE_BREAK -> INSERT_TABLE
+-> FORMAT_BOLD -> FORMAT_ITALIC -> FORMAT_UNDERLINE -> ALIGN_CENTER
+-> SAVE_DOCUMENT -> CLOSE_DOCUMENT
 ```
 
-每个正式操作保留 2 个 baseline、1 个 ACTION 和 1 个 POST_ACTION 窗口；默认 25 个 trial，即目标 100 个带标签样本。第一轮 Save As 只为建立普通保存路径，不计入 `SAVE_DOCUMENT` 样本。原始 VMA Markdown 报告留在 `trial_XXX/`，派生数据集写入同一实验根目录。
+操作目录来源于 WPS 官方 Writer 快捷键、查找替换和插入表格说明：
+
+- https://www.wps.cn/learning/room/d/329304
+- https://www.wps.cn/learning/room/d/273066
+- https://help.wps.com/articles/how-to-insert-tables-in-writer/
+
+每个正式操作保留 2 个 baseline、1 个 ACTION 和 1 个 POST_ACTION 窗口；默认 6 个 trial，即 108 个带标签样本，已超过 100 组目标。使用 `-Trials 25` 可得到 450 个正式样本。第一轮 Save As 只为建立普通保存路径，不计入 `SAVE_DOCUMENT` 样本。原始 VMA Markdown 报告留在 `trial_XXX/`，派生数据集写入同一实验根目录。这个目录是首版稳定自动化子集，不声称覆盖 WPS 的全部菜单、云服务和第三方插件功能；新增操作只需扩展 JSON 目录、Session 动作和 runner 计划。
 
 Windows PowerShell（推荐先用 `-Trials 1` 做 smoke）：
 
@@ -135,13 +145,13 @@ Windows PowerShell（推荐先用 `-Trials 1` 做 smoke）：
 cd lzx\mem\Harmony\v6-Homeny
 python -m py_compile wps_v6_session.py run_wps_operation_dataset.py build_wps_vma_dataset.py
 .\run_wps_operation_dataset.ps1 -Trials 1 -NoBuild
-.\run_wps_operation_dataset.ps1 -Trials 25 -NoBuild
+.\run_wps_operation_dataset.ps1 -Trials 6 -NoBuild
 ```
 
 如果设备侧还没有 `mem_analyze-v6-ohos`，先在有 OpenHarmony native SDK 的环境编译并推送一次；Windows 长时间采集使用 `-NoBuild` 复用已存在的设备端二进制。也可以直接运行：
 
 ```powershell
-python run_wps_operation_dataset.py --trials 25 --no-build --target <hdc-target>
+python run_wps_operation_dataset.py --trials 6 --no-build --target <hdc-target>
 ```
 
 输出包括 `dataset_manifest.csv`、`labels.csv`、`vma_features_long.csv`、`vma_vectors_raw.csv`、`vma_vectors_l2.csv`、`pairwise_similarity.csv`、`dataset_summary.json` 和 `dataset_analysis.md`。2048 维向量使用确定性 SHA-256 feature hashing：FILE 占 `0–1023`，ANON 占 `1024–2047`；PID、绝对 VMA 地址、时间戳和 trial 身份只保存在元数据中。

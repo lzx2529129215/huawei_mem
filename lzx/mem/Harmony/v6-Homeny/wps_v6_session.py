@@ -41,12 +41,31 @@ DOCUMENT_ROOT = "/storage/media/100/local/files/Docs"
 DESKTOP_ROOT = "/storage/media/100/local/files/Docs/Desktop"
 DEFAULT_TEST_SERIAL = "WPS-TEST-0001"
 
-# HarmonyOS key codes used here as individual keys.  A multi-key keyEvent is
-# not a chord on this device; Ctrl+N/Ctrl+S therefore is deliberately avoided.
+# HarmonyOS key codes.  ``uitest uiInput keyEvent`` accepts up to three key
+# values, so the dataset runner can use the same keyboard shortcuts as WPS.
 KEY_HOME = "1"
 KEY_ENTER = "2054"
 KEY_DPAD_LEFT = "2014"
 KEY_DPAD_RIGHT = "2015"
+KEY_ESCAPE = "2070"
+KEY_PAGE_DOWN = "2069"
+KEY_TAB = "2049"
+KEY_CTRL_LEFT = "2072"
+KEY_SHIFT_LEFT = "2047"
+KEY_A = "2017"
+KEY_B = "2018"
+KEY_C = "2019"
+KEY_F = "2022"
+KEY_H = "2024"
+KEY_I = "2025"
+KEY_N = "2030"
+KEY_S = "2035"
+KEY_U = "2037"
+KEY_V = "2038"
+KEY_W = "2039"
+KEY_X = "2040"
+KEY_Y = "2041"
+KEY_Z = "2042"
 
 SCREENSHOT_NAMES = (
     "01_open_wps",
@@ -502,6 +521,14 @@ class Session:
     def ui_key(self, key: str) -> None:
         self.device.shell(f"uitest uiInput keyEvent {q(key)}")
 
+    def ui_key_chord(self, *keys: str) -> None:
+        """Inject one HarmonyOS key combination, e.g. Ctrl+A or Ctrl+F."""
+        if not 2 <= len(keys) <= 3:
+            raise ValueError("ui_key_chord requires two or three key codes")
+        self.device.shell(
+            "uitest uiInput keyEvent " + " ".join(q(key) for key in keys)
+        )
+
     def ui_click(self, x: int, y: int) -> None:
         self.device.shell(f"uitest uiInput click {x} {y}")
 
@@ -539,6 +566,119 @@ class Session:
             "action_count": 1,
             "payload_length": len(text),
         }
+
+    def select_all(self) -> dict[str, object]:
+        self.ui_click(self.args.editor_x, self.args.editor_y)
+        self.ui_key_chord(KEY_CTRL_LEFT, KEY_A)
+        time.sleep(0.5)
+        return {"action_count": 1, "shortcut": "CTRL+A"}
+
+    def copy_selection(self) -> dict[str, object]:
+        self.ui_key_chord(KEY_CTRL_LEFT, KEY_C)
+        time.sleep(0.5)
+        return {"action_count": 1, "shortcut": "CTRL+C"}
+
+    def cut_selection(self) -> dict[str, object]:
+        self.ui_key_chord(KEY_CTRL_LEFT, KEY_X)
+        time.sleep(0.5)
+        return {"action_count": 1, "shortcut": "CTRL+X"}
+
+    def paste_selection(self) -> dict[str, object]:
+        self.ui_key_chord(KEY_CTRL_LEFT, KEY_V)
+        time.sleep(0.5)
+        return {"action_count": 1, "shortcut": "CTRL+V"}
+
+    def undo_edit(self) -> dict[str, object]:
+        self.ui_key_chord(KEY_CTRL_LEFT, KEY_Z)
+        time.sleep(0.5)
+        return {"action_count": 1, "shortcut": "CTRL+Z"}
+
+    def redo_edit(self) -> dict[str, object]:
+        self.ui_key_chord(KEY_CTRL_LEFT, KEY_Y)
+        time.sleep(0.5)
+        return {"action_count": 1, "shortcut": "CTRL+Y"}
+
+    def find_text(self, text: str = "WPS_FIND_TARGET") -> dict[str, object]:
+        self.ui_click(self.args.editor_x, self.args.editor_y)
+        self.ui_key_chord(KEY_CTRL_LEFT, KEY_F)
+        time.sleep(1.0)
+        self.ui_text_payload(text)
+        self.ui_key(KEY_ENTER)
+        time.sleep(0.5)
+        self.ui_key(KEY_ESCAPE)
+        return {"action_count": 1, "shortcut": "CTRL+F", "query": text}
+
+    def replace_text(
+        self,
+        find_text: str = "WPS_FIND_TARGET",
+        replacement: str = "WPS_REPLACED_TARGET",
+    ) -> dict[str, object]:
+        self.ui_click(self.args.editor_x, self.args.editor_y)
+        self.ui_key_chord(KEY_CTRL_LEFT, KEY_H)
+        time.sleep(1.0)
+        # WPS opens the replace panel with the find field focused.  Tab moves
+        # to the replacement field on this editor build; Escape closes the
+        # panel after the replacement command has been issued.
+        self.ui_text_payload(find_text)
+        self.ui_key(KEY_TAB)
+        self.ui_text_payload(replacement)
+        self.ui_key(KEY_ENTER)
+        time.sleep(0.8)
+        self.ui_key(KEY_ESCAPE)
+        return {
+            "action_count": 1,
+            "shortcut": "CTRL+H",
+            "find": find_text,
+            "replacement": replacement,
+        }
+
+    def insert_page_break(self) -> dict[str, object]:
+        self.ui_click(self.args.editor_x, self.args.editor_y)
+        self.ui_key_chord(KEY_CTRL_LEFT, KEY_ENTER)
+        time.sleep(0.8)
+        return {"action_count": 1, "shortcut": "CTRL+ENTER"}
+
+    def insert_table(self) -> dict[str, object]:
+        """Insert a small 2x2 table through WPS's Insert > Table menu."""
+        # Native 3120x2080 coordinates for this device/WPS layout.  The
+        # table grid is intentionally selected at 2x2 to keep the document
+        # small enough for long repeated collection.
+        self.ui_click(self.args.editor_x, self.args.editor_y)
+        self.ui_click(1455, 555)  # Insert tab
+        time.sleep(0.6)
+        self.ui_click(1210, 640)  # Table dropdown
+        time.sleep(0.6)
+        self.ui_click(1435, 155)  # second column, second row
+        time.sleep(1.5)
+        return {"action_count": 1, "table_rows": 2, "table_columns": 2}
+
+    def format_bold(self) -> dict[str, object]:
+        self.ui_click(1360, 555)  # Home tab
+        time.sleep(0.4)
+        self.ui_click(960, 700)
+        time.sleep(0.5)
+        return {"action_count": 1, "toolbar": "bold"}
+
+    def format_italic(self) -> dict[str, object]:
+        self.ui_click(1360, 555)  # Home tab
+        time.sleep(0.4)
+        self.ui_click(1020, 700)
+        time.sleep(0.5)
+        return {"action_count": 1, "toolbar": "italic"}
+
+    def format_underline(self) -> dict[str, object]:
+        self.ui_click(1360, 555)  # Home tab
+        time.sleep(0.4)
+        self.ui_click(1080, 700)
+        time.sleep(0.5)
+        return {"action_count": 1, "toolbar": "underline"}
+
+    def align_center(self) -> dict[str, object]:
+        self.ui_click(1360, 555)  # Home tab
+        time.sleep(0.4)
+        self.ui_click(1735, 700)
+        time.sleep(0.5)
+        return {"action_count": 1, "toolbar": "align_center"}
 
     def ui_swipe(self, x1: int, y1: int, x2: int, y2: int) -> None:
         self.device.shell(f"uitest uiInput swipe {x1} {y1} {x2} {y2} 800")
