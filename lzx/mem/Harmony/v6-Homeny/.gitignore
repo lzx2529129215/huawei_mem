@@ -1,0 +1,8 @@
+hdc_out/
+*.log
+__pycache__/
+*.pyc
+.DS_Store
+*_evidence.zip
+wps_harmony_memory_group_report.pdf
+wps_report_site/

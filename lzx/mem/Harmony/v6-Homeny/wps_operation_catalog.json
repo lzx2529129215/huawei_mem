@@ -1,0 +1,29 @@
+{
+  "schema_version": "wps.operation-catalog.v1",
+  "operations": [
+    {
+      "label_id": 0,
+      "label": "NEW_DOCUMENT",
+      "precondition": "WPS_HOME_IDLE",
+      "description": "Create and open a blank Word document"
+    },
+    {
+      "label_id": 1,
+      "label": "WRITE_TEXT",
+      "precondition": "BLANK_DOCUMENT_IDLE",
+      "description": "Write one controlled text payload"
+    },
+    {
+      "label_id": 2,
+      "label": "SAVE_DOCUMENT",
+      "precondition": "DIRTY_SAVED_DOCUMENT_IDLE",
+      "description": "Save changes to an existing document path"
+    },
+    {
+      "label_id": 3,
+      "label": "CLOSE_DOCUMENT",
+      "precondition": "SAVED_DOCUMENT_IDLE",
+      "description": "Close the current document while keeping WPS alive"
+    }
+  ]
+}

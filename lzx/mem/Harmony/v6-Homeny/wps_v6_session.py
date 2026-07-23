@@ -441,6 +441,7 @@ class Session:
         pull_started_at = now_iso()
         pull_started = time.perf_counter()
         local_reports: list[str] = []
+        window_hash_mismatch_count = 0
         for remote_report in remote_reports:
             remote_hash = self.device.shell(f"sha256sum {q(remote_report)} | cut -d ' ' -f 1")
             local = self.local_out / Path(remote_report).name
@@ -460,6 +461,8 @@ class Session:
                 "local_sha256": local_hash,
                 "match": str(match).lower(),
             })
+            if not match:
+                window_hash_mismatch_count += 1
             local_reports.append(str(local))
             metrics = parse_report_metrics(local)
             self.report_records.append({
@@ -487,6 +490,7 @@ class Session:
                 self.device_report_hashes[Path(remote).name] == self.local_report_hashes[Path(remote).name]
                 for remote in local_reports
             ),
+            "hash_mismatch_count": window_hash_mismatch_count,
         }
 
     def start_wps(self) -> None:
@@ -526,6 +530,15 @@ class Session:
                     # dropped by this HarmonyOS build for some characters.
                     self.ui_text_payload(chunk)
             self.ui_key(KEY_ENTER)
+
+    def write_dataset_text(self, text: str) -> dict[str, object]:
+        """Write one controlled ASCII payload for the dataset collector."""
+        self.ui_click(self.args.editor_x, self.args.editor_y)
+        self.ui_text(text)
+        return {
+            "action_count": 1,
+            "payload_length": len(text),
+        }
 
     def ui_swipe(self, x1: int, y1: int, x2: int, y2: int) -> None:
         self.device.shell(f"uitest uiInput swipe {x1} {y1} {x2} {y2} 800")
@@ -584,7 +597,7 @@ class Session:
         self.ui_key(KEY_DPAD_RIGHT)
         self.ui_click(self.args.editor_x + 120, self.args.editor_y + 80)
 
-    def save_document(self) -> dict[str, Any]:
+    def save_document(self, *, verify_content: bool = True) -> dict[str, Any]:
         before = {item["path"]: (item["size_bytes"], item["mtime"]) for item in self.list_documents()}
         self.document_baseline = before
         self.capture_screen("05_save_before")
@@ -606,7 +619,7 @@ class Session:
         saved = self.find_saved_document(wait_s=20.0)
         if not saved:
             raise HdcError("保存操作后未在设备 Docs 目录发现新增或变化的文档")
-        content_markers = self.verify_document_content(saved["path"])
+        content_markers = self.verify_document_content(saved["path"]) if verify_content else {}
         self.saved_document = {
             **saved,
             "original_path": saved["path"],
@@ -614,6 +627,39 @@ class Session:
         }
         self.capture_screen("05_save_after")
         return self.saved_document
+
+    def save_existing_document(self) -> dict[str, object]:
+        """Save an already-created document without opening Save As."""
+        if not self.saved_document:
+            raise HdcError("普通保存前没有已保存文档记录")
+        path = str(self.saved_document.get("final_path") or self.saved_document.get("path") or "")
+        before = next((item for item in self.list_documents() if item["path"] == path), None)
+        self.ui_click(1055, 555)
+        time.sleep(5)
+        after = next((item for item in self.list_documents() if item["path"] == path), None)
+        if after:
+            self.saved_document.update(after)
+        return {
+            "action_count": 1,
+            "document_path": path,
+            "before_size_bytes": before.get("size_bytes", 0) if before else 0,
+            "after_size_bytes": after.get("size_bytes", 0) if after else 0,
+        }
+
+    def close_document(self) -> dict[str, object]:
+        """Close the current document tab while keeping WPS alive."""
+        before = self.snapshot()
+        self.ui_click(1695, 478)
+        time.sleep(5)
+        after = self.snapshot()
+        if not after:
+            raise HdcError("关闭文档后 WPS 相关进程已退出")
+        return {
+            "action_count": 1,
+            "before_process_count": len(before),
+            "after_process_count": len(after),
+            "wps_process_alive": bool(after),
+        }
 
     def open_saved_document(self, *, start_wps: bool = True) -> None:
         if not self.saved_document:
