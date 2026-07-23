@@ -114,8 +114,3 @@ python3 trace_parser.py
 | `major` / `minor` | 设备的主/次设备号 |
 | `op_duration_us`| VFS 读写操作的耗时（微秒） |
 
-## ⚠️ 注意事项
-
-- Cgroup 路径请根据实际 Linux 发行版的版本进行微调（支持 cgroup v1/v2）。
-- `bpf_tracer.py` 中的 `cgroup_id` 获取依赖于文件系统中的 inode，请确保提供的 Cgroup 路径真实有效。
-- `cgroup_watcher.py` 默认捕获时间为 15 秒，如遇到应用启动特别慢的情况，可以修改源码中的 `while time.time() - start_time < 15:` 增加时长。
