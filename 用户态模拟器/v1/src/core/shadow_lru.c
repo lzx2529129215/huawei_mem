@@ -1522,6 +1522,7 @@ struct shadow_validation_scratch {
     struct shadow_validation_id_slot *id_slots;
     struct shadow_validation_pointer_slot *node_slots;
     size_t page_count;
+    size_t inserted_pages;
     size_t slot_count;
 };
 
@@ -1676,12 +1677,9 @@ static int shadow_validation_add_page(struct reclaim_engine *engine,
                                       size_t bucket,
                                       struct reclaim_validation_report *report)
 {
-    size_t new_index;
+    size_t new_index = scratch->inserted_pages;
 
-    new_index = 0U;
-    while (new_index < scratch->page_count && scratch->pages[new_index].page != NULL) {
-        new_index++;
-    }
+    scratch->inserted_pages++;
     if (new_index >= scratch->page_count ||
         !shadow_validation_pointer_insert(scratch->page_slots, scratch->slot_count,
                                            page, new_index) ||
@@ -1764,7 +1762,8 @@ static int shadow_validate_chain(struct reclaim_engine *engine,
         return shadow_validation_fail(report, engine, 0U, domain->memcg_id,
                                       isolated ? "shadow isolated counters" :
                                                  "shadow lru counters",
-                                      pages, isolated ? lruvec->nr_isolated :
+                                      isolated ? folios : pages,
+                                      isolated ? lruvec->nr_isolated :
                                                          lruvec->nr_pages[type]);
     }
     return RECLAIM_OK;
