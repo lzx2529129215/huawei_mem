@@ -158,6 +158,42 @@ struct shadow_node_scan_result {
     unsigned long nr_protected;
     unsigned long nr_skipped;
 };
+
+// #lzx--------------------------- Shadow 候选快照类型 ---------------------------
+enum shadow_candidate_status {
+    SHADOW_CANDIDATE_VALID = 0,
+    SHADOW_CANDIDATE_PAGE_MISSING,
+    SHADOW_CANDIDATE_PAGE_DYING,
+    SHADOW_CANDIDATE_LOCATION_CHANGED,
+    SHADOW_CANDIDATE_STATE_CHANGED,
+    SHADOW_CANDIDATE_LRU_CHANGED,
+    SHADOW_CANDIDATE_EVENT_SEQ_CHANGED,
+};
+
+struct shadow_candidate {
+    uint64_t page_id;
+    uint64_t memcg_id;
+    int nid;
+    enum shadow_page_state expected_state;
+    enum shadow_lru_type expected_lru;
+    uint64_t event_seq;
+};
+
+struct shadow_candidate_request {
+    unsigned long max_pages;
+    size_t max_candidates;
+};
+
+struct shadow_candidate_result {
+    size_t nr_candidates;
+    size_t nr_truncated;
+    unsigned long nr_pages_collected;
+};
+
+struct shadow_candidate_validation {
+    enum shadow_candidate_status status;
+};
+// #lzx--------------------------- Shadow 候选快照类型结束 ---------------------------
 // #lzx--------------------------- Shadow LRU 公开类型结束 ---------------------------
 
 // #lzx--------------------------- Shadow LRU 公开接口 ---------------------------
@@ -187,6 +223,16 @@ int shadow_scan_node(struct reclaim_engine *engine,
                      int nid,
                      const struct shadow_node_scan_request *request,
                      struct shadow_node_scan_result *result);
+int shadow_collect_lruvec_candidates(struct reclaim_engine *engine,
+                                     uint64_t memcg_id,
+                                     int nid,
+                                     const struct shadow_candidate_request *request,
+                                     struct shadow_candidate *candidates,
+                                     size_t capacity,
+                                     struct shadow_candidate_result *result);
+int shadow_candidate_revalidate(struct reclaim_engine *engine,
+                                const struct shadow_candidate *candidate,
+                                struct shadow_candidate_validation *result);
 /*
  * #lzx: 仅可在没有并发 Shadow 事件、扫描、候选收集、domain destroy 或 engine destroy
  * 的静止点调用；该接口不会在持有 lruvec.lock 时获取 page.lock。

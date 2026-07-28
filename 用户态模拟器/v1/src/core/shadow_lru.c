@@ -1355,6 +1355,122 @@ int shadow_scan_node(struct reclaim_engine *engine,
     reclaim_free(engine, domains);
     return RECLAIM_OK;
 }
+
+// #lzx--------------------------- Shadow 候选收集与重验证 ---------------------------
+static void shadow_collect_candidates_locked(const struct shadow_lruvec *lruvec,
+                                             const struct shadow_candidate_request *request,
+                                             struct shadow_candidate *candidates,
+                                             size_t capacity,
+                                             struct shadow_candidate_result *result)
+{
+    size_t type;
+
+    for (type = 0U; type < SHADOW_LRU_NR; type++) {
+        const struct reclaim_list *list = &lruvec->lists[type];
+        const struct reclaim_list_node *node;
+        for (node = list->head.next; node != &list->head; node = node->next) {
+            const struct shadow_page *page = node->owner;
+            unsigned long pages;
+
+            if (page == NULL || page->state != SHADOW_PAGE_ON_LRU ||
+                page->container != lruvec || page->current_lru != (enum shadow_lru_type)type) {
+                continue;
+            }
+            pages = shadow_page_base_pages(page);
+            if (request->max_pages != 0U && result->nr_pages_collected + pages >
+                request->max_pages) {
+                result->nr_truncated++;
+                continue;
+            }
+            if ((request->max_candidates != 0U && result->nr_candidates >=
+                 request->max_candidates) || result->nr_candidates >= capacity) {
+                result->nr_truncated++;
+                continue;
+            }
+            candidates[result->nr_candidates++] = (struct shadow_candidate){
+                .page_id = page->page_id,
+                .memcg_id = page->memcg_id,
+                .nid = page->nid,
+                .expected_state = page->state,
+                .expected_lru = page->current_lru,
+                .event_seq = atomic_load(&page->last_event_seq),
+            };
+            result->nr_pages_collected += pages;
+        }
+    }
+}
+
+int shadow_collect_lruvec_candidates(struct reclaim_engine *engine,
+                                     uint64_t memcg_id,
+                                     int nid,
+                                     const struct shadow_candidate_request *request,
+                                     struct shadow_candidate *candidates,
+                                     size_t capacity,
+                                     struct shadow_candidate_result *result)
+{
+    struct shadow_domain *domain;
+    struct shadow_lruvec *lruvec;
+    int error;
+
+    if (engine == NULL || request == NULL || result == NULL || !shadow_valid_nid(nid) ||
+        (capacity != 0U && candidates == NULL)) {
+        return RECLAIM_ERR_INVALID_ARGUMENT;
+    }
+    *result = (struct shadow_candidate_result){0};
+    error = shadow_domain_get_by_id(engine, memcg_id, &domain);
+    if (error != RECLAIM_OK) {
+        return error;
+    }
+    error = shadow_lruvec_get(engine, domain, nid, false, &lruvec);
+    if (error == RECLAIM_OK) {
+        pthread_mutex_lock(&lruvec->lock);
+        shadow_collect_candidates_locked(lruvec, request, candidates, capacity, result);
+        pthread_mutex_unlock(&lruvec->lock);
+    }
+    shadow_domain_put(engine, domain);
+    return error;
+}
+
+int shadow_candidate_revalidate(struct reclaim_engine *engine,
+                                const struct shadow_candidate *candidate,
+                                struct shadow_candidate_validation *result)
+{
+    struct shadow_page *page;
+
+    if (engine == NULL || candidate == NULL || result == NULL) {
+        return RECLAIM_ERR_INVALID_ARGUMENT;
+    }
+    *result = (struct shadow_candidate_validation){.status = SHADOW_CANDIDATE_PAGE_MISSING};
+    pthread_mutex_lock(&engine->shadow_page_table_lock);
+    page = shadow_find_page_locked(engine, candidate->page_id);
+    if (page == NULL) {
+        pthread_mutex_unlock(&engine->shadow_page_table_lock);
+        return RECLAIM_OK;
+    }
+    if (page->dying) {
+        pthread_mutex_unlock(&engine->shadow_page_table_lock);
+        result->status = SHADOW_CANDIDATE_PAGE_DYING;
+        return RECLAIM_OK;
+    }
+    shadow_page_get(page);
+    pthread_mutex_unlock(&engine->shadow_page_table_lock);
+    pthread_mutex_lock(&page->lock);
+    if (page->memcg_id != candidate->memcg_id || page->nid != candidate->nid) {
+        result->status = SHADOW_CANDIDATE_LOCATION_CHANGED;
+    } else if (page->state != candidate->expected_state || page->state != SHADOW_PAGE_ON_LRU) {
+        result->status = SHADOW_CANDIDATE_STATE_CHANGED;
+    } else if (page->current_lru != candidate->expected_lru) {
+        result->status = SHADOW_CANDIDATE_LRU_CHANGED;
+    } else if (atomic_load(&page->last_event_seq) != candidate->event_seq) {
+        result->status = SHADOW_CANDIDATE_EVENT_SEQ_CHANGED;
+    } else {
+        result->status = SHADOW_CANDIDATE_VALID;
+    }
+    pthread_mutex_unlock(&page->lock);
+    shadow_page_put(engine, page);
+    return RECLAIM_OK;
+}
+// #lzx--------------------------- Shadow 候选收集与重验证结束 ---------------------------
 // #lzx--------------------------- Shadow 扫描与查询实现结束 ---------------------------
 
 // #lzx--------------------------- Shadow 一致性校验与引擎生命周期 ---------------------------

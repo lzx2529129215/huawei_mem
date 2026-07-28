@@ -273,6 +273,49 @@ static bool test_shadow_lru_move_and_node_scan(void)
 }
 // #lzx--------------------------- Shadow LRU 迁移与节点扫描测试结束 ---------------------------
 
+// #lzx--------------------------- Shadow 候选快照与重验证测试 ---------------------------
+static bool test_shadow_lru_candidates_revalidate(void)
+{
+    struct reclaim_userspace_platform platform;
+    struct reclaim_simulator_executor executor;
+    struct reclaim_engine *engine = NULL;
+    struct shadow_page_add_event add = {
+        .event_seq = 1U, .page_id = 350U, .memcg_id = 9U, .nid = 0,
+        .lru = SHADOW_LRU_INACTIVE_ANON, .page_type = RECLAIM_PAGE_ANON,
+    };
+    struct shadow_page_isolate_event isolate = {
+        .event_seq = 2U, .page_id = 350U, .memcg_id = 9U, .nid = 0,
+        .source_lru = SHADOW_LRU_INACTIVE_ANON, .page_type = RECLAIM_PAGE_ANON,
+    };
+    struct shadow_candidate_request request = {.max_pages = 8U, .max_candidates = 8U};
+    struct shadow_candidate candidates[1];
+    struct shadow_candidate_result collected;
+    struct shadow_candidate_validation validation;
+
+    reclaim_platform_userspace_init(&platform);
+    reclaim_simulator_executor_init(&executor);
+    TEST_ASSERT(reclaim_engine_create(&platform.platform, NULL, NULL,
+                                      reclaim_simulator_executor_ops(), &executor,
+                                      &engine) == RECLAIM_OK);
+    TEST_ASSERT(shadow_page_add(engine, &add) == RECLAIM_OK);
+    TEST_ASSERT(shadow_collect_lruvec_candidates(engine, 9U, 0, &request, candidates,
+                                                  1U, &collected) == RECLAIM_OK);
+    TEST_ASSERT_EQ_U64(1U, collected.nr_candidates);
+    TEST_ASSERT(shadow_candidate_revalidate(engine, &candidates[0], &validation) == RECLAIM_OK);
+    TEST_ASSERT(validation.status == SHADOW_CANDIDATE_VALID);
+    TEST_ASSERT(shadow_page_isolate(engine, &isolate) == RECLAIM_OK);
+    TEST_ASSERT(shadow_candidate_revalidate(engine, &candidates[0], &validation) == RECLAIM_OK);
+    TEST_ASSERT(validation.status == SHADOW_CANDIDATE_STATE_CHANGED ||
+                validation.status == SHADOW_CANDIDATE_EVENT_SEQ_CHANGED);
+    TEST_ASSERT(shadow_collect_lruvec_candidates(engine, 9U, 0, &request, candidates,
+                                                  1U, &collected) == RECLAIM_OK);
+    TEST_ASSERT_EQ_U64(0U, collected.nr_candidates);
+    reclaim_engine_destroy(engine);
+    TEST_ASSERT_EQ_U64(0U, reclaim_platform_userspace_live_allocations(&platform));
+    return true;
+}
+// #lzx--------------------------- Shadow 候选快照与重验证测试结束 ---------------------------
+
 // #lzx--------------------------- Shadow LRU 反向迁移并发测试 ---------------------------
 struct shadow_move_worker {
     struct reclaim_engine *engine;
@@ -360,6 +403,8 @@ void register_test_shadow_lru(void)
                           test_shadow_lru_stale_duplicate_do_not_create_targets); // #lzx
     reclaim_test_register("shadow lru move and node scan", // #lzx
                           test_shadow_lru_move_and_node_scan); // #lzx
+    reclaim_test_register("shadow lru candidates revalidate", // #lzx
+                          test_shadow_lru_candidates_revalidate); // #lzx
     reclaim_test_register("shadow lru reverse move concurrency", // #lzx
                           test_shadow_lru_reverse_move_concurrency); // #lzx
 }
