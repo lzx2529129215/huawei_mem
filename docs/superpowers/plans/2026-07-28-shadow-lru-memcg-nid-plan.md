@@ -9,12 +9,9 @@
 
 ## 实际改动文件
 
-1. `用户态模拟器/v1/include/myself_kswapd/types.h`：增加 Shadow LRU、页面状态、来源、移动原因、validation flag 和显式 nid 类型。
-2. `用户态模拟器/v1/include/myself_kswapd/engine.h`：增加显式 `(memcg_id,nid)` 生命周期、事件和扫描 API；保留旧 API 的受限兼容声明。
-3. `用户态模拟器/v1/include/myself_kswapd/event.h`、`error.h`、`validator.h`：增加 Shadow 生命周期事件、错误与验证报告字段。
-4. `用户态模拟器/v1/src/core/internal.h`：将 domain 改为稀疏 node table，定义 `shadow_lruvec`、页/domain 引用与锁字段。
-5. `src/core/{engine,hash,domain,page,reclaim,validator,list,types}.c`：实现容器、迁移、isolated 状态机、显式 node scan、校验和兼容包装。
-6. `src/simulator/{event_parser,event_runner}.c`：解析并派发带 seq、memcg 和 nid 的 Shadow 事件，旧 trace 命令明确固定到默认 nid 0。
+1. `用户态模拟器/v1/include/myself_kswapd/shadow_lru.h`：定义独立 Shadow LRU 生命周期、扫描和候选 API。
+2. `用户态模拟器/v1/src/core/{internal,engine,shadow_lru}.c`：以并列子系统实现稀疏 node table、isolated 状态机、引用和锁。
+3. 现有 `engine.h`、event parser/event runner 和 legacy reclaim API 保持原语义；不自动进入 Shadow，也不隐式固定 nid 0。
 7. `CMakeLists.txt`：链接 Threads，增加 Shadow 生命周期/并发测试。
 8. `tests/{unit,integration,scenarios}`：先新增失败测试，再实现；保留既有测试。
 9. `用户态模拟器/v1/docs/`：新增中文 Shadow LRU 架构和事件格式说明。
@@ -23,12 +20,12 @@
 
 | 旧接口 | 新接口/行为 | 兼容策略 |
 |---|---|---|
-| `reclaim_engine_add_page(page,cgroup,type,order)` | `shadow_page_add(page,memcg,nid,type,order,seq)` | 旧接口显式包装至 `nid=0`、自动 seq；不跨 node。 |
+| `reclaim_engine_add_page(page,cgroup,type,order)` | `shadow_page_add(page,memcg,nid,type,order,seq)` | 两套子系统独立；旧接口不调用 Shadow。 |
 | `reclaim_engine_recharge_page` | `shadow_page_move` | 旧接口只支持 `nid=0`，新接口以目标 `(memcg,nid)` 为权威。 |
 | `reclaim_engine_migrate_page(old,new)` | `shadow_page_move` | 保留旧 page-id 重命名语义；新增 move 不改 page_id。 |
-| `reclaim_engine_reclaim_group(cgroup,...)` | `shadow_scan_lruvec(engine,memcg,nid,...)` | 旧接口为兼容固定 `nid=0`；新扫描不接受 NID_ANY。 |
-| `reclaim_engine_reclaim_all` | `shadow_scan_node(engine,nid,...)` | 新接口仅扫描明确 nid；旧接口固定 `nid=0`。 |
-| 原 trace PAGE 命令 | Shadow PAGE_ISOLATE/PUTBACK/RECLAIMED/MOVE 命令 | 旧命令不获得隐式跨 node 行为。 |
+| `reclaim_engine_reclaim_group(cgroup,...)` | `shadow_scan_lruvec(engine,memcg,nid,...)` | 旧接口不扫描 Shadow；新扫描不接受 NID_ANY。 |
+| `reclaim_engine_reclaim_all` | `shadow_scan_node(engine,nid,...)` | 旧接口不扫描 Shadow；新接口仅扫描明确 nid。 |
+| 原 trace PAGE 命令 | 后续独立 Shadow trace 适配任务 | 当前旧命令不进入 Shadow。 |
 
 ## 最终对象与生命周期
 

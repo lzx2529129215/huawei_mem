@@ -1482,6 +1482,8 @@ static int shadow_validation_fail(struct reclaim_validation_report *report,
                                   uint64_t expected,
                                   uint64_t observed)
 {
+    shadow_record_global_validation((struct reclaim_engine *)engine,
+                                    SHADOW_VALIDATION_CHAIN_STATE_MISMATCH);
     if (report != NULL) {
         *report = (struct reclaim_validation_report){
             .event_seq = atomic_load(&engine->shadow_event_seq),
@@ -1493,6 +1495,20 @@ static int shadow_validation_fail(struct reclaim_validation_report *report,
         };
     }
     return RECLAIM_ERR_VALIDATION;
+}
+
+static bool shadow_page_is_indexed_quiescent(const struct reclaim_engine *engine,
+                                              const struct shadow_page *needle)
+{
+    const struct shadow_page *page;
+    size_t bucket = shadow_hash(needle->page_id, engine->shadow_pages.bucket_count);
+
+    for (page = engine->shadow_pages.buckets[bucket]; page != NULL; page = page->hash_next) {
+        if (page == needle) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static int shadow_validate_lruvec(const struct reclaim_engine *engine,
@@ -1510,7 +1526,8 @@ static int shadow_validate_lruvec(const struct reclaim_engine *engine,
 
         for (node = list->head.next; node != &list->head; node = node->next) {
             const struct shadow_page *page = node->owner;
-            if (page == NULL || node->list != list || page->state != SHADOW_PAGE_ON_LRU ||
+            if (page == NULL || !shadow_page_is_indexed_quiescent(engine, page) ||
+                node->list != list || page->state != SHADOW_PAGE_ON_LRU ||
                 page->container != lruvec || page->current_lru != type ||
                 page->domain != domain || page->memcg_id != domain->memcg_id ||
                 page->nid != lruvec->nid || !shadow_lru_matches_page_type(type, page->page_type)) {
@@ -1531,7 +1548,8 @@ static int shadow_validate_lruvec(const struct reclaim_engine *engine,
         uint64_t isolated = 0U;
         for (node = lruvec->isolated.head.next; node != &lruvec->isolated.head; node = node->next) {
             const struct shadow_page *page = node->owner;
-            if (page == NULL || node->list != &lruvec->isolated ||
+            if (page == NULL || !shadow_page_is_indexed_quiescent(engine, page) ||
+                node->list != &lruvec->isolated ||
                 page->state != SHADOW_PAGE_ISOLATED || page->container != lruvec ||
                 page->domain != domain || page->memcg_id != domain->memcg_id ||
                 page->nid != lruvec->nid || !shadow_valid_lru(page->putback_hint)) {
@@ -1574,7 +1592,9 @@ int shadow_engine_validate(struct reclaim_engine *engine,
                 for (lruvec = domain->node_table.buckets[node_bucket]; lruvec != NULL;
                      lruvec = lruvec->hash_next) {
                     int error;
-                    if (!shadow_valid_nid(lruvec->nid)) {
+                    if (!shadow_valid_nid(lruvec->nid) ||
+                        shadow_hash((uint64_t)(unsigned int)lruvec->nid,
+                                    domain->node_table.bucket_count) != node_bucket) {
                         pthread_mutex_unlock(&domain->node_table_lock);
                         pthread_mutex_unlock(&engine->shadow_domain_table_lock);
                         return shadow_validation_fail(report, engine, 0U, domain->memcg_id,
@@ -1599,7 +1619,8 @@ int shadow_engine_validate(struct reclaim_engine *engine,
         struct shadow_page *page;
         for (page = engine->shadow_pages.buckets[bucket]; page != NULL; page = page->hash_next) {
             if (page->dying || page->state == SHADOW_PAGE_DETACHED || page->container == NULL ||
-                page->domain == NULL || page->list_node.list == NULL) {
+                page->domain == NULL || page->list_node.list == NULL ||
+                shadow_find_page_locked(engine, page->page_id) != page) {
                 pthread_mutex_unlock(&engine->shadow_page_table_lock);
                 return shadow_validation_fail(report, engine, page->page_id, page->memcg_id,
                                               "shadow page table entry", 1U, 0U);

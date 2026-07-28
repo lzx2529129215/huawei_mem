@@ -63,6 +63,12 @@ domain 和 page 分别使用 refcount；从全局表取到对象后先取得引�
 生命周期事件、扫描、候选收集或对象销毁。扫描可见的位置与分类字段由所属 lruvec 锁
 保护；`page.lock` 只串行化同一页面事件和序列门控。
 
+首次 `RECLAIMED` 会删除页面记录。没有无限 tombstone 表时，后续相同事件会被记录为
+`RECLAIM_UNKNOWN_PAGE`；它仍是状态幂等的，不会再次摘链、计数或释放。
+
+现有 legacy parser/event runner 继续调用原 `reclaim_engine_*` API，不会自动进入
+Shadow 状态机，也不会隐式映射到 nid 0；Shadow trace 适配属于后续独立任务。
+
 ## 边界
 
 本实现只覆盖用户态 Shadow 引擎。它不实现 Linux 6.17 的 L0.2/L0.3 适配，不修改
