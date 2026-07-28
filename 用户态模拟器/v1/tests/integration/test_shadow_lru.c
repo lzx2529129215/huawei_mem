@@ -112,6 +112,8 @@ static bool test_shadow_lru_event_order_and_reclaim(void)
     TEST_ASSERT_EQ_U64(2U, stats.nr_pages[SHADOW_LRU_ACTIVE_FILE]);
     TEST_ASSERT(shadow_page_reclaimed(engine, &reclaim) == RECLAIM_OK);
     TEST_ASSERT(shadow_page_get_info(engine, 200U, &info) == RECLAIM_ERR_PAGE_NOT_FOUND);
+    TEST_ASSERT(shadow_lruvec_get_stats(engine, 8U, 0, &stats) == RECLAIM_OK);
+    TEST_ASSERT_EQ_U64(0U, stats.nr_pages[SHADOW_LRU_ACTIVE_FILE]);
     TEST_ASSERT(shadow_page_reclaimed(engine, &unknown) == RECLAIM_OK);
     flags = shadow_engine_validation_flags(engine);
     TEST_ASSERT((flags & SHADOW_VALIDATION_ISOLATE_UNKNOWN_PAGE) != 0U);
@@ -121,6 +123,9 @@ static bool test_shadow_lru_event_order_and_reclaim(void)
     TEST_ASSERT((flags & SHADOW_VALIDATION_PUTBACK_HINT_MISMATCH) != 0U);
     TEST_ASSERT((flags & SHADOW_VALIDATION_RECLAIM_UNKNOWN_PAGE) != 0U);
     TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
+    TEST_ASSERT(shadow_engine_destroy_domain(engine, 8U) == RECLAIM_OK);
+    TEST_ASSERT(shadow_lruvec_get_stats(engine, 8U, 0, &stats) ==
+                RECLAIM_ERR_DOMAIN_NOT_FOUND);
     reclaim_engine_destroy(engine);
     TEST_ASSERT_EQ_U64(0U, reclaim_platform_userspace_live_allocations(&platform));
     return true;
