@@ -96,6 +96,12 @@ int reclaim_engine_create(const struct reclaim_platform *platform,
         reclaim_free(engine, engine);
         return RECLAIM_ERR_NO_MEMORY;
     }
+    if (shadow_engine_state_init(engine) != RECLAIM_OK) { // #lzx
+        reclaim_free(engine, engine->pages.buckets); // #lzx
+        reclaim_free(engine, engine->domains.buckets); // #lzx
+        reclaim_free(engine, engine); // #lzx
+        return RECLAIM_ERR_NO_MEMORY; // #lzx
+    }
     *out_engine = engine;
     return RECLAIM_OK;
 }
@@ -111,6 +117,7 @@ void reclaim_engine_destroy(struct reclaim_engine *engine)
     if (engine == NULL) {
         return;
     }
+    shadow_engine_state_destroy(engine); // #lzx
     for (i = 0U; i < engine->pages.bucket_count; i++) {
         for (page = engine->pages.buckets[i]; page != NULL; page = next_page) {
             next_page = page->hash_next;

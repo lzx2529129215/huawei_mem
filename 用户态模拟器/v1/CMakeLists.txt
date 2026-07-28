@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(myself_kswapd_simulator VERSION 1.0 LANGUAGES C)
 
+find_package(Threads REQUIRED)
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 option(RECLAIM_ENABLE_TESTS "Build CTest tests" ON)
@@ -41,8 +43,10 @@ add_library(reclaim_core STATIC
     src/core/scan_pressure.c
     src/core/reclaim.c
     src/core/validator.c
+    src/core/shadow_lru.c
 )
 target_include_directories(reclaim_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(reclaim_core PUBLIC Threads::Threads)
 
 add_library(reclaim_userspace STATIC
     src/simulator/event_parser.c
