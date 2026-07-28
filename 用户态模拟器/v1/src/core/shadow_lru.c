@@ -512,8 +512,12 @@ static enum shadow_event_action shadow_event_gate_locked(struct reclaim_engine *
         shadow_record_validation(engine, page->container, SHADOW_VALIDATION_STALE_EVENT);
         return SHADOW_EVENT_STALE;
     }
-    page->last_event_seq = event_seq;
     return SHADOW_EVENT_APPLY;
+}
+
+static void shadow_event_commit_locked(struct shadow_page *page, uint64_t event_seq)
+{
+    page->last_event_seq = event_seq;
 }
 
 static struct shadow_domain *shadow_move_page_locked(struct reclaim_engine *engine,
@@ -715,6 +719,7 @@ int shadow_page_add(struct reclaim_engine *engine, const struct shadow_page_add_
     pthread_mutex_lock(&page->lock);
     action = shadow_event_gate_locked(engine, page, seq);
     if (action == SHADOW_EVENT_APPLY) {
+        shadow_event_commit_locked(page, seq);
         shadow_update_static_metadata(page, event->page_type, false);
         page->order = event->order;
     } else if (action == SHADOW_EVENT_STALE) {
@@ -772,34 +777,41 @@ int shadow_page_isolate(struct reclaim_engine *engine,
         return RECLAIM_OK;
     }
     if (error != RECLAIM_OK) return error;
+    pthread_mutex_lock(&page->lock);
+    action = shadow_event_gate_locked(engine, page, seq);
+    if (action != SHADOW_EVENT_APPLY) {
+        if (action == SHADOW_EVENT_STALE) {
+            shadow_fill_static_metadata(page, event->page_type, page->order);
+        }
+        pthread_mutex_unlock(&page->lock);
+        shadow_page_put(engine, page);
+        return RECLAIM_OK;
+    }
     error = shadow_domain_get_or_create(engine, event->memcg_id, &target_domain);
-    if (error == RECLAIM_OK) error = shadow_lruvec_get(engine, target_domain, event->nid, true,
-                                                        &target_lruvec);
+    if (error == RECLAIM_OK) {
+        error = shadow_lruvec_get(engine, target_domain, event->nid, true, &target_lruvec);
+    }
     if (error != RECLAIM_OK) {
+        pthread_mutex_unlock(&page->lock);
         shadow_page_put(engine, page);
         if (target_domain != NULL) shadow_domain_put(engine, target_domain);
         return error;
     }
-    pthread_mutex_lock(&page->lock);
-    action = shadow_event_gate_locked(engine, page, seq);
-    if (action == SHADOW_EVENT_APPLY) {
-        if (page->state == SHADOW_PAGE_ISOLATED && page->container == target_lruvec &&
+    shadow_event_commit_locked(page, seq);
+    if (page->state == SHADOW_PAGE_ISOLATED && page->container == target_lruvec &&
             page->memcg_id == event->memcg_id) {
-            shadow_record_validation(engine, target_lruvec, SHADOW_VALIDATION_DUPLICATE_ISOLATE);
-        } else {
-            release_domain = shadow_move_page_locked(engine, page, target_domain, target_lruvec, true,
-                                                      SHADOW_LRU_NR,
-                                                      shadow_origin_from_lru(event->source_lru),
-                                                      event->source_lru);
-            pthread_mutex_lock(&target_lruvec->lock);
-            target_lruvec->nr_isolate_events++;
-            pthread_mutex_unlock(&target_lruvec->lock);
-        }
-        shadow_update_static_metadata(page, event->page_type, false);
-        page->isolate_seq = seq;
-    } else if (action == SHADOW_EVENT_STALE) {
-        shadow_fill_static_metadata(page, event->page_type, page->order);
+        shadow_record_validation(engine, target_lruvec, SHADOW_VALIDATION_DUPLICATE_ISOLATE);
+    } else {
+        release_domain = shadow_move_page_locked(engine, page, target_domain, target_lruvec, true,
+                                                  SHADOW_LRU_NR,
+                                                  shadow_origin_from_lru(event->source_lru),
+                                                  event->source_lru);
+        pthread_mutex_lock(&target_lruvec->lock);
+        target_lruvec->nr_isolate_events++;
+        pthread_mutex_unlock(&target_lruvec->lock);
     }
+    shadow_update_static_metadata(page, event->page_type, false);
+    page->isolate_seq = seq;
     pthread_mutex_unlock(&page->lock);
     if (release_domain == NULL || release_domain == target_domain) {
         shadow_domain_put(engine, target_domain);
@@ -863,31 +875,37 @@ int shadow_page_putback(struct reclaim_engine *engine,
         return RECLAIM_OK;
     }
     if (error != RECLAIM_OK) return error;
+    pthread_mutex_lock(&page->lock);
+    action = shadow_event_gate_locked(engine, page, seq);
+    if (action != SHADOW_EVENT_APPLY) {
+        pthread_mutex_unlock(&page->lock);
+        shadow_page_put(engine, page);
+        return RECLAIM_OK;
+    }
     error = shadow_domain_get_or_create(engine, event->target_memcg_id, &target_domain);
-    if (error == RECLAIM_OK) error = shadow_lruvec_get(engine, target_domain, event->target_nid,
-                                                        true, &target_lruvec);
+    if (error == RECLAIM_OK) {
+        error = shadow_lruvec_get(engine, target_domain, event->target_nid, true, &target_lruvec);
+    }
     if (error != RECLAIM_OK) {
+        pthread_mutex_unlock(&page->lock);
         shadow_page_put(engine, page);
         if (target_domain != NULL) shadow_domain_put(engine, target_domain);
         return error;
     }
-    pthread_mutex_lock(&page->lock);
-    action = shadow_event_gate_locked(engine, page, seq);
-    if (action == SHADOW_EVENT_APPLY) {
-        if (page->state != SHADOW_PAGE_ISOLATED) {
-            shadow_record_validation(engine, page->container,
-                                     SHADOW_VALIDATION_PUTBACK_WITHOUT_ISOLATE);
-        } else if (page->putback_hint != event->target_lru) {
-            shadow_record_validation(engine, page->container,
-                                     SHADOW_VALIDATION_PUTBACK_HINT_MISMATCH);
-        }
-        release_domain = shadow_move_page_locked(engine, page, target_domain, target_lruvec,
-                                                  false, event->target_lru,
-                                                  SHADOW_LRU_ORIGIN_UNKNOWN, SHADOW_LRU_NR);
-        pthread_mutex_lock(&target_lruvec->lock);
-        target_lruvec->nr_putback++;
-        pthread_mutex_unlock(&target_lruvec->lock);
+    shadow_event_commit_locked(page, seq);
+    if (page->state != SHADOW_PAGE_ISOLATED) {
+        shadow_record_validation(engine, page->container,
+                                 SHADOW_VALIDATION_PUTBACK_WITHOUT_ISOLATE);
+    } else if (page->putback_hint != event->target_lru) {
+        shadow_record_validation(engine, page->container,
+                                 SHADOW_VALIDATION_PUTBACK_HINT_MISMATCH);
     }
+    release_domain = shadow_move_page_locked(engine, page, target_domain, target_lruvec,
+                                              false, event->target_lru,
+                                              SHADOW_LRU_ORIGIN_UNKNOWN, SHADOW_LRU_NR);
+    pthread_mutex_lock(&target_lruvec->lock);
+    target_lruvec->nr_putback++;
+    pthread_mutex_unlock(&target_lruvec->lock);
     pthread_mutex_unlock(&page->lock);
     if (release_domain == NULL || release_domain == target_domain) {
         shadow_domain_put(engine, target_domain);
@@ -935,6 +953,7 @@ int shadow_page_reclaimed(struct reclaim_engine *engine,
         shadow_page_put(engine, page);
         return RECLAIM_OK;
     }
+    shadow_event_commit_locked(page, seq);
     shadow_page_remove_locked(engine, page);
     page->dying = true;
     pthread_mutex_unlock(&engine->shadow_page_table_lock);
@@ -1010,41 +1029,48 @@ int shadow_page_move(struct reclaim_engine *engine, const struct shadow_page_mov
         return RECLAIM_OK;
     }
     if (error != RECLAIM_OK) return error;
+    pthread_mutex_lock(&page->lock);
+    action = shadow_event_gate_locked(engine, page, seq);
+    if (action != SHADOW_EVENT_APPLY) {
+        if (action == SHADOW_EVENT_STALE) {
+            shadow_fill_static_metadata(page, event->page_type, page->order);
+        }
+        pthread_mutex_unlock(&page->lock);
+        shadow_page_put(engine, page);
+        return RECLAIM_OK;
+    }
     error = shadow_domain_get_or_create(engine, event->target_memcg_id, &target_domain);
-    if (error == RECLAIM_OK) error = shadow_lruvec_get(engine, target_domain, event->target_nid,
-                                                        true, &target_lruvec);
+    if (error == RECLAIM_OK) {
+        error = shadow_lruvec_get(engine, target_domain, event->target_nid, true, &target_lruvec);
+    }
     if (error != RECLAIM_OK) {
+        pthread_mutex_unlock(&page->lock);
         shadow_page_put(engine, page);
         if (target_domain != NULL) shadow_domain_put(engine, target_domain);
         return error;
     }
-    pthread_mutex_lock(&page->lock);
-    action = shadow_event_gate_locked(engine, page, seq);
-    if (action == SHADOW_EVENT_APPLY) {
-        if (page->memcg_id != event->source_memcg_id || page->nid != event->source_nid ||
+    shadow_event_commit_locked(page, seq);
+    if (page->memcg_id != event->source_memcg_id || page->nid != event->source_nid ||
             page->state != event->source_state ||
             (page->state == SHADOW_PAGE_ON_LRU && page->current_lru != event->source_lru)) {
-            shadow_record_validation(engine, page->container, SHADOW_VALIDATION_MOVE_SOURCE_MISMATCH);
-        }
-        target_isolated = page->state == SHADOW_PAGE_ISOLATED;
-        source_lruvec = page->container;
-        release_domain = shadow_move_page_locked(engine, page, target_domain, target_lruvec,
-                                                  target_isolated, event->target_lru,
-                                                  target_isolated ? page->isolated_from :
-                                                  SHADOW_LRU_ORIGIN_UNKNOWN,
-                                                  event->target_lru);
-        if (source_lruvec != NULL) {
-            pthread_mutex_lock(&source_lruvec->lock);
-            source_lruvec->nr_move_out++;
-            pthread_mutex_unlock(&source_lruvec->lock);
-        }
-        pthread_mutex_lock(&target_lruvec->lock);
-        target_lruvec->nr_move_in++;
-        pthread_mutex_unlock(&target_lruvec->lock);
-        shadow_update_static_metadata(page, event->page_type, false);
-    } else if (action == SHADOW_EVENT_STALE) {
-        shadow_fill_static_metadata(page, event->page_type, page->order);
+        shadow_record_validation(engine, page->container, SHADOW_VALIDATION_MOVE_SOURCE_MISMATCH);
     }
+    target_isolated = page->state == SHADOW_PAGE_ISOLATED;
+    source_lruvec = page->container;
+    release_domain = shadow_move_page_locked(engine, page, target_domain, target_lruvec,
+                                              target_isolated, event->target_lru,
+                                              target_isolated ? page->isolated_from :
+                                              SHADOW_LRU_ORIGIN_UNKNOWN,
+                                              event->target_lru);
+    if (source_lruvec != NULL) {
+        pthread_mutex_lock(&source_lruvec->lock);
+        source_lruvec->nr_move_out++;
+        pthread_mutex_unlock(&source_lruvec->lock);
+    }
+    pthread_mutex_lock(&target_lruvec->lock);
+    target_lruvec->nr_move_in++;
+    pthread_mutex_unlock(&target_lruvec->lock);
+    shadow_update_static_metadata(page, event->page_type, false);
     pthread_mutex_unlock(&page->lock);
     if (release_domain == NULL || release_domain == target_domain) {
         shadow_domain_put(engine, target_domain);
