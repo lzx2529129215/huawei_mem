@@ -73,6 +73,7 @@ if(RECLAIM_ENABLE_TESTS)
         tests/integration/test_reclaim_failures.c
         tests/integration/test_validation_corruption.c
         tests/scenarios/test_trace.c
+        tests/integration/test_shadow_lru.c
     )
     target_link_libraries(reclaim_tests PRIVATE reclaim_userspace reclaim_core)
     add_test(NAME reclaim_tests COMMAND reclaim_tests)
