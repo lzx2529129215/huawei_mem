@@ -609,12 +609,14 @@ static bool test_shadow_lru_validator_bidirectional_faults(void)
     struct shadow_lruvec *lruvec;
     struct shadow_lruvec *isolated_lruvec;
     struct shadow_domain *domain;
+    struct shadow_page *duplicate;
     enum shadow_lru_type lru;
     struct shadow_page **saved_table_cursor = NULL;
     struct shadow_page *saved_hash_next = NULL;
     struct reclaim_list_node orphan = {0};
     size_t bucket;
     uint64_t flags;
+    size_t page_bucket = 0U;
 
     reclaim_platform_userspace_init(&platform);
     reclaim_simulator_executor_init(&executor);
@@ -625,6 +627,19 @@ static bool test_shadow_lru_validator_bidirectional_faults(void)
     TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_OK);
     page = shadow_test_find_page(engine, 1200U);
     TEST_ASSERT(page != NULL);
+    for (bucket = 0U; bucket < engine->shadow_pages.bucket_count; bucket++) {
+        struct shadow_page *table_page;
+        for (table_page = engine->shadow_pages.buckets[bucket]; table_page != NULL;
+             table_page = table_page->hash_next) {
+            if (table_page == page) {
+                page_bucket = bucket;
+                break;
+            }
+        }
+        if (table_page == page) {
+            break;
+        }
+    }
     lruvec = page->container;
     lru = page->current_lru;
 
@@ -740,6 +755,38 @@ static bool test_shadow_lru_validator_bidirectional_faults(void)
         TEST_ASSERT(shadow_page_putback(engine, &isolated_putback) == RECLAIM_OK);
         TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
     }
+
+    /* Two distinct page objects must not share one page_id. */
+    duplicate = reclaim_calloc(engine, 1U, sizeof(*duplicate));
+    TEST_ASSERT(duplicate != NULL);
+    TEST_ASSERT(pthread_mutex_init(&duplicate->lock, NULL) == 0);
+    duplicate->page_id = page->page_id;
+    atomic_init(&duplicate->refcount, 1U);
+    atomic_init(&duplicate->last_event_seq, atomic_load(&page->last_event_seq));
+    duplicate->memcg_id = page->memcg_id;
+    duplicate->nid = page->nid;
+    duplicate->domain = page->domain;
+    duplicate->container = page->container;
+    duplicate->state = SHADOW_PAGE_ON_LRU;
+    duplicate->current_lru = page->current_lru;
+    duplicate->page_type = page->page_type;
+    duplicate->list_node.owner = duplicate;
+    reclaim_list_push_back(&lruvec->lists[lru], &duplicate->list_node);
+    lruvec->nr_pages[lru]++;
+    pthread_mutex_lock(&engine->shadow_page_table_lock);
+    duplicate->hash_next = engine->shadow_pages.buckets[page_bucket];
+    engine->shadow_pages.buckets[page_bucket] = duplicate;
+    pthread_mutex_unlock(&engine->shadow_page_table_lock);
+    TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_ERR_VALIDATION);
+    pthread_mutex_lock(&engine->shadow_page_table_lock);
+    TEST_ASSERT(engine->shadow_pages.buckets[page_bucket] == duplicate);
+    engine->shadow_pages.buckets[page_bucket] = duplicate->hash_next;
+    pthread_mutex_unlock(&engine->shadow_page_table_lock);
+    reclaim_list_remove(&lruvec->lists[lru], &duplicate->list_node);
+    lruvec->nr_pages[lru]--;
+    pthread_mutex_destroy(&duplicate->lock);
+    reclaim_free(engine, duplicate);
+    TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
 
     /* Temporary validator collections must fail closed on allocation failure. */
     reclaim_platform_userspace_set_fail_after(&platform, 0L);
