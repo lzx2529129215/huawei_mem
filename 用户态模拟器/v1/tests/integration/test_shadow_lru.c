@@ -605,7 +605,10 @@ static bool test_shadow_lru_validator_bidirectional_faults(void)
     };
     struct reclaim_validation_report report;
     struct shadow_page *page;
+    struct shadow_page *isolated_page;
     struct shadow_lruvec *lruvec;
+    struct shadow_lruvec *isolated_lruvec;
+    struct shadow_domain *domain;
     enum shadow_lru_type lru;
     struct shadow_page **saved_table_cursor = NULL;
     struct shadow_page *saved_hash_next = NULL;
@@ -700,6 +703,43 @@ static bool test_shadow_lru_validator_bidirectional_faults(void)
     TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_ERR_VALIDATION);
     page->state = SHADOW_PAGE_ON_LRU;
     TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
+
+    page->dying = true;
+    TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_ERR_VALIDATION);
+    page->dying = false;
+    TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
+
+    domain = page->domain;
+    domain->memcg_id = 81U;
+    TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_ERR_VALIDATION);
+    domain->memcg_id = 80U;
+    TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
+
+    {
+        const struct shadow_page_add_event isolated_add = {
+            .event_seq = 2U, .page_id = 1201U, .memcg_id = 80U, .nid = 0,
+            .lru = SHADOW_LRU_ACTIVE_FILE, .page_type = RECLAIM_PAGE_FILE,
+        };
+        const struct shadow_page_isolate_event isolated_event = {
+            .event_seq = 3U, .page_id = 1201U, .memcg_id = 80U, .nid = 0,
+            .source_lru = SHADOW_LRU_ACTIVE_FILE, .page_type = RECLAIM_PAGE_FILE,
+        };
+        const struct shadow_page_putback_event isolated_putback = {
+            .event_seq = 4U, .page_id = 1201U, .target_memcg_id = 80U,
+            .target_nid = 0, .target_lru = SHADOW_LRU_ACTIVE_FILE,
+        };
+        TEST_ASSERT(shadow_page_add(engine, &isolated_add) == RECLAIM_OK);
+        TEST_ASSERT(shadow_page_isolate(engine, &isolated_event) == RECLAIM_OK);
+        isolated_page = shadow_test_find_page(engine, 1201U);
+        TEST_ASSERT(isolated_page != NULL);
+        isolated_lruvec = isolated_page->container;
+        isolated_lruvec->nr_isolated++;
+        TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_ERR_VALIDATION);
+        isolated_lruvec->nr_isolated--;
+        TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
+        TEST_ASSERT(shadow_page_putback(engine, &isolated_putback) == RECLAIM_OK);
+        TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
+    }
 
     /* Temporary validator collections must fail closed on allocation failure. */
     reclaim_platform_userspace_set_fail_after(&platform, 0L);
