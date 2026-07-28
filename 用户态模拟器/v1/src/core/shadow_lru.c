@@ -184,6 +184,21 @@ static int shadow_domain_get_by_id(struct reclaim_engine *engine,
     return RECLAIM_OK;
 }
 
+#ifdef SHADOW_LRU_TESTING
+int shadow_test_domain_hold(struct reclaim_engine *engine,
+                            uint64_t memcg_id,
+                            struct shadow_domain **out_domain)
+{
+    return shadow_domain_get_by_id(engine, memcg_id, out_domain);
+}
+
+void shadow_test_domain_release(struct reclaim_engine *engine,
+                                struct shadow_domain *domain)
+{
+    shadow_domain_put(engine, domain);
+}
+#endif
+
 static int shadow_domain_get_or_create(struct reclaim_engine *engine,
                                        uint64_t memcg_id,
                                        struct shadow_domain **out_domain)
@@ -1178,6 +1193,31 @@ static void shadow_scan_locked(const struct shadow_lruvec *lruvec,
         }
     }
 }
+
+#ifdef SHADOW_LRU_TESTING
+int shadow_test_scan_held_domain(struct reclaim_engine *engine,
+                                 struct shadow_domain *domain,
+                                 int nid,
+                                 const struct shadow_scan_request *request,
+                                 struct shadow_scan_result *result)
+{
+    struct shadow_lruvec *lruvec;
+    int error;
+
+    if (engine == NULL || domain == NULL || request == NULL || result == NULL) {
+        return RECLAIM_ERR_INVALID_ARGUMENT;
+    }
+    *result = (struct shadow_scan_result){0};
+    error = shadow_lruvec_get(engine, domain, nid, false, &lruvec);
+    if (error != RECLAIM_OK) {
+        return error;
+    }
+    pthread_mutex_lock(&lruvec->lock);
+    shadow_scan_locked(lruvec, request, result);
+    pthread_mutex_unlock(&lruvec->lock);
+    return RECLAIM_OK;
+}
+#endif
 
 int shadow_page_get_info(struct reclaim_engine *engine,
                          uint64_t page_id,

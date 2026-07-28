@@ -156,6 +156,18 @@ void reclaim_domain_sorted_remove(struct reclaim_engine *engine, struct reclaim_
 // #lzx--------------------------- Shadow LRU 内部接口 ---------------------------
 int shadow_engine_state_init(struct reclaim_engine *engine);
 void shadow_engine_state_destroy(struct reclaim_engine *engine);
+#ifdef SHADOW_LRU_TESTING
+int shadow_test_domain_hold(struct reclaim_engine *engine,
+                            uint64_t memcg_id,
+                            struct shadow_domain **out_domain);
+void shadow_test_domain_release(struct reclaim_engine *engine,
+                                struct shadow_domain *domain);
+int shadow_test_scan_held_domain(struct reclaim_engine *engine,
+                                 struct shadow_domain *domain,
+                                 int nid,
+                                 const struct shadow_scan_request *request,
+                                 struct shadow_scan_result *result);
+#endif
 // #lzx--------------------------- Shadow LRU 内部接口结束 ---------------------------
 
 #endif

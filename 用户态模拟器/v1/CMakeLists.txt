@@ -76,6 +76,8 @@ if(RECLAIM_ENABLE_TESTS)
         tests/integration/test_shadow_lru.c
     )
     target_link_libraries(reclaim_tests PRIVATE reclaim_userspace reclaim_core)
+    target_compile_definitions(reclaim_core PRIVATE SHADOW_LRU_TESTING)
+    target_compile_definitions(reclaim_tests PRIVATE SHADOW_LRU_TESTING)
     add_test(NAME reclaim_tests COMMAND reclaim_tests)
     set_tests_properties(reclaim_tests PROPERTIES TIMEOUT 30)
 endif()

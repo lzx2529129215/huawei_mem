@@ -1170,6 +1170,7 @@ static bool shadow_test_run_reclaim_race(bool putback)
 struct shadow_domain_destroy_context {
     struct reclaim_engine *engine;
     pthread_barrier_t barrier;
+    struct shadow_domain *domain;
     int scan_error;
     int destroy_error;
 };
@@ -1181,7 +1182,13 @@ static void *shadow_domain_scan_worker(void *argument)
     struct shadow_scan_result result;
 
     (void)shadow_test_barrier_wait(&context->barrier);
-    context->scan_error = shadow_scan_lruvec(context->engine, 102U, 0, &request, &result);
+    context->scan_error = shadow_test_domain_hold(context->engine, 102U, &context->domain);
+    (void)shadow_test_barrier_wait(&context->barrier);
+    if (context->scan_error == RECLAIM_OK) {
+        context->scan_error = shadow_test_scan_held_domain(context->engine, context->domain,
+                                                            0, &request, &result);
+        shadow_test_domain_release(context->engine, context->domain);
+    }
     return NULL;
 }
 
@@ -1189,6 +1196,7 @@ static void *shadow_domain_destroy_worker(void *argument)
 {
     struct shadow_domain_destroy_context *context = argument;
 
+    (void)shadow_test_barrier_wait(&context->barrier);
     (void)shadow_test_barrier_wait(&context->barrier);
     context->destroy_error = shadow_engine_destroy_domain(context->engine, 102U);
     return NULL;
@@ -1227,9 +1235,7 @@ static bool shadow_test_run_domain_destroy_race(void)
     (void)pthread_join(scan_thread, NULL);
     (void)pthread_join(destroy_thread, NULL);
     pthread_barrier_destroy(&context.barrier);
-    if ((context.scan_error != RECLAIM_OK && context.scan_error != RECLAIM_ERR_DOMAIN_NOT_FOUND) ||
-        (context.destroy_error != RECLAIM_OK &&
-         context.destroy_error != RECLAIM_ERR_DOMAIN_NOT_FOUND) ||
+    if (context.scan_error != RECLAIM_OK || context.destroy_error != RECLAIM_OK ||
         shadow_engine_validate(engine, NULL) != RECLAIM_OK) {
         reclaim_engine_destroy(engine);
         return false;
