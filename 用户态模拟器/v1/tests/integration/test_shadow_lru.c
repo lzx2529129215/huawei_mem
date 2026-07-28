@@ -9,6 +9,7 @@
 #include "../test_support/test.h"
 
 static bool test_shadow_lru_reverse_move_concurrency(void);
+static bool shadow_test_mark_page_dying(struct reclaim_engine *engine, uint64_t page_id);
 
 #include <pthread.h>
 
@@ -364,30 +365,31 @@ static bool test_shadow_lru_candidate_collection_matrix(void)
         TEST_ASSERT(shadow_page_add(engine, &adds[index]) == RECLAIM_OK);
     }
     TEST_ASSERT(shadow_page_isolate(engine, &isolate) == RECLAIM_OK);
+    TEST_ASSERT(shadow_test_mark_page_dying(engine, 1003U));
 
     TEST_ASSERT(shadow_collect_lruvec_candidates(engine, 40U, 0, &unlimited,
                                                   NULL, 0U, &result) == RECLAIM_OK);
-    TEST_ASSERT_EQ_U64(4U, result.nr_total_eligible);
+    TEST_ASSERT_EQ_U64(3U, result.nr_total_eligible);
     TEST_ASSERT_EQ_U64(0U, result.nr_candidates);
     TEST_ASSERT(result.truncated);
 
     TEST_ASSERT(shadow_collect_lruvec_candidates(engine, 40U, 0, &unlimited,
                                                   candidates, 2U, &result) == RECLAIM_OK);
-    TEST_ASSERT_EQ_U64(4U, result.nr_total_eligible);
+    TEST_ASSERT_EQ_U64(3U, result.nr_total_eligible);
     TEST_ASSERT_EQ_U64(2U, result.nr_candidates);
-    TEST_ASSERT_EQ_U64(2U, result.nr_truncated);
+    TEST_ASSERT_EQ_U64(1U, result.nr_truncated);
     TEST_ASSERT(result.truncated);
 
     TEST_ASSERT(shadow_collect_lruvec_candidates(engine, 40U, 0, &unlimited,
                                                   candidates, 4U, &result) == RECLAIM_OK);
-    TEST_ASSERT_EQ_U64(4U, result.nr_total_eligible);
-    TEST_ASSERT_EQ_U64(4U, result.nr_candidates);
+    TEST_ASSERT_EQ_U64(3U, result.nr_total_eligible);
+    TEST_ASSERT_EQ_U64(3U, result.nr_candidates);
     TEST_ASSERT(!result.truncated);
 
     TEST_ASSERT(shadow_collect_lruvec_candidates(engine, 40U, 0, &unlimited,
                                                   candidates, 8U, &result) == RECLAIM_OK);
-    TEST_ASSERT_EQ_U64(4U, result.nr_total_eligible);
-    TEST_ASSERT_EQ_U64(4U, result.nr_candidates);
+    TEST_ASSERT_EQ_U64(3U, result.nr_total_eligible);
+    TEST_ASSERT_EQ_U64(3U, result.nr_candidates);
     TEST_ASSERT(!result.truncated);
 
     TEST_ASSERT(shadow_collect_lruvec_candidates(engine, 40U, 1, &unlimited,

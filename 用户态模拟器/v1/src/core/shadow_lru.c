@@ -1165,7 +1165,7 @@ static void shadow_scan_locked(const struct shadow_lruvec *lruvec,
             const struct shadow_page *page = node->owner;
             unsigned long pages;
 
-            if (page == NULL || page->state != SHADOW_PAGE_ON_LRU ||
+            if (page == NULL || page->dying || page->state != SHADOW_PAGE_ON_LRU ||
                 page->current_lru != lru || page->container != lruvec) {
                 result->nr_skipped++;
                 continue;
@@ -1412,7 +1412,7 @@ static void shadow_collect_candidates_locked(const struct shadow_lruvec *lruvec,
             const struct shadow_page *page = node->owner;
             unsigned long pages;
 
-            if (page == NULL || page->state != SHADOW_PAGE_ON_LRU ||
+            if (page == NULL || page->dying || page->state != SHADOW_PAGE_ON_LRU ||
                 page->container != lruvec || page->current_lru != (enum shadow_lru_type)type) {
                 continue;
             }
