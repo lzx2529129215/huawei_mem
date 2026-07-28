@@ -319,6 +319,7 @@ static struct shadow_page *shadow_page_alloc(struct reclaim_engine *engine, uint
     }
     page->page_id = page_id;
     atomic_init(&page->refcount, 2U);
+    atomic_init(&page->last_event_seq, 0U);
     page->state = SHADOW_PAGE_DETACHED;
     page->isolated_from = SHADOW_LRU_ORIGIN_UNKNOWN;
     page->putback_hint = SHADOW_LRU_NR;
@@ -504,11 +505,13 @@ static enum shadow_event_action shadow_event_gate_locked(struct reclaim_engine *
                                                           struct shadow_page *page,
                                                           uint64_t event_seq)
 {
-    if (event_seq == page->last_event_seq) {
+    uint64_t last_event_seq = atomic_load(&page->last_event_seq);
+
+    if (event_seq == last_event_seq) {
         shadow_record_validation(engine, page->container, SHADOW_VALIDATION_DUPLICATE_EVENT);
         return SHADOW_EVENT_DUPLICATE;
     }
-    if (event_seq < page->last_event_seq) {
+    if (event_seq < last_event_seq) {
         shadow_record_validation(engine, page->container, SHADOW_VALIDATION_STALE_EVENT);
         return SHADOW_EVENT_STALE;
     }
@@ -517,7 +520,7 @@ static enum shadow_event_action shadow_event_gate_locked(struct reclaim_engine *
 
 static void shadow_event_commit_locked(struct shadow_page *page, uint64_t event_seq)
 {
-    page->last_event_seq = event_seq;
+    atomic_store(&page->last_event_seq, event_seq);
 }
 
 static struct shadow_domain *shadow_move_page_locked(struct reclaim_engine *engine,
@@ -540,6 +543,10 @@ static struct shadow_domain *shadow_move_page_locked(struct reclaim_engine *engi
     } else {
         pthread_mutex_lock(&target_lruvec->lock);
     }
+    if (old_domain != target_domain) {
+        page->domain = target_domain;
+        page->memcg_id = target_domain->memcg_id;
+    }
     if (target_isolated) {
         shadow_attach_isolated_locked(page, target_lruvec, origin, hint);
     } else {
@@ -550,17 +557,12 @@ static struct shadow_domain *shadow_move_page_locked(struct reclaim_engine *engi
     } else {
         pthread_mutex_unlock(&target_lruvec->lock);
     }
-    if (old_domain != target_domain) {
-        page->domain = target_domain;
-        page->memcg_id = target_domain->memcg_id;
-        return old_domain;
-    }
-    return target_domain;
+    return old_domain == target_domain ? target_domain : old_domain;
 }
 
-static void shadow_update_static_metadata(struct shadow_page *page,
-                                          enum reclaim_page_type page_type,
-                                          bool provisional)
+static void shadow_update_static_metadata_locked(struct shadow_page *page,
+                                                 enum reclaim_page_type page_type,
+                                                 bool provisional)
 {
     if (shadow_valid_page_type(page_type)) {
         page->page_type = page_type;
@@ -570,14 +572,49 @@ static void shadow_update_static_metadata(struct shadow_page *page,
     }
 }
 
-static void shadow_fill_static_metadata(struct shadow_page *page,
-                                        enum reclaim_page_type page_type,
-                                        uint32_t order)
+static void shadow_fill_static_metadata_locked(struct shadow_page *page,
+                                               enum reclaim_page_type page_type,
+                                               uint32_t order)
 {
     if (page->provisional) {
         page->page_type = page_type;
         page->order = order;
         page->provisional = false;
+    }
+}
+
+static void shadow_update_static_metadata(struct shadow_page *page,
+                                          enum reclaim_page_type page_type,
+                                          bool provisional,
+                                          bool update_order,
+                                          uint32_t order)
+{
+    struct shadow_lruvec *lruvec = page->container;
+
+    if (lruvec != NULL) {
+        pthread_mutex_lock(&lruvec->lock);
+    }
+    shadow_update_static_metadata_locked(page, page_type, provisional);
+    if (update_order) {
+        page->order = order;
+    }
+    if (lruvec != NULL) {
+        pthread_mutex_unlock(&lruvec->lock);
+    }
+}
+
+static void shadow_fill_static_metadata(struct shadow_page *page,
+                                        enum reclaim_page_type page_type,
+                                        uint32_t order)
+{
+    struct shadow_lruvec *lruvec = page->container;
+
+    if (lruvec != NULL) {
+        pthread_mutex_lock(&lruvec->lock);
+    }
+    shadow_fill_static_metadata_locked(page, page_type, order);
+    if (lruvec != NULL) {
+        pthread_mutex_unlock(&lruvec->lock);
     }
 }
 // #lzx--------------------------- 事件门控和迁移结束 ---------------------------
@@ -700,7 +737,7 @@ int shadow_page_add(struct reclaim_engine *engine, const struct shadow_page_add_
             return error;
         }
         pthread_mutex_lock(&page->lock);
-        page->last_event_seq = seq;
+        atomic_store(&page->last_event_seq, seq);
         page->page_type = event->page_type;
         page->order = event->order;
         page->domain = domain;
@@ -720,8 +757,7 @@ int shadow_page_add(struct reclaim_engine *engine, const struct shadow_page_add_
     action = shadow_event_gate_locked(engine, page, seq);
     if (action == SHADOW_EVENT_APPLY) {
         shadow_event_commit_locked(page, seq);
-        shadow_update_static_metadata(page, event->page_type, false);
-        page->order = event->order;
+        shadow_update_static_metadata(page, event->page_type, false, true, event->order);
     } else if (action == SHADOW_EVENT_STALE) {
         shadow_fill_static_metadata(page, event->page_type, event->order);
     }
@@ -761,7 +797,7 @@ int shadow_page_isolate(struct reclaim_engine *engine,
         }
         if (error != RECLAIM_OK) goto isolate_new_error;
         pthread_mutex_lock(&page->lock);
-        page->last_event_seq = seq;
+        atomic_store(&page->last_event_seq, seq);
         page->page_type = event->page_type;
         page->domain = target_domain;
         page->memcg_id = event->memcg_id;
@@ -810,7 +846,7 @@ int shadow_page_isolate(struct reclaim_engine *engine,
         target_lruvec->nr_isolate_events++;
         pthread_mutex_unlock(&target_lruvec->lock);
     }
-    shadow_update_static_metadata(page, event->page_type, false);
+    shadow_update_static_metadata(page, event->page_type, false, false, page->order);
     page->isolate_seq = seq;
     pthread_mutex_unlock(&page->lock);
     if (release_domain == NULL || release_domain == target_domain) {
@@ -860,7 +896,7 @@ int shadow_page_putback(struct reclaim_engine *engine,
                                                             &target_lruvec);
         if (error != RECLAIM_OK) goto putback_new_error;
         pthread_mutex_lock(&page->lock);
-        page->last_event_seq = seq;
+        atomic_store(&page->last_event_seq, seq);
         page->domain = target_domain;
         page->memcg_id = event->target_memcg_id;
         page->nid = event->target_nid;
@@ -1010,7 +1046,7 @@ int shadow_page_move(struct reclaim_engine *engine, const struct shadow_page_mov
         if (error != RECLAIM_OK) goto move_new_error;
         target_isolated = event->source_state == SHADOW_PAGE_ISOLATED;
         pthread_mutex_lock(&page->lock);
-        page->last_event_seq = seq;
+        atomic_store(&page->last_event_seq, seq);
         page->domain = target_domain;
         page->memcg_id = event->target_memcg_id;
         page->page_type = event->page_type;
@@ -1070,7 +1106,7 @@ int shadow_page_move(struct reclaim_engine *engine, const struct shadow_page_mov
     pthread_mutex_lock(&target_lruvec->lock);
     target_lruvec->nr_move_in++;
     pthread_mutex_unlock(&target_lruvec->lock);
-    shadow_update_static_metadata(page, event->page_type, false);
+    shadow_update_static_metadata(page, event->page_type, false, false, page->order);
     pthread_mutex_unlock(&page->lock);
     if (release_domain == NULL || release_domain == target_domain) {
         shadow_domain_put(engine, target_domain);
@@ -1166,7 +1202,7 @@ int shadow_page_get_info(struct reclaim_engine *engine,
         .current_lru = page->current_lru,
         .isolated_from = page->isolated_from,
         .putback_hint = page->putback_hint,
-        .last_event_seq = page->last_event_seq,
+        .last_event_seq = atomic_load(&page->last_event_seq),
         .isolate_seq = page->isolate_seq,
         .page_type = page->page_type,
         .provisional = page->provisional,

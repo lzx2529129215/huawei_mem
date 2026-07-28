@@ -59,6 +59,10 @@ domain 和 page 分别使用 refcount；从全局表取到对象后先取得引�
 校验器检查页面索引、链互斥、状态/容器对应关系、node key、计数和非法 UNKNOWN
 下标等不变量。校验标志保留重复/过期事件、未知事件、自愈和源位置不匹配的证据。
 
+`shadow_engine_validate()` 是 quiescent-only 接口：调用时不得并发执行 Shadow
+生命周期事件、扫描、候选收集或对象销毁。扫描可见的位置与分类字段由所属 lruvec 锁
+保护；`page.lock` 只串行化同一页面事件和序列门控。
+
 ## 边界
 
 本实现只覆盖用户态 Shadow 引擎。它不实现 Linux 6.17 的 L0.2/L0.3 适配，不修改

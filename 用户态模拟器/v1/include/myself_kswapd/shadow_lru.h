@@ -187,6 +187,10 @@ int shadow_scan_node(struct reclaim_engine *engine,
                      int nid,
                      const struct shadow_node_scan_request *request,
                      struct shadow_node_scan_result *result);
+/*
+ * #lzx: 仅可在没有并发 Shadow 事件、扫描、候选收集、domain destroy 或 engine destroy
+ * 的静止点调用；该接口不会在持有 lruvec.lock 时获取 page.lock。
+ */
 int shadow_engine_validate(struct reclaim_engine *engine,
                            struct reclaim_validation_report *report);
 uint64_t shadow_engine_event_seq(const struct reclaim_engine *engine);

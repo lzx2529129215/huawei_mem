@@ -81,7 +81,7 @@ struct shadow_page {
     enum shadow_lru_type current_lru;
     enum shadow_lru_origin isolated_from;
     enum shadow_lru_type putback_hint;
-    uint64_t last_event_seq;
+    atomic_uint_fast64_t last_event_seq;
     uint64_t isolate_seq;
     enum reclaim_page_type page_type;
     uint32_t order;
