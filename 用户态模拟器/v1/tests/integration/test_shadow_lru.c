@@ -1,10 +1,14 @@
 // #lzx: per-memcg-per-node Shadow LRU implementation
 
+#define _XOPEN_SOURCE 700
+
 #include "myself_kswapd/shadow_lru.h"
 #include "myself_kswapd/executor.h"
 #include "myself_kswapd/validator.h"
 #include "../../src/core/internal.h"
 #include "../test_support/test.h"
+
+static bool test_shadow_lru_reverse_move_concurrency(void);
 
 #include <pthread.h>
 
@@ -709,19 +713,485 @@ static bool test_shadow_lru_validator_bidirectional_faults(void)
 }
 // #lzx--------------------------- Shadow validator 双向故障注入测试结束 ---------------------------
 
+// #lzx--------------------------- Shadow 确定性交错并发测试 ---------------------------
+enum shadow_interleave_operation {
+    SHADOW_INTERLEAVE_MOVE,
+    SHADOW_INTERLEAVE_ISOLATE,
+    SHADOW_INTERLEAVE_PUTBACK,
+};
+
+struct shadow_interleave_context {
+    struct reclaim_engine *engine;
+    pthread_barrier_t barrier;
+    enum shadow_interleave_operation operation;
+    bool scan_holds_before_phase;
+    bool event_holds_before_phase;
+    uint64_t scan_memcg;
+    int scan_nid;
+    struct shadow_lruvec *scan_lruvec;
+    struct shadow_lruvec *event_left_lruvec;
+    struct shadow_lruvec *event_right_lruvec;
+    struct shadow_page_move_event move;
+    struct shadow_page_isolate_event isolate;
+    struct shadow_page_putback_event putback;
+    struct shadow_scan_result scan_result;
+    int scan_error;
+    int event_error;
+};
+
+static bool shadow_test_barrier_wait(pthread_barrier_t *barrier)
+{
+    int result = pthread_barrier_wait(barrier);
+
+    return result == 0 || result == PTHREAD_BARRIER_SERIAL_THREAD;
+}
+
+static struct shadow_lruvec *shadow_test_find_lruvec(struct reclaim_engine *engine,
+                                                      uint64_t memcg_id,
+                                                      int nid)
+{
+    size_t bucket;
+    struct shadow_domain *domain;
+
+    for (bucket = 0U; bucket < engine->shadow_domains.bucket_count; bucket++) {
+        for (domain = engine->shadow_domains.buckets[bucket]; domain != NULL;
+             domain = domain->hash_next) {
+            size_t node_bucket;
+            if (domain->memcg_id != memcg_id) {
+                continue;
+            }
+            for (node_bucket = 0U; node_bucket < domain->node_table.bucket_count; node_bucket++) {
+                struct shadow_lruvec *lruvec;
+                for (lruvec = domain->node_table.buckets[node_bucket]; lruvec != NULL;
+                     lruvec = lruvec->hash_next) {
+                    if (lruvec->nid == nid) {
+                        return lruvec;
+                    }
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+static void shadow_test_lock_event_lruvecs(struct shadow_interleave_context *context)
+{
+    if (context->event_left_lruvec == context->event_right_lruvec) {
+        pthread_mutex_lock(&context->event_left_lruvec->lock);
+    } else {
+        pthread_mutex_lock(&context->event_left_lruvec->lock);
+        pthread_mutex_lock(&context->event_right_lruvec->lock);
+    }
+}
+
+static void shadow_test_unlock_event_lruvecs(struct shadow_interleave_context *context)
+{
+    if (context->event_left_lruvec == context->event_right_lruvec) {
+        pthread_mutex_unlock(&context->event_left_lruvec->lock);
+    } else {
+        pthread_mutex_unlock(&context->event_right_lruvec->lock);
+        pthread_mutex_unlock(&context->event_left_lruvec->lock);
+    }
+}
+
+static void *shadow_interleave_scan_worker(void *argument)
+{
+    struct shadow_interleave_context *context = argument;
+    const struct shadow_scan_request request = {.max_pages = 16U, .max_candidates = 16U};
+
+    if (!shadow_test_barrier_wait(&context->barrier)) {
+        context->scan_error = RECLAIM_ERR_INTERNAL;
+        return (void *)1;
+    }
+    if (context->scan_holds_before_phase) {
+        pthread_mutex_lock(&context->scan_lruvec->lock);
+        if (!shadow_test_barrier_wait(&context->barrier)) {
+            pthread_mutex_unlock(&context->scan_lruvec->lock);
+            context->scan_error = RECLAIM_ERR_INTERNAL;
+            return (void *)1;
+        }
+        pthread_mutex_unlock(&context->scan_lruvec->lock);
+    } else if (!shadow_test_barrier_wait(&context->barrier)) {
+        context->scan_error = RECLAIM_ERR_INTERNAL;
+        return (void *)1;
+    }
+    context->scan_error = shadow_scan_lruvec(context->engine, context->scan_memcg,
+                                             context->scan_nid, &request,
+                                             &context->scan_result);
+    return NULL;
+}
+
+static void *shadow_interleave_event_worker(void *argument)
+{
+    struct shadow_interleave_context *context = argument;
+
+    if (!shadow_test_barrier_wait(&context->barrier)) {
+        context->event_error = RECLAIM_ERR_INTERNAL;
+        return (void *)1;
+    }
+    if (context->event_holds_before_phase) {
+        shadow_test_lock_event_lruvecs(context);
+        if (!shadow_test_barrier_wait(&context->barrier)) {
+            shadow_test_unlock_event_lruvecs(context);
+            context->event_error = RECLAIM_ERR_INTERNAL;
+            return (void *)1;
+        }
+        shadow_test_unlock_event_lruvecs(context);
+    } else if (!shadow_test_barrier_wait(&context->barrier)) {
+        context->event_error = RECLAIM_ERR_INTERNAL;
+        return (void *)1;
+    }
+    switch (context->operation) {
+    case SHADOW_INTERLEAVE_MOVE:
+        context->event_error = shadow_page_move(context->engine, &context->move);
+        break;
+    case SHADOW_INTERLEAVE_ISOLATE:
+        context->event_error = shadow_page_isolate(context->engine, &context->isolate);
+        break;
+    case SHADOW_INTERLEAVE_PUTBACK:
+        context->event_error = shadow_page_putback(context->engine, &context->putback);
+        break;
+    }
+    return context->event_error == RECLAIM_OK ? NULL : (void *)1;
+}
+
+static bool shadow_test_run_scan_interleave(enum shadow_interleave_operation operation,
+                                             bool scan_first)
+{
+    struct reclaim_userspace_platform platform;
+    struct reclaim_simulator_executor executor;
+    struct reclaim_engine *engine = NULL;
+    struct shadow_interleave_context context = {0};
+    struct shadow_candidate candidate;
+    struct shadow_candidate_validation validation;
+    const struct shadow_page_add_event add = {
+        .event_seq = 1U, .page_id = 1300U + (uint64_t)operation,
+        .memcg_id = 90U + (uint64_t)operation, .nid = 0,
+        .lru = SHADOW_LRU_INACTIVE_FILE, .page_type = RECLAIM_PAGE_FILE,
+    };
+    const struct shadow_page_add_event target_add = {
+        .event_seq = 2U, .page_id = 1310U + (uint64_t)operation,
+        .memcg_id = 90U + (uint64_t)operation, .nid = 1,
+        .lru = SHADOW_LRU_INACTIVE_FILE, .page_type = RECLAIM_PAGE_FILE,
+    };
+    const struct shadow_page_reclaimed_event target_reclaim = {
+        .event_seq = 3U, .page_id = 1310U + (uint64_t)operation,
+    };
+    pthread_t scan_thread;
+    pthread_t event_thread;
+    void *scan_result = NULL;
+    void *event_result = NULL;
+
+    reclaim_platform_userspace_init(&platform);
+    reclaim_simulator_executor_init(&executor);
+    if (reclaim_engine_create(&platform.platform, NULL, NULL,
+                              reclaim_simulator_executor_ops(), &executor, &engine) !=
+        RECLAIM_OK) {
+        return false;
+    }
+    if (shadow_page_add(engine, &add) != RECLAIM_OK) {
+        reclaim_engine_destroy(engine);
+        return false;
+    }
+    if (operation == SHADOW_INTERLEAVE_MOVE &&
+        (shadow_page_add(engine, &target_add) != RECLAIM_OK ||
+         shadow_page_reclaimed(engine, &target_reclaim) != RECLAIM_OK)) {
+        reclaim_engine_destroy(engine);
+        return false;
+    }
+    context.engine = engine;
+    context.operation = operation;
+    context.scan_memcg = add.memcg_id;
+    context.scan_nid = add.nid;
+    context.scan_lruvec = shadow_test_find_lruvec(engine, add.memcg_id, add.nid);
+    context.event_left_lruvec = context.scan_lruvec;
+    context.event_right_lruvec = context.scan_lruvec;
+    context.scan_holds_before_phase = scan_first;
+    context.event_holds_before_phase = !scan_first;
+    context.move = (struct shadow_page_move_event){
+        .event_seq = 10U, .page_id = add.page_id,
+        .source_memcg_id = add.memcg_id, .source_nid = 0,
+        .source_state = SHADOW_PAGE_ON_LRU, .source_lru = add.lru,
+        .target_memcg_id = add.memcg_id, .target_nid = 1,
+        .target_lru = SHADOW_LRU_ACTIVE_FILE,
+        .reason = SHADOW_MOVE_NUMA, .page_type = RECLAIM_PAGE_FILE,
+    };
+    context.isolate = (struct shadow_page_isolate_event){
+        .event_seq = 10U, .page_id = add.page_id,
+        .memcg_id = add.memcg_id, .nid = add.nid,
+        .source_lru = add.lru, .page_type = add.page_type,
+    };
+    context.putback = (struct shadow_page_putback_event){
+        .event_seq = 11U, .page_id = add.page_id,
+        .target_memcg_id = add.memcg_id, .target_nid = add.nid,
+        .target_lru = add.lru,
+    };
+    if (operation == SHADOW_INTERLEAVE_MOVE) {
+        context.event_right_lruvec = shadow_test_find_lruvec(engine, add.memcg_id, 1);
+    } else if (operation == SHADOW_INTERLEAVE_PUTBACK) {
+        struct shadow_page_isolate_event setup_isolate = context.isolate;
+        setup_isolate.event_seq = 4U;
+        if (!shadow_test_collect_one(engine, add.memcg_id, add.nid, &candidate) ||
+            shadow_page_isolate(engine, &setup_isolate) != RECLAIM_OK) {
+            reclaim_engine_destroy(engine);
+            return false;
+        }
+    } else if (!shadow_test_collect_one(engine, add.memcg_id, add.nid, &candidate)) {
+        reclaim_engine_destroy(engine);
+        return false;
+    }
+    if (operation == SHADOW_INTERLEAVE_MOVE &&
+        !shadow_test_collect_one(engine, add.memcg_id, add.nid, &candidate)) {
+        reclaim_engine_destroy(engine);
+        return false;
+    }
+    if (pthread_barrier_init(&context.barrier, NULL, 2U) != 0 ||
+        pthread_create(&scan_thread, NULL, shadow_interleave_scan_worker, &context) != 0 ||
+        pthread_create(&event_thread, NULL, shadow_interleave_event_worker, &context) != 0) {
+        reclaim_engine_destroy(engine);
+        return false;
+    }
+    (void)pthread_join(scan_thread, &scan_result);
+    (void)pthread_join(event_thread, &event_result);
+    pthread_barrier_destroy(&context.barrier);
+    if (scan_result != NULL || event_result != NULL || context.scan_error != RECLAIM_OK ||
+        context.event_error != RECLAIM_OK || shadow_engine_validate(engine, NULL) != RECLAIM_OK ||
+        shadow_candidate_revalidate(engine, &candidate, &validation) != RECLAIM_OK ||
+        validation.status == SHADOW_CANDIDATE_VALID) {
+        reclaim_engine_destroy(engine);
+        return false;
+    }
+    reclaim_engine_destroy(engine);
+    return reclaim_platform_userspace_live_allocations(&platform) == 0U;
+}
+
+struct shadow_reclaim_race_context {
+    struct reclaim_engine *engine;
+    pthread_barrier_t barrier;
+    bool move;
+    struct shadow_page_putback_event putback_event;
+    struct shadow_page_move_event move_event;
+    struct shadow_page_reclaimed_event reclaim_event;
+};
+
+struct shadow_reclaim_race_worker {
+    struct shadow_reclaim_race_context *context;
+    bool reclaim;
+};
+
+static void *shadow_reclaim_race_worker(void *argument)
+{
+    struct shadow_reclaim_race_worker *worker = argument;
+    struct shadow_reclaim_race_context *context = worker->context;
+    int error;
+
+    if (!shadow_test_barrier_wait(&context->barrier)) {
+        return (void *)1;
+    }
+    if (worker->reclaim) {
+        error = shadow_page_reclaimed(context->engine, &context->reclaim_event);
+    } else if (context->move) {
+        error = shadow_page_move(context->engine, &context->move_event);
+    } else {
+        error = shadow_page_putback(context->engine, &context->putback_event);
+    }
+    return error == RECLAIM_OK ? NULL : (void *)1;
+}
+
+static bool shadow_test_run_reclaim_race(bool putback)
+{
+    struct reclaim_userspace_platform platform;
+    struct reclaim_simulator_executor executor;
+    struct reclaim_engine *engine = NULL;
+    const struct shadow_page_add_event add = {
+        .event_seq = 1U, .page_id = putback ? 1401U : 1400U,
+        .memcg_id = 100U, .nid = 0,
+        .lru = SHADOW_LRU_INACTIVE_FILE, .page_type = RECLAIM_PAGE_FILE,
+    };
+    const struct shadow_page_isolate_event isolate = {
+        .event_seq = 2U, .page_id = putback ? 1401U : 1400U,
+        .memcg_id = 100U, .nid = 0,
+        .source_lru = SHADOW_LRU_INACTIVE_FILE, .page_type = RECLAIM_PAGE_FILE,
+    };
+    struct shadow_reclaim_race_context context = {0};
+    pthread_t first_thread;
+    pthread_t second_thread;
+    struct shadow_reclaim_race_worker first_worker;
+    struct shadow_reclaim_race_worker second_worker;
+    void *first_result = NULL;
+    void *second_result = NULL;
+    struct shadow_page_info info;
+    int info_error;
+    bool state_invalid;
+
+    reclaim_platform_userspace_init(&platform);
+    reclaim_simulator_executor_init(&executor);
+    if (reclaim_engine_create(&platform.platform, NULL, NULL,
+                              reclaim_simulator_executor_ops(), &executor, &engine) !=
+        RECLAIM_OK || shadow_page_add(engine, &add) != RECLAIM_OK ||
+        shadow_page_isolate(engine, &isolate) != RECLAIM_OK) {
+        reclaim_engine_destroy(engine);
+        return false;
+    }
+    context.engine = engine;
+    context.move = !putback;
+    context.putback_event = (struct shadow_page_putback_event){
+        .event_seq = 10U, .page_id = add.page_id,
+        .target_memcg_id = 100U, .target_nid = 0,
+        .target_lru = SHADOW_LRU_ACTIVE_FILE,
+    };
+    context.reclaim_event = (struct shadow_page_reclaimed_event){
+        .event_seq = 11U, .page_id = add.page_id,
+    };
+    context.move_event = (struct shadow_page_move_event){
+        .event_seq = 10U, .page_id = add.page_id,
+        .source_memcg_id = 100U, .source_nid = 0,
+        .source_state = SHADOW_PAGE_ISOLATED, .source_lru = add.lru,
+        .target_memcg_id = 100U, .target_nid = 0,
+        .target_lru = SHADOW_LRU_ACTIVE_FILE,
+        .reason = SHADOW_MOVE_NUMA, .page_type = RECLAIM_PAGE_FILE,
+    };
+    first_worker = (struct shadow_reclaim_race_worker){
+        .context = &context, .reclaim = false,
+    };
+    second_worker = (struct shadow_reclaim_race_worker){
+        .context = &context, .reclaim = true,
+    };
+    if (pthread_barrier_init(&context.barrier, NULL, 2U) != 0 ||
+        pthread_create(&first_thread, NULL, shadow_reclaim_race_worker, &first_worker) != 0 ||
+        pthread_create(&second_thread, NULL, shadow_reclaim_race_worker, &second_worker) != 0) {
+        reclaim_engine_destroy(engine);
+        return false;
+    }
+    (void)pthread_join(first_thread, &first_result);
+    (void)pthread_join(second_thread, &second_result);
+    pthread_barrier_destroy(&context.barrier);
+    info_error = shadow_page_get_info(engine, add.page_id, &info);
+    state_invalid = info_error == RECLAIM_OK &&
+                    ((putback && info.state != SHADOW_PAGE_ON_LRU) ||
+                     (!putback && info.state != SHADOW_PAGE_ISOLATED));
+    if (first_result != NULL || second_result != NULL ||
+        (info_error != RECLAIM_OK && info_error != RECLAIM_ERR_PAGE_NOT_FOUND) ||
+        state_invalid || shadow_engine_validate(engine, NULL) != RECLAIM_OK) {
+        reclaim_engine_destroy(engine);
+        return false;
+    }
+    reclaim_engine_destroy(engine);
+    return reclaim_platform_userspace_live_allocations(&platform) == 0U;
+}
+
+struct shadow_domain_destroy_context {
+    struct reclaim_engine *engine;
+    pthread_barrier_t barrier;
+    int scan_error;
+    int destroy_error;
+};
+
+static void *shadow_domain_scan_worker(void *argument)
+{
+    struct shadow_domain_destroy_context *context = argument;
+    const struct shadow_scan_request request = {.max_pages = 8U, .max_candidates = 8U};
+    struct shadow_scan_result result;
+
+    (void)shadow_test_barrier_wait(&context->barrier);
+    context->scan_error = shadow_scan_lruvec(context->engine, 102U, 0, &request, &result);
+    return NULL;
+}
+
+static void *shadow_domain_destroy_worker(void *argument)
+{
+    struct shadow_domain_destroy_context *context = argument;
+
+    (void)shadow_test_barrier_wait(&context->barrier);
+    context->destroy_error = shadow_engine_destroy_domain(context->engine, 102U);
+    return NULL;
+}
+
+static bool shadow_test_run_domain_destroy_race(void)
+{
+    struct reclaim_userspace_platform platform;
+    struct reclaim_simulator_executor executor;
+    struct reclaim_engine *engine = NULL;
+    const struct shadow_page_add_event add = {
+        .event_seq = 1U, .page_id = 1500U, .memcg_id = 102U, .nid = 0,
+        .lru = SHADOW_LRU_INACTIVE_FILE, .page_type = RECLAIM_PAGE_FILE,
+    };
+    const struct shadow_page_reclaimed_event reclaim = {.event_seq = 2U, .page_id = 1500U};
+    struct shadow_domain_destroy_context context = {0};
+    pthread_t scan_thread;
+    pthread_t destroy_thread;
+
+    reclaim_platform_userspace_init(&platform);
+    reclaim_simulator_executor_init(&executor);
+    if (reclaim_engine_create(&platform.platform, NULL, NULL,
+                              reclaim_simulator_executor_ops(), &executor, &engine) !=
+        RECLAIM_OK || shadow_page_add(engine, &add) != RECLAIM_OK ||
+        shadow_page_reclaimed(engine, &reclaim) != RECLAIM_OK) {
+        reclaim_engine_destroy(engine);
+        return false;
+    }
+    context.engine = engine;
+    if (pthread_barrier_init(&context.barrier, NULL, 2U) != 0 ||
+        pthread_create(&scan_thread, NULL, shadow_domain_scan_worker, &context) != 0 ||
+        pthread_create(&destroy_thread, NULL, shadow_domain_destroy_worker, &context) != 0) {
+        reclaim_engine_destroy(engine);
+        return false;
+    }
+    (void)pthread_join(scan_thread, NULL);
+    (void)pthread_join(destroy_thread, NULL);
+    pthread_barrier_destroy(&context.barrier);
+    if ((context.scan_error != RECLAIM_OK && context.scan_error != RECLAIM_ERR_DOMAIN_NOT_FOUND) ||
+        (context.destroy_error != RECLAIM_OK &&
+         context.destroy_error != RECLAIM_ERR_DOMAIN_NOT_FOUND) ||
+        shadow_engine_validate(engine, NULL) != RECLAIM_OK) {
+        reclaim_engine_destroy(engine);
+        return false;
+    }
+    reclaim_engine_destroy(engine);
+    return reclaim_platform_userspace_live_allocations(&platform) == 0U;
+}
+
+static bool test_shadow_lru_deterministic_interleavings(void)
+{
+    unsigned int round;
+
+    for (round = 0U; round < 100U; round++) {
+        TEST_ASSERT(shadow_test_run_scan_interleave(SHADOW_INTERLEAVE_MOVE, true));
+        TEST_ASSERT(shadow_test_run_scan_interleave(SHADOW_INTERLEAVE_MOVE, false));
+        TEST_ASSERT(shadow_test_run_scan_interleave(SHADOW_INTERLEAVE_ISOLATE, true));
+        TEST_ASSERT(shadow_test_run_scan_interleave(SHADOW_INTERLEAVE_ISOLATE, false));
+        TEST_ASSERT(shadow_test_run_scan_interleave(SHADOW_INTERLEAVE_PUTBACK, true));
+        TEST_ASSERT(shadow_test_run_scan_interleave(SHADOW_INTERLEAVE_PUTBACK, false));
+        TEST_ASSERT(shadow_test_run_reclaim_race(false));
+        TEST_ASSERT(shadow_test_run_reclaim_race(true));
+        TEST_ASSERT(shadow_test_run_domain_destroy_race());
+        TEST_ASSERT(test_shadow_lru_reverse_move_concurrency());
+    }
+    return true;
+}
+// #lzx--------------------------- Shadow 确定性交错并发测试结束 ---------------------------
+
 // #lzx--------------------------- Shadow LRU 反向迁移并发测试 ---------------------------
 struct shadow_move_worker {
     struct reclaim_engine *engine;
     uint64_t page_id;
     bool starts_left;
+    pthread_barrier_t *start_barrier;
 };
 
 static void *shadow_reverse_move_worker(void *context)
 {
     struct shadow_move_worker *worker = context;
     unsigned int index;
+    int barrier_result;
 
     for (index = 0U; index < 1000U; index++) {
+        if (index == 0U && worker->start_barrier != NULL) {
+            barrier_result = pthread_barrier_wait(worker->start_barrier);
+            if (barrier_result != 0 && barrier_result != PTHREAD_BARRIER_SERIAL_THREAD) {
+                return (void *)1;
+            }
+        }
         bool left_to_right = (index % 2U == 0U) == worker->starts_left;
         struct shadow_page_move_event event = {
             .page_id = worker->page_id,
@@ -758,6 +1228,7 @@ static bool test_shadow_lru_reverse_move_concurrency(void)
     };
     struct shadow_move_worker first = {.page_id = 400U, .starts_left = true};
     struct shadow_move_worker second = {.page_id = 401U, .starts_left = false};
+    pthread_barrier_t start_barrier;
     pthread_t first_thread;
     pthread_t second_thread;
     void *first_result = NULL;
@@ -770,14 +1241,18 @@ static bool test_shadow_lru_reverse_move_concurrency(void)
                                       &engine) == RECLAIM_OK);
     TEST_ASSERT(shadow_page_add(engine, &left) == RECLAIM_OK);
     TEST_ASSERT(shadow_page_add(engine, &right) == RECLAIM_OK);
+    TEST_ASSERT(pthread_barrier_init(&start_barrier, NULL, 2U) == 0);
     first.engine = engine;
     second.engine = engine;
+    first.start_barrier = &start_barrier;
+    second.start_barrier = &start_barrier;
     TEST_ASSERT(pthread_create(&first_thread, NULL, shadow_reverse_move_worker, &first) == 0);
     TEST_ASSERT(pthread_create(&second_thread, NULL, shadow_reverse_move_worker, &second) == 0);
     TEST_ASSERT(pthread_join(first_thread, &first_result) == 0);
     TEST_ASSERT(pthread_join(second_thread, &second_result) == 0);
     TEST_ASSERT(first_result == NULL);
     TEST_ASSERT(second_result == NULL);
+    pthread_barrier_destroy(&start_barrier);
     TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
     reclaim_engine_destroy(engine);
     TEST_ASSERT_EQ_U64(0U, reclaim_platform_userspace_live_allocations(&platform));
@@ -804,6 +1279,8 @@ void register_test_shadow_lru(void)
                           test_shadow_lru_candidate_invalidation_matrix); // #lzx
     reclaim_test_register("shadow lru validator bidirectional faults", // #lzx
                           test_shadow_lru_validator_bidirectional_faults); // #lzx
+    reclaim_test_register("shadow lru deterministic interleavings", // #lzx
+                          test_shadow_lru_deterministic_interleavings); // #lzx
     reclaim_test_register("shadow lru reverse move concurrency", // #lzx
                           test_shadow_lru_reverse_move_concurrency); // #lzx
 }
