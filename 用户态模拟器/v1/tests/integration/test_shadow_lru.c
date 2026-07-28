@@ -2,6 +2,7 @@
 
 #include "myself_kswapd/shadow_lru.h"
 #include "myself_kswapd/executor.h"
+#include "myself_kswapd/validator.h"
 #include "../../src/core/internal.h"
 #include "../test_support/test.h"
 
@@ -440,6 +441,26 @@ static bool shadow_test_collect_one(struct reclaim_engine *engine,
     return true;
 }
 
+static struct shadow_page *shadow_test_find_page(struct reclaim_engine *engine,
+                                                  uint64_t page_id)
+{
+    size_t bucket;
+    struct shadow_page *page;
+
+    pthread_mutex_lock(&engine->shadow_page_table_lock);
+    for (bucket = 0U; bucket < engine->shadow_pages.bucket_count; bucket++) {
+        for (page = engine->shadow_pages.buckets[bucket]; page != NULL;
+             page = page->hash_next) {
+            if (page->page_id == page_id) {
+                pthread_mutex_unlock(&engine->shadow_page_table_lock);
+                return page;
+            }
+        }
+    }
+    pthread_mutex_unlock(&engine->shadow_page_table_lock);
+    return NULL;
+}
+
 // #lzx--------------------------- Shadow 候选失效矩阵测试 ---------------------------
 static bool test_shadow_lru_candidate_invalidation_matrix(void)
 {
@@ -568,6 +589,126 @@ static bool test_shadow_lru_candidate_invalidation_matrix(void)
 }
 // #lzx--------------------------- Shadow 候选失效矩阵测试结束 ---------------------------
 
+// #lzx--------------------------- Shadow validator 双向故障注入测试 ---------------------------
+static bool test_shadow_lru_validator_bidirectional_faults(void)
+{
+    struct reclaim_userspace_platform platform;
+    struct reclaim_simulator_executor executor;
+    struct reclaim_engine *engine = NULL;
+    const struct shadow_page_add_event add = {
+        .event_seq = 1U, .page_id = 1200U, .memcg_id = 80U, .nid = 0,
+        .lru = SHADOW_LRU_INACTIVE_ANON, .page_type = RECLAIM_PAGE_ANON,
+    };
+    struct reclaim_validation_report report;
+    struct shadow_page *page;
+    struct shadow_lruvec *lruvec;
+    enum shadow_lru_type lru;
+    struct shadow_page **saved_table_cursor = NULL;
+    struct shadow_page *saved_hash_next = NULL;
+    struct reclaim_list_node orphan = {0};
+    size_t bucket;
+    uint64_t flags;
+
+    reclaim_platform_userspace_init(&platform);
+    reclaim_simulator_executor_init(&executor);
+    TEST_ASSERT(reclaim_engine_create(&platform.platform, NULL, NULL,
+                                      reclaim_simulator_executor_ops(), &executor,
+                                      &engine) == RECLAIM_OK);
+    TEST_ASSERT(shadow_page_add(engine, &add) == RECLAIM_OK);
+    TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_OK);
+    page = shadow_test_find_page(engine, 1200U);
+    TEST_ASSERT(page != NULL);
+    lruvec = page->container;
+    lru = page->current_lru;
+
+    /* Chain entry exists, but the page-table reverse edge is removed. */
+    pthread_mutex_lock(&engine->shadow_page_table_lock);
+    for (bucket = 0U; bucket < engine->shadow_pages.bucket_count; bucket++) {
+        struct shadow_page **cursor;
+        for (cursor = &engine->shadow_pages.buckets[bucket]; *cursor != NULL;
+             cursor = &(*cursor)->hash_next) {
+            if (*cursor == page) {
+                saved_table_cursor = cursor;
+                saved_hash_next = page->hash_next;
+                *cursor = page->hash_next;
+                page->hash_next = NULL;
+                break;
+            }
+        }
+        if (saved_table_cursor != NULL) {
+            break;
+        }
+    }
+    pthread_mutex_unlock(&engine->shadow_page_table_lock);
+    TEST_ASSERT(saved_table_cursor != NULL);
+    TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_ERR_VALIDATION);
+    *saved_table_cursor = page;
+    page->hash_next = saved_hash_next;
+    TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
+
+    /* Table entry says linked, but no chain contains the page. */
+    reclaim_list_remove(&lruvec->lists[lru], &page->list_node);
+    lruvec->nr_pages[lru]--;
+    page->list_node.list = &lruvec->lists[lru];
+    TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_ERR_VALIDATION);
+    flags = shadow_engine_validation_flags(engine);
+    TEST_ASSERT((flags & SHADOW_VALIDATION_CHAIN_STATE_MISMATCH) != 0U);
+    page->list_node.list = NULL;
+    reclaim_list_push_back(&lruvec->lists[lru], &page->list_node);
+    lruvec->nr_pages[lru]++;
+    TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
+
+    /* A second chain node names the same page; matching counters must not hide it. */
+    orphan.owner = page;
+    reclaim_list_push_back(&lruvec->lists[lru], &orphan);
+    lruvec->nr_pages[lru]++;
+    TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_ERR_VALIDATION);
+    reclaim_list_remove(&lruvec->lists[lru], &orphan);
+    lruvec->nr_pages[lru]--;
+    TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
+
+    page->memcg_id = 81U;
+    TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_ERR_VALIDATION);
+    page->memcg_id = 80U;
+    TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
+
+    page->nid = 1;
+    TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_ERR_VALIDATION);
+    page->nid = 0;
+    TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
+
+    page->current_lru = SHADOW_LRU_NR;
+    TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_ERR_VALIDATION);
+    page->current_lru = lru;
+    TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
+
+    lruvec->nr_pages[lru]++;
+    TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_ERR_VALIDATION);
+    lruvec->nr_pages[lru]--;
+    TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
+
+    lruvec->nid = 1;
+    TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_ERR_VALIDATION);
+    lruvec->nid = 0;
+    TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
+
+    page->state = SHADOW_PAGE_ISOLATED;
+    TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_ERR_VALIDATION);
+    page->state = SHADOW_PAGE_ON_LRU;
+    TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
+
+    /* Temporary validator collections must fail closed on allocation failure. */
+    reclaim_platform_userspace_set_fail_after(&platform, 0L);
+    TEST_ASSERT(shadow_engine_validate(engine, &report) == RECLAIM_ERR_NO_MEMORY);
+    reclaim_platform_userspace_set_fail_after(&platform, -1L);
+    TEST_ASSERT(shadow_engine_validate(engine, NULL) == RECLAIM_OK);
+
+    reclaim_engine_destroy(engine);
+    TEST_ASSERT_EQ_U64(0U, reclaim_platform_userspace_live_allocations(&platform));
+    return true;
+}
+// #lzx--------------------------- Shadow validator 双向故障注入测试结束 ---------------------------
+
 // #lzx--------------------------- Shadow LRU 反向迁移并发测试 ---------------------------
 struct shadow_move_worker {
     struct reclaim_engine *engine;
@@ -661,6 +802,8 @@ void register_test_shadow_lru(void)
                           test_shadow_lru_candidate_collection_matrix); // #lzx
     reclaim_test_register("shadow lru candidate invalidation matrix", // #lzx
                           test_shadow_lru_candidate_invalidation_matrix); // #lzx
+    reclaim_test_register("shadow lru validator bidirectional faults", // #lzx
+                          test_shadow_lru_validator_bidirectional_faults); // #lzx
     reclaim_test_register("shadow lru reverse move concurrency", // #lzx
                           test_shadow_lru_reverse_move_concurrency); // #lzx
 }
