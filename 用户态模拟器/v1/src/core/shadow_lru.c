@@ -1376,6 +1376,7 @@ static void shadow_collect_candidates_locked(const struct shadow_lruvec *lruvec,
                 page->container != lruvec || page->current_lru != (enum shadow_lru_type)type) {
                 continue;
             }
+            result->nr_total_eligible++;
             pages = shadow_page_base_pages(page);
             if (request->max_pages != 0U && result->nr_pages_collected + pages >
                 request->max_pages) {
@@ -1398,6 +1399,7 @@ static void shadow_collect_candidates_locked(const struct shadow_lruvec *lruvec,
             result->nr_pages_collected += pages;
         }
     }
+    result->truncated = result->nr_truncated != 0U;
 }
 
 int shadow_collect_lruvec_candidates(struct reclaim_engine *engine,

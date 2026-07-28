@@ -2,6 +2,7 @@
 
 #include "myself_kswapd/shadow_lru.h"
 #include "myself_kswapd/executor.h"
+#include "../../src/core/internal.h"
 #include "../test_support/test.h"
 
 #include <pthread.h>
@@ -316,6 +317,257 @@ static bool test_shadow_lru_candidates_revalidate(void)
 }
 // #lzx--------------------------- Shadow 候选快照与重验证测试结束 ---------------------------
 
+// #lzx--------------------------- Shadow 候选完整收集矩阵测试 ---------------------------
+static bool test_shadow_lru_candidate_collection_matrix(void)
+{
+    struct reclaim_userspace_platform platform;
+    struct reclaim_simulator_executor executor;
+    struct reclaim_engine *engine = NULL;
+    const struct shadow_page_add_event adds[] = {
+        {.page_id = 1000U, .memcg_id = 40U, .nid = 0,
+         .lru = SHADOW_LRU_INACTIVE_ANON, .page_type = RECLAIM_PAGE_ANON},
+        {.page_id = 1001U, .memcg_id = 40U, .nid = 0,
+         .lru = SHADOW_LRU_ACTIVE_ANON, .page_type = RECLAIM_PAGE_ANON},
+        {.page_id = 1002U, .memcg_id = 40U, .nid = 0,
+         .lru = SHADOW_LRU_INACTIVE_FILE, .page_type = RECLAIM_PAGE_FILE},
+        {.page_id = 1003U, .memcg_id = 40U, .nid = 0,
+         .lru = SHADOW_LRU_ACTIVE_FILE, .page_type = RECLAIM_PAGE_FILE},
+        {.page_id = 1004U, .memcg_id = 40U, .nid = 1,
+         .lru = SHADOW_LRU_INACTIVE_FILE, .page_type = RECLAIM_PAGE_FILE},
+        {.page_id = 1005U, .memcg_id = 41U, .nid = 0,
+         .lru = SHADOW_LRU_ACTIVE_FILE, .page_type = RECLAIM_PAGE_FILE},
+        {.page_id = 1006U, .memcg_id = 40U, .nid = 0,
+         .lru = SHADOW_LRU_INACTIVE_FILE, .page_type = RECLAIM_PAGE_FILE},
+    };
+    const struct shadow_page_isolate_event isolate = {
+        .event_seq = 20U, .page_id = 1006U, .memcg_id = 40U, .nid = 0,
+        .source_lru = SHADOW_LRU_INACTIVE_FILE, .page_type = RECLAIM_PAGE_FILE,
+    };
+    const struct shadow_candidate_request unlimited = {
+        .max_pages = 0U, .max_candidates = 0U,
+    };
+    struct shadow_candidate candidates[8];
+    struct shadow_candidate_result result;
+    size_t index;
+
+    reclaim_platform_userspace_init(&platform);
+    reclaim_simulator_executor_init(&executor);
+    TEST_ASSERT(reclaim_engine_create(&platform.platform, NULL, NULL,
+                                      reclaim_simulator_executor_ops(), &executor,
+                                      &engine) == RECLAIM_OK);
+    for (index = 0U; index < sizeof(adds) / sizeof(adds[0]); index++) {
+        TEST_ASSERT(shadow_page_add(engine, &adds[index]) == RECLAIM_OK);
+    }
+    TEST_ASSERT(shadow_page_isolate(engine, &isolate) == RECLAIM_OK);
+
+    TEST_ASSERT(shadow_collect_lruvec_candidates(engine, 40U, 0, &unlimited,
+                                                  NULL, 0U, &result) == RECLAIM_OK);
+    TEST_ASSERT_EQ_U64(4U, result.nr_total_eligible);
+    TEST_ASSERT_EQ_U64(0U, result.nr_candidates);
+    TEST_ASSERT(result.truncated);
+
+    TEST_ASSERT(shadow_collect_lruvec_candidates(engine, 40U, 0, &unlimited,
+                                                  candidates, 2U, &result) == RECLAIM_OK);
+    TEST_ASSERT_EQ_U64(4U, result.nr_total_eligible);
+    TEST_ASSERT_EQ_U64(2U, result.nr_candidates);
+    TEST_ASSERT_EQ_U64(2U, result.nr_truncated);
+    TEST_ASSERT(result.truncated);
+
+    TEST_ASSERT(shadow_collect_lruvec_candidates(engine, 40U, 0, &unlimited,
+                                                  candidates, 4U, &result) == RECLAIM_OK);
+    TEST_ASSERT_EQ_U64(4U, result.nr_total_eligible);
+    TEST_ASSERT_EQ_U64(4U, result.nr_candidates);
+    TEST_ASSERT(!result.truncated);
+
+    TEST_ASSERT(shadow_collect_lruvec_candidates(engine, 40U, 0, &unlimited,
+                                                  candidates, 8U, &result) == RECLAIM_OK);
+    TEST_ASSERT_EQ_U64(4U, result.nr_total_eligible);
+    TEST_ASSERT_EQ_U64(4U, result.nr_candidates);
+    TEST_ASSERT(!result.truncated);
+
+    TEST_ASSERT(shadow_collect_lruvec_candidates(engine, 40U, 1, &unlimited,
+                                                  candidates, 8U, &result) == RECLAIM_OK);
+    TEST_ASSERT_EQ_U64(1U, result.nr_total_eligible);
+    TEST_ASSERT_EQ_U64(1U, result.nr_candidates);
+    TEST_ASSERT_EQ_U64(1004U, candidates[0].page_id);
+    TEST_ASSERT(shadow_collect_lruvec_candidates(engine, 41U, 0, &unlimited,
+                                                  candidates, 8U, &result) == RECLAIM_OK);
+    TEST_ASSERT_EQ_U64(1U, result.nr_total_eligible);
+    TEST_ASSERT_EQ_U64(1U, result.nr_candidates);
+    TEST_ASSERT_EQ_U64(1005U, candidates[0].page_id);
+
+    reclaim_engine_destroy(engine);
+    TEST_ASSERT_EQ_U64(0U, reclaim_platform_userspace_live_allocations(&platform));
+    return true;
+}
+// #lzx--------------------------- Shadow 候选完整收集矩阵测试结束 ---------------------------
+
+static bool shadow_test_mark_page_dying(struct reclaim_engine *engine, uint64_t page_id)
+{
+    size_t bucket;
+    struct shadow_page *page;
+
+    pthread_mutex_lock(&engine->shadow_page_table_lock);
+    for (bucket = 0U; bucket < engine->shadow_pages.bucket_count; bucket++) {
+        for (page = engine->shadow_pages.buckets[bucket]; page != NULL;
+             page = page->hash_next) {
+            if (page->page_id == page_id) {
+                page->dying = true;
+                pthread_mutex_unlock(&engine->shadow_page_table_lock);
+                return true;
+            }
+        }
+    }
+    pthread_mutex_unlock(&engine->shadow_page_table_lock);
+    return false;
+}
+
+static bool shadow_test_collect_one(struct reclaim_engine *engine,
+                                    uint64_t memcg_id,
+                                    int nid,
+                                    struct shadow_candidate *candidate)
+{
+    const struct shadow_candidate_request request = {
+        .max_pages = 1U, .max_candidates = 1U,
+    };
+    struct shadow_candidate_result result;
+
+    if (shadow_collect_lruvec_candidates(engine, memcg_id, nid, &request,
+                                         candidate, 1U, &result) != RECLAIM_OK ||
+        result.nr_candidates != 1U) {
+        return false;
+    }
+    return true;
+}
+
+// #lzx--------------------------- Shadow 候选失效矩阵测试 ---------------------------
+static bool test_shadow_lru_candidate_invalidation_matrix(void)
+{
+    struct reclaim_userspace_platform platform;
+    struct reclaim_simulator_executor executor;
+    struct reclaim_engine *engine = NULL;
+    const struct shadow_page_add_event adds[] = {
+        {.event_seq = 1U, .page_id = 1100U, .memcg_id = 60U, .nid = 0,
+         .lru = SHADOW_LRU_INACTIVE_ANON, .page_type = RECLAIM_PAGE_ANON},
+        {.event_seq = 2U, .page_id = 1101U, .memcg_id = 62U, .nid = 0,
+         .lru = SHADOW_LRU_INACTIVE_ANON, .page_type = RECLAIM_PAGE_ANON},
+        {.event_seq = 3U, .page_id = 1102U, .memcg_id = 64U, .nid = 0,
+         .lru = SHADOW_LRU_INACTIVE_ANON, .page_type = RECLAIM_PAGE_ANON},
+        {.event_seq = 4U, .page_id = 1103U, .memcg_id = 66U, .nid = 0,
+         .lru = SHADOW_LRU_INACTIVE_ANON, .page_type = RECLAIM_PAGE_ANON},
+        {.event_seq = 5U, .page_id = 1104U, .memcg_id = 68U, .nid = 0,
+         .lru = SHADOW_LRU_INACTIVE_ANON, .page_type = RECLAIM_PAGE_ANON},
+        {.event_seq = 6U, .page_id = 1105U, .memcg_id = 70U, .nid = 0,
+         .lru = SHADOW_LRU_INACTIVE_ANON, .page_type = RECLAIM_PAGE_ANON},
+        {.event_seq = 7U, .page_id = 1106U, .memcg_id = 72U, .nid = 0,
+         .lru = SHADOW_LRU_INACTIVE_ANON, .page_type = RECLAIM_PAGE_ANON},
+        {.event_seq = 8U, .page_id = 1107U, .memcg_id = 74U, .nid = 0,
+         .lru = SHADOW_LRU_INACTIVE_ANON, .page_type = RECLAIM_PAGE_ANON},
+    };
+    const struct shadow_page_move_event move_nid = {
+        .event_seq = 20U, .page_id = 1100U,
+        .source_memcg_id = 60U, .source_nid = 0,
+        .source_state = SHADOW_PAGE_ON_LRU, .source_lru = SHADOW_LRU_INACTIVE_ANON,
+        .target_memcg_id = 60U, .target_nid = 1,
+        .target_lru = SHADOW_LRU_INACTIVE_ANON,
+        .reason = SHADOW_MOVE_NUMA, .page_type = RECLAIM_PAGE_ANON,
+    };
+    const struct shadow_page_move_event move_memcg = {
+        .event_seq = 21U, .page_id = 1101U,
+        .source_memcg_id = 62U, .source_nid = 0,
+        .source_state = SHADOW_PAGE_ON_LRU, .source_lru = SHADOW_LRU_INACTIVE_ANON,
+        .target_memcg_id = 63U, .target_nid = 0,
+        .target_lru = SHADOW_LRU_INACTIVE_ANON,
+        .reason = SHADOW_MOVE_MEMCG, .page_type = RECLAIM_PAGE_ANON,
+    };
+    const struct shadow_page_move_event move_both = {
+        .event_seq = 22U, .page_id = 1102U,
+        .source_memcg_id = 64U, .source_nid = 0,
+        .source_state = SHADOW_PAGE_ON_LRU, .source_lru = SHADOW_LRU_INACTIVE_ANON,
+        .target_memcg_id = 65U, .target_nid = 1,
+        .target_lru = SHADOW_LRU_INACTIVE_ANON,
+        .reason = SHADOW_MOVE_MEMCG_AND_NUMA, .page_type = RECLAIM_PAGE_ANON,
+    };
+    const struct shadow_page_isolate_event isolate = {
+        .event_seq = 23U, .page_id = 1103U, .memcg_id = 66U, .nid = 0,
+        .source_lru = SHADOW_LRU_INACTIVE_ANON, .page_type = RECLAIM_PAGE_ANON,
+    };
+    const struct shadow_page_move_event move_lru = {
+        .event_seq = 24U, .page_id = 1104U,
+        .source_memcg_id = 68U, .source_nid = 0,
+        .source_state = SHADOW_PAGE_ON_LRU, .source_lru = SHADOW_LRU_INACTIVE_ANON,
+        .target_memcg_id = 68U, .target_nid = 0,
+        .target_lru = SHADOW_LRU_ACTIVE_ANON,
+        .reason = SHADOW_MOVE_MEMCG_AND_NUMA, .page_type = RECLAIM_PAGE_ANON,
+    };
+    const struct shadow_page_add_event refresh_seq = {
+        .event_seq = 25U, .page_id = 1105U, .memcg_id = 70U, .nid = 0,
+        .lru = SHADOW_LRU_INACTIVE_ANON, .page_type = RECLAIM_PAGE_ANON,
+    };
+    const struct shadow_page_reclaimed_event reclaim = {
+        .event_seq = 26U, .page_id = 1107U,
+    };
+    struct shadow_candidate candidate;
+    struct shadow_candidate_validation validation;
+    size_t index;
+
+    reclaim_platform_userspace_init(&platform);
+    reclaim_simulator_executor_init(&executor);
+    TEST_ASSERT(reclaim_engine_create(&platform.platform, NULL, NULL,
+                                      reclaim_simulator_executor_ops(), &executor,
+                                      &engine) == RECLAIM_OK);
+    for (index = 0U; index < sizeof(adds) / sizeof(adds[0]); index++) {
+        TEST_ASSERT(shadow_page_add(engine, &adds[index]) == RECLAIM_OK);
+    }
+
+    TEST_ASSERT(shadow_test_collect_one(engine, 60U, 0, &candidate));
+    TEST_ASSERT(shadow_candidate_revalidate(engine, &candidate, &validation) == RECLAIM_OK);
+    TEST_ASSERT(validation.status == SHADOW_CANDIDATE_VALID);
+    TEST_ASSERT(shadow_page_move(engine, &move_nid) == RECLAIM_OK);
+    TEST_ASSERT(shadow_candidate_revalidate(engine, &candidate, &validation) == RECLAIM_OK);
+    TEST_ASSERT(validation.status == SHADOW_CANDIDATE_LOCATION_CHANGED);
+
+    TEST_ASSERT(shadow_test_collect_one(engine, 62U, 0, &candidate));
+    TEST_ASSERT(shadow_page_move(engine, &move_memcg) == RECLAIM_OK);
+    TEST_ASSERT(shadow_candidate_revalidate(engine, &candidate, &validation) == RECLAIM_OK);
+    TEST_ASSERT(validation.status == SHADOW_CANDIDATE_LOCATION_CHANGED);
+
+    TEST_ASSERT(shadow_test_collect_one(engine, 64U, 0, &candidate));
+    TEST_ASSERT(shadow_page_move(engine, &move_both) == RECLAIM_OK);
+    TEST_ASSERT(shadow_candidate_revalidate(engine, &candidate, &validation) == RECLAIM_OK);
+    TEST_ASSERT(validation.status == SHADOW_CANDIDATE_LOCATION_CHANGED);
+
+    TEST_ASSERT(shadow_test_collect_one(engine, 66U, 0, &candidate));
+    TEST_ASSERT(shadow_page_isolate(engine, &isolate) == RECLAIM_OK);
+    TEST_ASSERT(shadow_candidate_revalidate(engine, &candidate, &validation) == RECLAIM_OK);
+    TEST_ASSERT(validation.status == SHADOW_CANDIDATE_STATE_CHANGED);
+
+    TEST_ASSERT(shadow_test_collect_one(engine, 68U, 0, &candidate));
+    TEST_ASSERT(shadow_page_move(engine, &move_lru) == RECLAIM_OK);
+    TEST_ASSERT(shadow_candidate_revalidate(engine, &candidate, &validation) == RECLAIM_OK);
+    TEST_ASSERT(validation.status == SHADOW_CANDIDATE_LRU_CHANGED);
+
+    TEST_ASSERT(shadow_test_collect_one(engine, 70U, 0, &candidate));
+    TEST_ASSERT(shadow_page_add(engine, &refresh_seq) == RECLAIM_OK);
+    TEST_ASSERT(shadow_candidate_revalidate(engine, &candidate, &validation) == RECLAIM_OK);
+    TEST_ASSERT(validation.status == SHADOW_CANDIDATE_EVENT_SEQ_CHANGED);
+
+    TEST_ASSERT(shadow_test_collect_one(engine, 72U, 0, &candidate));
+    TEST_ASSERT(shadow_test_mark_page_dying(engine, 1106U));
+    TEST_ASSERT(shadow_candidate_revalidate(engine, &candidate, &validation) == RECLAIM_OK);
+    TEST_ASSERT(validation.status == SHADOW_CANDIDATE_PAGE_DYING);
+
+    TEST_ASSERT(shadow_test_collect_one(engine, 74U, 0, &candidate));
+    TEST_ASSERT(shadow_page_reclaimed(engine, &reclaim) == RECLAIM_OK);
+    TEST_ASSERT(shadow_candidate_revalidate(engine, &candidate, &validation) == RECLAIM_OK);
+    TEST_ASSERT(validation.status == SHADOW_CANDIDATE_PAGE_MISSING);
+
+    reclaim_engine_destroy(engine);
+    TEST_ASSERT_EQ_U64(0U, reclaim_platform_userspace_live_allocations(&platform));
+    return true;
+}
+// #lzx--------------------------- Shadow 候选失效矩阵测试结束 ---------------------------
+
 // #lzx--------------------------- Shadow LRU 反向迁移并发测试 ---------------------------
 struct shadow_move_worker {
     struct reclaim_engine *engine;
@@ -405,6 +657,10 @@ void register_test_shadow_lru(void)
                           test_shadow_lru_move_and_node_scan); // #lzx
     reclaim_test_register("shadow lru candidates revalidate", // #lzx
                           test_shadow_lru_candidates_revalidate); // #lzx
+    reclaim_test_register("shadow lru candidate collection matrix", // #lzx
+                          test_shadow_lru_candidate_collection_matrix); // #lzx
+    reclaim_test_register("shadow lru candidate invalidation matrix", // #lzx
+                          test_shadow_lru_candidate_invalidation_matrix); // #lzx
     reclaim_test_register("shadow lru reverse move concurrency", // #lzx
                           test_shadow_lru_reverse_move_concurrency); // #lzx
 }

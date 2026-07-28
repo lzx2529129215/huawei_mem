@@ -185,9 +185,11 @@ struct shadow_candidate_request {
 };
 
 struct shadow_candidate_result {
+    size_t nr_total_eligible;
     size_t nr_candidates;
     size_t nr_truncated;
     unsigned long nr_pages_collected;
+    bool truncated;
 };
 
 struct shadow_candidate_validation {
