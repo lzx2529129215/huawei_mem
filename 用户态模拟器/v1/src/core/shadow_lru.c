@@ -1499,72 +1499,273 @@ static int shadow_validation_fail(struct reclaim_validation_report *report,
     return RECLAIM_ERR_VALIDATION;
 }
 
-static bool shadow_page_is_indexed_quiescent(const struct reclaim_engine *engine,
-                                              const struct shadow_page *needle)
-{
+struct shadow_validation_page_entry {
     const struct shadow_page *page;
-    size_t bucket = shadow_hash(needle->page_id, engine->shadow_pages.bucket_count);
+    size_t chain_count;
+};
 
-    for (page = engine->shadow_pages.buckets[bucket]; page != NULL; page = page->hash_next) {
-        if (page == needle) {
+struct shadow_validation_pointer_slot {
+    const void *key;
+    size_t index;
+    bool used;
+};
+
+struct shadow_validation_id_slot {
+    uint64_t key;
+    size_t index;
+    bool used;
+};
+
+struct shadow_validation_scratch {
+    struct shadow_validation_page_entry *pages;
+    struct shadow_validation_pointer_slot *page_slots;
+    struct shadow_validation_id_slot *id_slots;
+    struct shadow_validation_pointer_slot *node_slots;
+    size_t page_count;
+    size_t slot_count;
+};
+
+static bool shadow_valid_origin(enum shadow_lru_origin origin)
+{
+    return origin >= SHADOW_LRU_ORIGIN_INACTIVE_ANON &&
+           origin <= SHADOW_LRU_ORIGIN_ACTIVE_FILE;
+}
+
+static size_t shadow_validation_pointer_slot(const void *key, size_t count)
+{
+    uintptr_t value = (uintptr_t)key;
+
+    value >>= 3U;
+    return (size_t)((value * (uintptr_t)UINT64_C(11400714819323198485)) % count);
+}
+
+static size_t shadow_validation_id_slot(uint64_t key, size_t count)
+{
+    return (size_t)((key * UINT64_C(11400714819323198485)) % count);
+}
+
+static bool shadow_validation_pointer_insert(struct shadow_validation_pointer_slot *slots,
+                                             size_t count,
+                                             const void *key,
+                                             size_t index)
+{
+    size_t slot = shadow_validation_pointer_slot(key, count);
+    size_t probes;
+
+    for (probes = 0U; probes < count; probes++) {
+        if (!slots[slot].used) {
+            slots[slot] = (struct shadow_validation_pointer_slot){
+                .key = key, .index = index, .used = true,
+            };
             return true;
         }
+        if (slots[slot].key == key) {
+            return false;
+        }
+        slot = (slot + 1U) % count;
     }
     return false;
 }
 
-static int shadow_validate_lruvec(const struct reclaim_engine *engine,
-                                  const struct shadow_domain *domain,
-                                  const struct shadow_lruvec *lruvec,
-                                  struct reclaim_validation_report *report)
+static size_t shadow_validation_pointer_find(
+    const struct shadow_validation_pointer_slot *slots, size_t count, const void *key)
 {
-    enum shadow_lru_type type;
+    size_t slot = shadow_validation_pointer_slot(key, count);
+    size_t probes;
 
-    for (type = SHADOW_LRU_INACTIVE_ANON; type < SHADOW_LRU_NR; type++) {
-        const struct reclaim_list *list = &lruvec->lists[type];
-        const struct reclaim_list_node *node;
-        unsigned long pages = 0U;
-        uint64_t folios = 0U;
-
-        for (node = list->head.next; node != &list->head; node = node->next) {
-            const struct shadow_page *page = node->owner;
-            if (page == NULL || !shadow_page_is_indexed_quiescent(engine, page) ||
-                node->list != list || page->state != SHADOW_PAGE_ON_LRU ||
-                page->container != lruvec || page->current_lru != type ||
-                page->domain != domain || page->memcg_id != domain->memcg_id ||
-                page->nid != lruvec->nid || !shadow_lru_matches_page_type(type, page->page_type)) {
-                return shadow_validation_fail(report, engine, page == NULL ? 0U : page->page_id,
-                                              domain->memcg_id, "shadow lru linkage", 1U, 0U);
-            }
-            folios++;
-            pages += shadow_page_base_pages(page);
+    for (probes = 0U; probes < count; probes++) {
+        if (!slots[slot].used) {
+            return SIZE_MAX;
         }
-        if (list->nr_folios != folios || lruvec->nr_pages[type] != pages) {
-            return shadow_validation_fail(report, engine, 0U, domain->memcg_id,
-                                          "shadow lru counters", pages,
-                                          lruvec->nr_pages[type]);
+        if (slots[slot].key == key) {
+            return slots[slot].index;
+        }
+        slot = (slot + 1U) % count;
+    }
+    return SIZE_MAX;
+}
+
+static bool shadow_validation_id_insert(struct shadow_validation_id_slot *slots,
+                                        size_t count,
+                                        uint64_t key,
+                                        size_t index)
+{
+    size_t slot = shadow_validation_id_slot(key, count);
+    size_t probes;
+
+    for (probes = 0U; probes < count; probes++) {
+        if (!slots[slot].used) {
+            slots[slot] = (struct shadow_validation_id_slot){
+                .key = key, .index = index, .used = true,
+            };
+            return true;
+        }
+        if (slots[slot].key == key) {
+            return false;
+        }
+        slot = (slot + 1U) % count;
+    }
+    return false;
+}
+
+static void shadow_validation_scratch_destroy(struct reclaim_engine *engine,
+                                              struct shadow_validation_scratch *scratch)
+{
+    reclaim_free(engine, scratch->node_slots);
+    reclaim_free(engine, scratch->id_slots);
+    reclaim_free(engine, scratch->page_slots);
+    reclaim_free(engine, scratch->pages);
+    *scratch = (struct shadow_validation_scratch){0};
+}
+
+static int shadow_validation_nomem(const struct reclaim_engine *engine,
+                                   struct reclaim_validation_report *report)
+{
+    if (report != NULL) {
+        *report = (struct reclaim_validation_report){
+            .event_seq = atomic_load(&engine->shadow_event_seq),
+            .invariant = "shadow validator scratch allocation",
+            .expected = 1U,
+            .observed = 0U,
+        };
+    }
+    return RECLAIM_ERR_NO_MEMORY;
+}
+
+static int shadow_validation_scratch_init(struct reclaim_engine *engine,
+                                          struct shadow_validation_scratch *scratch,
+                                          struct reclaim_validation_report *report)
+{
+    size_t bucket;
+    size_t page_count = 0U;
+
+    for (bucket = 0U; bucket < engine->shadow_pages.bucket_count; bucket++) {
+        const struct shadow_page *page;
+        for (page = engine->shadow_pages.buckets[bucket]; page != NULL;
+             page = page->hash_next) {
+            if (page_count == SIZE_MAX) {
+                return shadow_validation_nomem(engine, report);
+            }
+            page_count++;
         }
     }
-    {
-        const struct reclaim_list_node *node;
-        uint64_t isolated = 0U;
-        for (node = lruvec->isolated.head.next; node != &lruvec->isolated.head; node = node->next) {
-            const struct shadow_page *page = node->owner;
-            if (page == NULL || !shadow_page_is_indexed_quiescent(engine, page) ||
-                node->list != &lruvec->isolated ||
-                page->state != SHADOW_PAGE_ISOLATED || page->container != lruvec ||
-                page->domain != domain || page->memcg_id != domain->memcg_id ||
-                page->nid != lruvec->nid || !shadow_valid_lru(page->putback_hint)) {
-                return shadow_validation_fail(report, engine, page == NULL ? 0U : page->page_id,
-                                              domain->memcg_id, "shadow isolated linkage", 1U, 0U);
-            }
-            isolated++;
-        }
-        if (lruvec->isolated.nr_folios != isolated || lruvec->nr_isolated != isolated) {
+    scratch->page_count = page_count;
+    if (page_count > (SIZE_MAX - 1U) / 2U) {
+        return shadow_validation_nomem(engine, report);
+    }
+    scratch->slot_count = page_count * 2U + 1U;
+    scratch->pages = page_count == 0U ? NULL :
+                     reclaim_calloc(engine, page_count, sizeof(*scratch->pages));
+    scratch->page_slots = reclaim_calloc(engine, scratch->slot_count,
+                                         sizeof(*scratch->page_slots));
+    scratch->id_slots = reclaim_calloc(engine, scratch->slot_count,
+                                       sizeof(*scratch->id_slots));
+    scratch->node_slots = reclaim_calloc(engine, scratch->slot_count,
+                                         sizeof(*scratch->node_slots));
+    if ((page_count != 0U && scratch->pages == NULL) || scratch->page_slots == NULL ||
+        scratch->id_slots == NULL || scratch->node_slots == NULL) {
+        shadow_validation_scratch_destroy(engine, scratch);
+        return shadow_validation_nomem(engine, report);
+    }
+    return RECLAIM_OK;
+}
+
+static int shadow_validation_add_page(struct reclaim_engine *engine,
+                                      struct shadow_validation_scratch *scratch,
+                                      const struct shadow_page *page,
+                                      size_t bucket,
+                                      struct reclaim_validation_report *report)
+{
+    size_t new_index;
+
+    new_index = 0U;
+    while (new_index < scratch->page_count && scratch->pages[new_index].page != NULL) {
+        new_index++;
+    }
+    if (new_index >= scratch->page_count ||
+        !shadow_validation_pointer_insert(scratch->page_slots, scratch->slot_count,
+                                           page, new_index) ||
+        !shadow_validation_id_insert(scratch->id_slots, scratch->slot_count,
+                                     page->page_id, new_index)) {
+        return shadow_validation_fail(report, engine, page->page_id, page->memcg_id,
+                                      "shadow page table uniqueness", 1U, 0U);
+    }
+    scratch->pages[new_index].page = page;
+    if (shadow_hash(page->page_id, engine->shadow_pages.bucket_count) != bucket) {
+        return shadow_validation_fail(report, engine, page->page_id, page->memcg_id,
+                                      "shadow page table bucket", bucket,
+                                      shadow_hash(page->page_id,
+                                                  engine->shadow_pages.bucket_count));
+    }
+    return RECLAIM_OK;
+}
+
+static int shadow_validate_chain(struct reclaim_engine *engine,
+                                 struct shadow_validation_scratch *scratch,
+                                 const struct shadow_domain *domain,
+                                 const struct shadow_lruvec *lruvec,
+                                 const struct reclaim_list *list,
+                                 bool isolated,
+                                 enum shadow_lru_type type,
+                                 size_t *chain_nodes,
+                                 struct reclaim_validation_report *report)
+{
+    const struct reclaim_list_node *node;
+    uint64_t folios = 0U;
+    unsigned long pages = 0U;
+    size_t max_nodes = scratch->page_count == SIZE_MAX ? SIZE_MAX :
+                       scratch->page_count + 1U;
+
+    if (list->head.list != list || list->head.next == NULL || list->head.prev == NULL) {
+        return shadow_validation_fail(report, engine, 0U, domain->memcg_id,
+                                      "shadow list head", 1U, 0U);
+    }
+    for (node = list->head.next; node != &list->head; node = node->next) {
+        const struct shadow_page *page;
+        size_t page_index;
+
+        if (*chain_nodes >= max_nodes || node == NULL || node->next == NULL ||
+            node->prev == NULL ||
+            !shadow_validation_pointer_insert(scratch->node_slots, scratch->slot_count,
+                                               node, *chain_nodes)) {
             return shadow_validation_fail(report, engine, 0U, domain->memcg_id,
-                                          "shadow isolated counters", isolated,
-                                          lruvec->nr_isolated);
+                                          "shadow chain uniqueness", 1U, 0U);
         }
+        (*chain_nodes)++;
+        page = node->owner;
+        page_index = page == NULL ? SIZE_MAX :
+                     shadow_validation_pointer_find(scratch->page_slots,
+                                                    scratch->slot_count, page);
+        if (page == NULL || page_index == SIZE_MAX) {
+            return shadow_validation_fail(report, engine, page == NULL ? 0U : page->page_id,
+                                          domain->memcg_id, "shadow chain to page table",
+                                          1U, 0U);
+        }
+        scratch->pages[page_index].chain_count++;
+        if (scratch->pages[page_index].chain_count != 1U || node->list != list ||
+            page->dying || page->container != lruvec || page->domain != domain ||
+            page->memcg_id != domain->memcg_id || page->nid != lruvec->nid ||
+            (isolated ? (page->state != SHADOW_PAGE_ISOLATED ||
+                         page->current_lru != SHADOW_LRU_NR ||
+                         !shadow_valid_lru(page->putback_hint) ||
+                         (!shadow_valid_origin(page->isolated_from) && !page->provisional)) :
+                        (page->state != SHADOW_PAGE_ON_LRU || page->current_lru != type ||
+                         !shadow_lru_matches_page_type(type, page->page_type)))) {
+            return shadow_validation_fail(report, engine, page->page_id, domain->memcg_id,
+                                          isolated ? "shadow isolated linkage" :
+                                                     "shadow lru linkage",
+                                          1U, 0U);
+        }
+        folios++;
+        pages += shadow_page_base_pages(page);
+    }
+    if (list->nr_folios != folios ||
+        (isolated ? lruvec->nr_isolated != folios : lruvec->nr_pages[type] != pages)) {
+        return shadow_validation_fail(report, engine, 0U, domain->memcg_id,
+                                      isolated ? "shadow isolated counters" :
+                                                 "shadow lru counters",
+                                      pages, isolated ? lruvec->nr_isolated :
+                                                         lruvec->nr_pages[type]);
     }
     return RECLAIM_OK;
 }
@@ -1572,65 +1773,89 @@ static int shadow_validate_lruvec(const struct reclaim_engine *engine,
 int shadow_engine_validate(struct reclaim_engine *engine,
                            struct reclaim_validation_report *report)
 {
+    struct shadow_validation_scratch scratch = {0};
     size_t bucket;
+    size_t chain_nodes = 0U;
+    int error;
 
     if (engine == NULL) {
         return RECLAIM_ERR_INVALID_ARGUMENT;
     }
-    pthread_mutex_lock(&engine->shadow_domain_table_lock);
+    error = shadow_validation_scratch_init(engine, &scratch, report);
+    if (error != RECLAIM_OK) {
+        return error;
+    }
+    for (bucket = 0U; bucket < engine->shadow_pages.bucket_count; bucket++) {
+        const struct shadow_page *page;
+        for (page = engine->shadow_pages.buckets[bucket]; page != NULL;
+             page = page->hash_next) {
+            error = shadow_validation_add_page(engine, &scratch, page, bucket, report);
+            if (error != RECLAIM_OK) {
+                shadow_validation_scratch_destroy(engine, &scratch);
+                return error;
+            }
+        }
+    }
     for (bucket = 0U; bucket < engine->shadow_domains.bucket_count; bucket++) {
-        struct shadow_domain *domain;
+        const struct shadow_domain *domain;
         for (domain = engine->shadow_domains.buckets[bucket]; domain != NULL;
              domain = domain->hash_next) {
             size_t node_bucket;
-            if (domain->dying || domain->memcg_id == UINT64_MAX) {
-                pthread_mutex_unlock(&engine->shadow_domain_table_lock);
-                return shadow_validation_fail(report, engine, 0U, domain->memcg_id,
-                                              "shadow domain table entry", 0U, 1U);
+
+            if (domain->dying || domain->memcg_id == UINT64_MAX ||
+                shadow_hash(domain->memcg_id, engine->shadow_domains.bucket_count) != bucket) {
+                error = shadow_validation_fail(report, engine, 0U, domain->memcg_id,
+                                               "shadow domain table entry", 1U, 0U);
+                goto out;
             }
-            pthread_mutex_lock(&domain->node_table_lock);
-            for (node_bucket = 0U; node_bucket < domain->node_table.bucket_count; node_bucket++) {
-                struct shadow_lruvec *lruvec;
+            for (node_bucket = 0U; node_bucket < domain->node_table.bucket_count;
+                 node_bucket++) {
+                const struct shadow_lruvec *lruvec;
                 for (lruvec = domain->node_table.buckets[node_bucket]; lruvec != NULL;
                      lruvec = lruvec->hash_next) {
-                    int error;
+                    enum shadow_lru_type type;
+
                     if (!shadow_valid_nid(lruvec->nid) ||
                         shadow_hash((uint64_t)(unsigned int)lruvec->nid,
                                     domain->node_table.bucket_count) != node_bucket) {
-                        pthread_mutex_unlock(&domain->node_table_lock);
-                        pthread_mutex_unlock(&engine->shadow_domain_table_lock);
-                        return shadow_validation_fail(report, engine, 0U, domain->memcg_id,
-                                                      "shadow node key", 1U, 0U);
+                        error = shadow_validation_fail(report, engine, 0U, domain->memcg_id,
+                                                       "shadow node key", 1U, 0U);
+                        goto out;
                     }
-                    pthread_mutex_lock(&lruvec->lock);
-                    error = shadow_validate_lruvec(engine, domain, lruvec, report);
-                    pthread_mutex_unlock(&lruvec->lock);
-                    if (error != RECLAIM_OK) {
-                        pthread_mutex_unlock(&domain->node_table_lock);
-                        pthread_mutex_unlock(&engine->shadow_domain_table_lock);
-                        return error;
+                    for (type = SHADOW_LRU_INACTIVE_ANON; type < SHADOW_LRU_NR; type++) {
+                        error = shadow_validate_chain(engine, &scratch, domain, lruvec,
+                                                      &lruvec->lists[type], false, type,
+                                                      &chain_nodes, report);
+                        if (error != RECLAIM_OK) goto out;
                     }
+                    error = shadow_validate_chain(engine, &scratch, domain, lruvec,
+                                                  &lruvec->isolated, true, SHADOW_LRU_NR,
+                                                  &chain_nodes, report);
+                    if (error != RECLAIM_OK) goto out;
                 }
             }
-            pthread_mutex_unlock(&domain->node_table_lock);
         }
     }
-    pthread_mutex_unlock(&engine->shadow_domain_table_lock);
-    pthread_mutex_lock(&engine->shadow_page_table_lock);
-    for (bucket = 0U; bucket < engine->shadow_pages.bucket_count; bucket++) {
-        struct shadow_page *page;
-        for (page = engine->shadow_pages.buckets[bucket]; page != NULL; page = page->hash_next) {
-            if (page->dying || page->state == SHADOW_PAGE_DETACHED || page->container == NULL ||
-                page->domain == NULL || page->list_node.list == NULL ||
-                shadow_find_page_locked(engine, page->page_id) != page) {
-                pthread_mutex_unlock(&engine->shadow_page_table_lock);
-                return shadow_validation_fail(report, engine, page->page_id, page->memcg_id,
-                                              "shadow page table entry", 1U, 0U);
-            }
+    for (bucket = 0U; bucket < scratch.page_count; bucket++) {
+        const struct shadow_page *page = scratch.pages[bucket].page;
+
+        if (scratch.pages[bucket].chain_count != 1U || page->dying || page->domain == NULL ||
+            page->container == NULL || page->list_node.list == NULL ||
+            page->memcg_id != page->domain->memcg_id ||
+            (page->state == SHADOW_PAGE_ON_LRU &&
+             (!shadow_valid_lru(page->current_lru) ||
+              !shadow_lru_matches_page_type(page->current_lru, page->page_type))) ||
+            (page->state == SHADOW_PAGE_ISOLATED && page->current_lru != SHADOW_LRU_NR) ||
+            (page->state != SHADOW_PAGE_ON_LRU && page->state != SHADOW_PAGE_ISOLATED)) {
+            error = shadow_validation_fail(report, engine, page->page_id, page->memcg_id,
+                                           "shadow page table reverse linkage", 1U, 0U);
+            goto out;
         }
     }
-    pthread_mutex_unlock(&engine->shadow_page_table_lock);
-    return RECLAIM_OK;
+    error = RECLAIM_OK;
+out:
+    shadow_validation_scratch_destroy(engine, &scratch);
+    return error;
 }
 
 uint64_t shadow_engine_event_seq(const struct reclaim_engine *engine)
