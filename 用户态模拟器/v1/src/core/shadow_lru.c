@@ -1714,7 +1714,8 @@ static int shadow_validate_chain(struct reclaim_engine *engine,
     size_t max_nodes = scratch->page_count == SIZE_MAX ? SIZE_MAX :
                        scratch->page_count + 1U;
 
-    if (list->head.list != list || list->head.next == NULL || list->head.prev == NULL) {
+    if (list->head.list != list || list->head.next == NULL || list->head.prev == NULL ||
+        list->head.next->prev != &list->head || list->head.prev->next != &list->head) {
         return shadow_validation_fail(report, engine, 0U, domain->memcg_id,
                                       "shadow list head", 1U, 0U);
     }
@@ -1723,7 +1724,7 @@ static int shadow_validate_chain(struct reclaim_engine *engine,
         size_t page_index;
 
         if (*chain_nodes >= max_nodes || node == NULL || node->next == NULL ||
-            node->prev == NULL ||
+            node->prev == NULL || node->next->prev != node || node->prev->next != node ||
             !shadow_validation_pointer_insert(scratch->node_slots, scratch->slot_count,
                                                node, *chain_nodes)) {
             return shadow_validation_fail(report, engine, 0U, domain->memcg_id,
@@ -1740,7 +1741,8 @@ static int shadow_validate_chain(struct reclaim_engine *engine,
                                           1U, 0U);
         }
         scratch->pages[page_index].chain_count++;
-        if (scratch->pages[page_index].chain_count != 1U || node->list != list ||
+        if (scratch->pages[page_index].chain_count != 1U || node != &page->list_node ||
+            node->list != list ||
             page->dying || page->container != lruvec || page->domain != domain ||
             page->memcg_id != domain->memcg_id || page->nid != lruvec->nid ||
             (isolated ? (page->state != SHADOW_PAGE_ISOLATED ||
