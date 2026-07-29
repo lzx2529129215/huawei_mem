@@ -117,10 +117,10 @@ index 81eeaaa..1b377ee 100644
  	default n
  	help
 diff --git a/Linux6.17/mm/myself_kswapd/Makefile b/Linux6.17/mm/myself_kswapd/Makefile
-index 354f499..4b967a6 100644
+index 354f499..e2627f7 100644
 --- a/Linux6.17/mm/myself_kswapd/Makefile
 +++ b/Linux6.17/mm/myself_kswapd/Makefile
-@@ -1,5 +1,10 @@
+@@ -1,5 +1,11 @@
  # SPDX-License-Identifier: GPL-2.0
  
  obj-y += adapter/kswapd_observer.o
@@ -128,6 +128,7 @@ index 354f499..4b967a6 100644
 +obj-y += adapter/lruvec_sample.o
 +obj-y += adapter/observer_config.o
 +obj-y += debugfs/
++obj-y += heartbeat.o
  obj-y += trace/trace.o
  obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += adapter/kswapd_observer_kunit.o
 +obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += tests/
@@ -948,10 +949,10 @@ index 0000000..13ef1cb
 +obj-y += lruvec_debugfs.o
 diff --git a/Linux6.17/mm/myself_kswapd/debugfs/lruvec_debugfs.c b/Linux6.17/mm/myself_kswapd/debugfs/lruvec_debugfs.c
 new file mode 100644
-index 0000000..f0be92e
+index 0000000..3c035e3
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/debugfs/lruvec_debugfs.c
-@@ -0,0 +1,546 @@
+@@ -0,0 +1,580 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include "../include/lruvec_observer.h"
@@ -975,6 +976,7 @@ index 0000000..f0be92e
 +static struct myks_debugfs_config myks_debugfs_config;
 +static struct myks_observer myks_debugfs_observer;
 +static struct myks_debugfs_sample_cache myks_debugfs_sample_cache;
++static struct myks_heartbeat myks_debugfs_heartbeat;
 +static struct dentry *myks_debugfs_root;
 +
 +static int myks_debugfs_parse_bool(const char *value, bool *out)
@@ -1272,10 +1274,17 @@ index 0000000..f0be92e
 +	if (!ret && parsed.enabled)
 +		ret = myks_observer_enable(&myks_debugfs_observer);
 +	if (!ret) {
-+		if (!parsed.enabled)
++		if (!parsed.enabled) {
++			myks_heartbeat_stop(&myks_debugfs_heartbeat);
 +			myks_observer_disable(&myks_debugfs_observer);
-+		myks_debugfs_config = parsed;
++		} else if (parsed.heartbeat_ms) {
++			ret = myks_heartbeat_start(&myks_debugfs_heartbeat, &parsed);
++		} else {
++			myks_heartbeat_stop(&myks_debugfs_heartbeat);
++		}
 +	}
++	if (!ret)
++		myks_debugfs_config = parsed;
 +	mutex_unlock(&myks_debugfs_config_lock);
 +	kfree(input);
 +	return ret ? ret : count;
@@ -1343,6 +1352,30 @@ index 0000000..f0be92e
 +	if (ret) {
 +		myks_debugfs_observer.counters.collection_errors++;
 +		myks_debugfs_observer.counters.last_error = ret;
++	}
++	return 0;
++}
++
++static int myks_debugfs_heartbeat_collect(
++		const struct myks_debugfs_config *config, void *opaque)
++{
++	struct myks_lruvec_snapshot snapshot;
++	int nid;
++	int ret;
++
++	(void)opaque;
++	if (config->filter_nid >= 0)
++		return myks_debugfs_collect_default(config, &snapshot, NULL);
++	if (!config->filter_memcg_id)
++		return -EINVAL;
++	/* #lzx: memcg-only heartbeat remains filtered while covering online nodes. */
++	for_each_online_node(nid) {
++		struct myks_debugfs_config per_node = *config;
++
++		per_node.filter_nid = nid;
++		ret = myks_debugfs_collect_default(&per_node, &snapshot, NULL);
++		if (ret)
++			return ret;
 +	}
 +	return 0;
 +}
@@ -1483,6 +1516,8 @@ index 0000000..f0be92e
 +	myks_debugfs_config_default(&myks_debugfs_config);
 +	myks_observer_init(&myks_debugfs_observer);
 +	myks_debugfs_sample_cache_init(&myks_debugfs_sample_cache);
++	myks_heartbeat_init(&myks_debugfs_heartbeat, &myks_debugfs_observer,
++			myks_debugfs_heartbeat_collect, NULL);
 +	myks_debugfs_root = debugfs_create_dir("myself_kswapd", NULL);
 +	if (IS_ERR_OR_NULL(myks_debugfs_root))
 +		return 0;
@@ -1522,17 +1557,19 @@ index bbdc876..bc434be 100644
  	u64 round_begin_ns;
 diff --git a/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h b/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h
 new file mode 100644
-index 0000000..6d3fa75
+index 0000000..2db24af
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h
-@@ -0,0 +1,322 @@
+@@ -0,0 +1,346 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +#ifndef _MM_MYSELF_KSWAPD_LRUVEC_OBSERVER_H
 +#define _MM_MYSELF_KSWAPD_LRUVEC_OBSERVER_H
 +
 +#include <linux/bitops.h>
++#include <linux/mutex.h>
 +#include <linux/spinlock.h>
 +#include <linux/types.h>
++#include <linux/workqueue.h>
 +
 +struct lruvec;
 +struct mem_cgroup;
@@ -1745,6 +1782,19 @@ index 0000000..6d3fa75
 +	void *opaque;
 +};
 +
++typedef int (*myks_heartbeat_collect_callback)(
++		const struct myks_debugfs_config *config, void *opaque);
++
++struct myks_heartbeat {
++	struct delayed_work work;
++	struct mutex lock;
++	struct myks_observer *observer;
++	myks_heartbeat_collect_callback collect;
++	void *opaque;
++	struct myks_debugfs_config config;
++	bool running;
++};
++
 +enum myks_observer_state {
 +	MYKS_OBSERVER_DISABLED = 0,
 +	MYKS_OBSERVER_ACTIVE,
@@ -1839,6 +1889,15 @@ index 0000000..6d3fa75
 +ssize_t myks_debugfs_format_samples(
 +				struct myks_debugfs_sample_cache *cache,
 +				char *buffer, size_t length);
++void myks_heartbeat_init(struct myks_heartbeat *heartbeat,
++				struct myks_observer *observer,
++				myks_heartbeat_collect_callback collect, void *opaque);
++int myks_heartbeat_start(struct myks_heartbeat *heartbeat,
++				const struct myks_debugfs_config *config);
++void myks_heartbeat_stop(struct myks_heartbeat *heartbeat);
++bool myks_heartbeat_is_running(struct myks_heartbeat *heartbeat);
++bool myks_heartbeat_run_once(struct myks_heartbeat *heartbeat,
++				u64 generation);
 +void myks_observer_init(struct myks_observer *observer);
 +int myks_observer_enable(struct myks_observer *observer);
 +int myks_observer_enable_with_query(struct myks_observer *observer,
@@ -1859,10 +1918,10 @@ index 0000000..244d2de
 +obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += lruvec_observer_test.o
 diff --git a/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c b/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c
 new file mode 100644
-index 0000000..24b94fb
+index 0000000..aa5b5e8
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c
-@@ -0,0 +1,871 @@
+@@ -0,0 +1,1001 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include <kunit/test.h>
@@ -2697,6 +2756,130 @@ index 0000000..24b94fb
 +				cache->samples[i].lru < MYKS_SAMPLE_LRU_COUNT);
 +}
 +
++struct myks_heartbeat_test_state {
++	unsigned int collect_calls;
++	int ret;
++};
++
++static int myks_heartbeat_test_collect(
++		const struct myks_debugfs_config *config, void *opaque)
++{
++	struct myks_heartbeat_test_state *state = opaque;
++
++	state->collect_calls++;
++	return state->ret;
++}
++
++static void myks_heartbeat_default_disabled_test(struct kunit *test)
++{
++	struct myks_heartbeat heartbeat;
++	struct myks_heartbeat_test_state state = { 0 };
++
++	myks_heartbeat_init(&heartbeat, NULL, myks_heartbeat_test_collect, &state);
++	KUNIT_EXPECT_FALSE(test, myks_heartbeat_is_running(&heartbeat));
++	myks_heartbeat_stop(&heartbeat);
++}
++
++static void myks_heartbeat_memcg_filter_start_test(struct kunit *test)
++{
++	struct myks_heartbeat heartbeat;
++	struct myks_heartbeat_test_state state = { 0 };
++	struct myks_debugfs_config config = {
++		.enabled = true,
++		.mode = MYKS_LRU_MODE_MEMCG,
++		.filter_memcg_id = 17,
++		.filter_nid = -1,
++		.heartbeat_ms = 1000,
++		.generation = 2,
++	};
++
++	myks_heartbeat_init(&heartbeat, NULL, myks_heartbeat_test_collect, &state);
++	KUNIT_ASSERT_EQ(test, myks_heartbeat_start(&heartbeat, &config), 0);
++	KUNIT_EXPECT_TRUE(test, myks_heartbeat_is_running(&heartbeat));
++	myks_heartbeat_stop(&heartbeat);
++	KUNIT_EXPECT_FALSE(test, myks_heartbeat_is_running(&heartbeat));
++}
++
++static void myks_heartbeat_nid_filter_start_test(struct kunit *test)
++{
++	struct myks_heartbeat heartbeat;
++	struct myks_heartbeat_test_state state = { 0 };
++	struct myks_debugfs_config config = {
++		.enabled = true,
++		.mode = MYKS_LRU_MODE_MEMCG,
++		.filter_nid = 2,
++		.heartbeat_ms = 1000,
++		.generation = 3,
++	};
++
++	myks_heartbeat_init(&heartbeat, NULL, myks_heartbeat_test_collect, &state);
++	KUNIT_ASSERT_EQ(test, myks_heartbeat_start(&heartbeat, &config), 0);
++	KUNIT_EXPECT_TRUE(test, myks_heartbeat_is_running(&heartbeat));
++	myks_heartbeat_stop(&heartbeat);
++}
++
++static void myks_heartbeat_rejects_no_filter_test(struct kunit *test)
++{
++	struct myks_heartbeat heartbeat;
++	struct myks_heartbeat_test_state state = { 0 };
++	struct myks_debugfs_config config = {
++		.enabled = true,
++		.filter_nid = -1,
++		.heartbeat_ms = 1000,
++		.generation = 4,
++	};
++
++	myks_heartbeat_init(&heartbeat, NULL, myks_heartbeat_test_collect, &state);
++	KUNIT_EXPECT_EQ(test, myks_heartbeat_start(&heartbeat, &config), -EINVAL);
++	KUNIT_EXPECT_FALSE(test, myks_heartbeat_is_running(&heartbeat));
++}
++
++static void myks_heartbeat_stale_generation_test(struct kunit *test)
++{
++	struct myks_heartbeat heartbeat;
++	struct myks_heartbeat_test_state state = { 0 };
++	struct myks_debugfs_config config = {
++		.enabled = true,
++		.filter_nid = 2,
++		.heartbeat_ms = 1000,
++		.generation = 5,
++	};
++
++	myks_heartbeat_init(&heartbeat, NULL, myks_heartbeat_test_collect, &state);
++	KUNIT_ASSERT_EQ(test, myks_heartbeat_start(&heartbeat, &config), 0);
++	KUNIT_EXPECT_FALSE(test, myks_heartbeat_run_once(&heartbeat, 4));
++	KUNIT_EXPECT_EQ(test, state.collect_calls, 0U);
++	KUNIT_EXPECT_TRUE(test, myks_heartbeat_is_running(&heartbeat));
++	myks_heartbeat_stop(&heartbeat);
++}
++
++static void myks_heartbeat_mglru_rejection_test(struct kunit *test)
++{
++	struct myks_observer observer;
++	struct myks_heartbeat heartbeat;
++	struct myks_heartbeat_test_state state = { 0 };
++	struct myks_debugfs_config config = {
++		.enabled = true,
++		.filter_nid = 2,
++		.heartbeat_ms = 1000,
++		.generation = 6,
++	};
++
++	myks_test_mglru = false;
++	myks_observer_init(&observer);
++	KUNIT_ASSERT_EQ(test, myks_observer_enable_with_query(&observer,
++			myks_test_mglru_query, &myks_test_mglru), 0);
++	myks_heartbeat_init(&heartbeat, &observer, myks_heartbeat_test_collect,
++			&state);
++	KUNIT_ASSERT_EQ(test, myks_heartbeat_start(&heartbeat, &config), 0);
++	myks_test_mglru = true;
++	KUNIT_EXPECT_FALSE(test, myks_heartbeat_run_once(&heartbeat,
++			heartbeat.config.generation));
++	KUNIT_EXPECT_EQ(test, state.collect_calls, 0U);
++	KUNIT_EXPECT_FALSE(test, myks_heartbeat_is_running(&heartbeat));
++	myks_heartbeat_stop(&heartbeat);
++}
++
 +static struct kunit_case myks_lruvec_observer_test_cases[] = {
 +	KUNIT_CASE(myks_lruvec_key_mode_test),
 +	KUNIT_CASE(myks_lruvec_key_validation_test),
@@ -2725,6 +2908,12 @@ index 0000000..24b94fb
 +	KUNIT_CASE(myks_debugfs_samples_limit_32_test),
 +	KUNIT_CASE(myks_debugfs_samples_read_is_cached_test),
 +	KUNIT_CASE(myks_debugfs_samples_exclude_isolated_unevictable_test),
++	KUNIT_CASE(myks_heartbeat_default_disabled_test),
++	KUNIT_CASE(myks_heartbeat_memcg_filter_start_test),
++	KUNIT_CASE(myks_heartbeat_nid_filter_start_test),
++	KUNIT_CASE(myks_heartbeat_rejects_no_filter_test),
++	KUNIT_CASE(myks_heartbeat_stale_generation_test),
++	KUNIT_CASE(myks_heartbeat_mglru_rejection_test),
 +	{}
 +};
 +
