@@ -42,4 +42,20 @@ int kernel_snapshot_store_get_latest(
     const struct kernel_lruvec_key *key,
     struct kernel_lruvec_snapshot *out);
 
+struct kernel_bootstrap_aggregate {
+    struct kernel_snapshot_store store;
+    uint64_t accepted_count;
+    uint64_t rejected_count;
+};
+
+void kernel_bootstrap_aggregate_init(struct kernel_bootstrap_aggregate *baseline);
+void kernel_bootstrap_aggregate_destroy(struct kernel_bootstrap_aggregate *baseline);
+int kernel_bootstrap_aggregate_update(
+    struct kernel_bootstrap_aggregate *baseline,
+    const struct kernel_lruvec_snapshot *snapshot);
+int kernel_bootstrap_aggregate_get_latest(
+    const struct kernel_bootstrap_aggregate *baseline,
+    const struct kernel_lruvec_key *key,
+    struct kernel_lruvec_snapshot *out);
+
 #endif

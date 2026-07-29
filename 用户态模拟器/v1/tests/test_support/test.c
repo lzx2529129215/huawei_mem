@@ -30,6 +30,7 @@ void register_test_event_parser_and_apply(void);
 void register_test_shadow_lru(void); // #lzx
 void register_test_lruvec_trace_parser(void);
 void register_test_kernel_snapshot_store(void);
+void register_test_bootstrap_aggregate(void);
 
 void reclaim_test_register(const char *name, reclaim_test_fn fn)
 {
@@ -66,6 +67,7 @@ int reclaim_test_run_all(void)
     register_test_shadow_lru(); // #lzx
     register_test_lruvec_trace_parser();
     register_test_kernel_snapshot_store();
+    register_test_bootstrap_aggregate();
     for (i = 0U; i < case_count; i++) {
         if (cases[i].fn()) {
             passed++;
