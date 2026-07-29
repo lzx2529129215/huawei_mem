@@ -27,7 +27,7 @@ fi
 
 cleanup() {
     echo 0 > "$TRACEFS/tracing_on" || true
-    for event in request_begin priority_round request_end; do
+    for event in request_begin priority_round request_end lruvec_snapshot; do
         echo 0 > "$TRACEFS/events/$EVENT_GROUP/$event/enable" || true
     done
 }
@@ -51,12 +51,13 @@ save_trace_stats before
 echo 0 > "$TRACEFS/tracing_on"
 echo > "$TRACEFS/trace"
 echo 16384 > "$TRACEFS/buffer_size_kb"
-for event in request_begin priority_round request_end; do
+for event in request_begin priority_round request_end lruvec_snapshot; do
     echo 1 > "$TRACEFS/events/$EVENT_GROUP/$event/enable"
 done
 echo 1 > "$TRACEFS/tracing_on"
 "${PRESSURE_COMMAND[@]}"
 echo 0 > "$TRACEFS/tracing_on"
 cp "$TRACEFS/trace" "$OUTPUT_DIR/trace.txt"
+date --iso-8601=seconds > "$OUTPUT_DIR/capture_end.txt"
 save_trace_stats after
 # lzx--------------------------- 捕获配置结束 ---------------------------

@@ -64,6 +64,9 @@ target_include_directories(reclaim_userspace PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/
 add_executable(reclaim_simulator src/simulator/main.c)
 target_link_libraries(reclaim_simulator PRIVATE reclaim_userspace reclaim_core)
 
+add_executable(lruvec_observer_cli tools/lruvec_observer_cli.c)
+target_link_libraries(lruvec_observer_cli PRIVATE reclaim_core)
+
 if(RECLAIM_ENABLE_TESTS)
     enable_testing()
     add_executable(reclaim_tests
