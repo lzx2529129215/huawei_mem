@@ -117,15 +117,16 @@ index 81eeaaa..1b377ee 100644
  	default n
  	help
 diff --git a/Linux6.17/mm/myself_kswapd/Makefile b/Linux6.17/mm/myself_kswapd/Makefile
-index 354f499..a965743 100644
+index 354f499..3bcfd6b 100644
 --- a/Linux6.17/mm/myself_kswapd/Makefile
 +++ b/Linux6.17/mm/myself_kswapd/Makefile
-@@ -1,5 +1,8 @@
+@@ -1,5 +1,9 @@
  # SPDX-License-Identifier: GPL-2.0
  
  obj-y += adapter/kswapd_observer.o
 +obj-y += adapter/lruvec_observer.o
 +obj-y += adapter/observer_config.o
++obj-y += debugfs/
  obj-y += trace/trace.o
  obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += adapter/kswapd_observer_kunit.o
 +obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += tests/
@@ -187,10 +188,10 @@ index d5ebb6b..abb765b 100644
  // #lzx--------------------------- 观察器实现结束 ---------------------------
 diff --git a/Linux6.17/mm/myself_kswapd/adapter/lruvec_observer.c b/Linux6.17/mm/myself_kswapd/adapter/lruvec_observer.c
 new file mode 100644
-index 0000000..ed57221
+index 0000000..b56c0ec
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/adapter/lruvec_observer.c
-@@ -0,0 +1,371 @@
+@@ -0,0 +1,377 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include "../include/lruvec_observer.h"
@@ -517,9 +518,15 @@ index 0000000..ed57221
 +	ret = ops->collect(ctx, scan_seq, lruvec, pgdat, stage, priority,
 +				scanned_total, reclaimed_total, out, ops->opaque);
 +	if (ret) {
-+		if (ctx->observer)
++		if (ctx->observer) {
++			ctx->observer->counters.collection_errors++;
 +			ctx->observer->counters.last_error = ret;
++		}
 +		return ret;
++	}
++	if (ctx->observer) {
++		ctx->observer->counters.snapshot_generated++;
++		ctx->observer->counters.trace_emit_attempted++;
 +	}
 +	ops->emit(out, ops->opaque);
 +	return 0;
@@ -656,6 +663,489 @@ index 0000000..eb96db0
 +	return true;
 +}
 +// #lzx--------------------------- 观察器状态机结束 ---------------------------
+diff --git a/Linux6.17/mm/myself_kswapd/debugfs/Makefile b/Linux6.17/mm/myself_kswapd/debugfs/Makefile
+new file mode 100644
+index 0000000..13ef1cb
+--- /dev/null
++++ b/Linux6.17/mm/myself_kswapd/debugfs/Makefile
+@@ -0,0 +1,3 @@
++# SPDX-License-Identifier: GPL-2.0
++
++obj-y += lruvec_debugfs.o
+diff --git a/Linux6.17/mm/myself_kswapd/debugfs/lruvec_debugfs.c b/Linux6.17/mm/myself_kswapd/debugfs/lruvec_debugfs.c
+new file mode 100644
+index 0000000..46894fd
+--- /dev/null
++++ b/Linux6.17/mm/myself_kswapd/debugfs/lruvec_debugfs.c
+@@ -0,0 +1,468 @@
++// SPDX-License-Identifier: GPL-2.0
++
++#include "../include/lruvec_observer.h"
++
++#include <linux/cgroup.h>
++#include <linux/debugfs.h>
++#include <linux/errno.h>
++#include <linux/fs.h>
++#include <linux/memcontrol.h>
++#include <linux/mmzone.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/node.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/uaccess.h>
++
++// #lzx: Linux L0.2 debugfs config and immutable per-open snapshot
++// #lzx--------------------------- 配置解析 ---------------------------
++static DEFINE_MUTEX(myks_debugfs_config_lock);
++static struct myks_debugfs_config myks_debugfs_config;
++static struct myks_observer myks_debugfs_observer;
++static struct dentry *myks_debugfs_root;
++
++static int myks_debugfs_parse_bool(const char *value, bool *out)
++{
++	unsigned int parsed;
++
++	if (kstrtouint(value, 0, &parsed) || parsed > 1)
++		return -EINVAL;
++	*out = parsed;
++	return 0;
++}
++
++void myks_debugfs_config_default(struct myks_debugfs_config *config)
++{
++	if (!config)
++		return;
++
++	*config = (struct myks_debugfs_config) {
++		.mode = MYKS_LRU_MODE_MEMCG,
++		.filter_nid = -1,
++		.max_snapshot_entries = MYKS_DEBUGFS_DEFAULT_MAX_ENTRIES,
++		.max_output_bytes = MYKS_DEBUGFS_DEFAULT_MAX_BYTES,
++		.generation = 1,
++	};
++}
++
++int myks_debugfs_config_parse(const struct myks_debugfs_config *old_config,
++				char *input, struct myks_debugfs_config *new_config)
++{
++	struct myks_debugfs_config parsed;
++	char *line;
++	char *cursor;
++
++	if (!old_config || !input || !new_config)
++		return -EINVAL;
++
++	parsed = *old_config;
++	cursor = input;
++	while ((line = strsep(&cursor, "\n")) != NULL) {
++		char *token;
++		char *tokens = strim(line);
++
++		while ((token = strsep(&tokens, " \t")) != NULL) {
++			char *value;
++
++			if (!*token)
++				continue;
++			value = strchr(token, '=');
++			if (!value)
++				return -EINVAL;
++			*value++ = '\0';
++			if (!strcmp(token, "enabled")) {
++				if (myks_debugfs_parse_bool(value, &parsed.enabled))
++					return -EINVAL;
++			} else if (!strcmp(token, "mode")) {
++				if (!strcmp(value, "memcg"))
++					parsed.mode = MYKS_LRU_MODE_MEMCG;
++				else if (!strcmp(value, "global"))
++					parsed.mode = MYKS_LRU_MODE_GLOBAL;
++				else
++					return -EINVAL;
++			} else if (!strcmp(token, "filter_memcg_id")) {
++				if (kstrtoull(value, 0, &parsed.filter_memcg_id))
++					return -EINVAL;
++			} else if (!strcmp(token, "filter_nid")) {
++				if (kstrtoint(value, 0, &parsed.filter_nid))
++					return -EINVAL;
++			} else if (!strcmp(token, "heartbeat_ms")) {
++				if (kstrtou32(value, 0, &parsed.heartbeat_ms))
++					return -EINVAL;
++			} else if (!strcmp(token, "sample_enabled")) {
++				if (myks_debugfs_parse_bool(value, &parsed.sample_enabled))
++					return -EINVAL;
++			} else if (!strcmp(token, "sample_limit_per_lru")) {
++				if (kstrtou32(value, 0, &parsed.sample_limit_per_lru))
++					return -EINVAL;
++			} else if (!strcmp(token, "max_snapshot_entries")) {
++				if (kstrtou32(value, 0,
++						&parsed.max_snapshot_entries))
++					return -EINVAL;
++			} else if (!strcmp(token, "max_output_bytes")) {
++				if (kstrtou32(value, 0, &parsed.max_output_bytes))
++					return -EINVAL;
++			} else {
++				return -EINVAL;
++			}
++		}
++	}
++
++	if (parsed.mode == MYKS_LRU_MODE_GLOBAL && IS_ENABLED(CONFIG_MEMCG))
++		return -EOPNOTSUPP;
++	if (parsed.heartbeat_ms && parsed.heartbeat_ms < 1000)
++		return -EINVAL;
++	if (parsed.heartbeat_ms && !parsed.filter_memcg_id &&
++		parsed.filter_nid < 0)
++		return -EINVAL;
++	if (parsed.sample_limit_per_lru > 32)
++		return -EINVAL;
++	if (!parsed.max_snapshot_entries ||
++		parsed.max_snapshot_entries > MYKS_DEBUGFS_MAX_ENTRIES)
++		return -EINVAL;
++	if (!parsed.max_output_bytes ||
++		parsed.max_output_bytes > MYKS_DEBUGFS_MAX_BYTES)
++		return -EINVAL;
++	if (parsed.generation == U64_MAX)
++		return -EOVERFLOW;
++	parsed.generation++;
++	*new_config = parsed;
++	return 0;
++}
++// #lzx--------------------------- 配置解析结束 ---------------------------
++
++// #lzx--------------------------- 单次 snapshot 缓存 ---------------------------
++static int myks_debugfs_append_snapshot(char *buffer, size_t capacity,
++					 struct myks_debugfs_open_snapshot *open,
++					 const struct myks_debugfs_config *config,
++					 const struct myks_lruvec_snapshot *snapshot)
++{
++	char record[1024];
++	int record_length;
++	int used;
++
++	used = scnprintf(buffer, capacity,
++			"nr_total=1 nr_emitted=0 truncated=0 "
++			"max_snapshot_entries=%u max_output_bytes=%u\n",
++			config->max_snapshot_entries, config->max_output_bytes);
++	record_length = scnprintf(record, sizeof(record),
++			"snapshot_seq=%llu timestamp_ns=%llu request_id=%llu "
++			"priority_seq=%llu scan_seq=%llu mode=%d memcg_id=%llu nid=%d "
++			"memcg_css_id=%u reclaim_source=%d stage=%d consistency=%d "
++			"priority=%d lru_scope=%d isolated_scope=%d "
++			"inactive_anon=%lu active_anon=%lu inactive_file=%lu "
++			"active_file=%lu isolated_anon=%lu isolated_file=%lu "
++			"scanned_total=%lu reclaimed_total=%lu "
++			"field_valid_mask=0x%llx validation_flags=0x%llx\n",
++			snapshot->snapshot_seq, snapshot->timestamp_ns,
++			snapshot->request_id, snapshot->priority_seq,
++			snapshot->scan_seq, snapshot->key.mode,
++			snapshot->key.memcg_id, snapshot->key.nid,
++			snapshot->memcg_css_id, snapshot->reclaim_source,
++			snapshot->stage, snapshot->consistency, snapshot->priority,
++			snapshot->lru_scope, snapshot->isolated_scope,
++			snapshot->inactive_anon, snapshot->active_anon,
++			snapshot->inactive_file, snapshot->active_file,
++			snapshot->isolated_anon, snapshot->isolated_file,
++			snapshot->scanned_total, snapshot->reclaimed_total,
++			snapshot->field_valid_mask, snapshot->validation_flags);
++	if (used >= capacity || record_length < 0 ||
++		(size_t)used + (size_t)record_length >= capacity) {
++		open->nr_total = 1;
++		open->nr_emitted = 0;
++		open->truncated = true;
++		open->length = min_t(size_t, used, capacity ? capacity - 1 : 0);
++		return 0;
++	}
++	memcpy(buffer + used, record, record_length);
++	open->nr_total = 1;
++	open->nr_emitted = 1;
++	open->truncated = false;
++	open->length = used + record_length;
++	return 0;
++}
++
++int myks_debugfs_open_snapshot(const struct myks_debugfs_config *config,
++				const struct myks_debugfs_collect_ops *ops,
++				struct myks_debugfs_open_snapshot *open_snapshot)
++{
++	struct myks_lruvec_snapshot snapshot;
++	int ret;
++
++	if (!config || !ops || !ops->collect || !open_snapshot ||
++		!config->enabled || !config->max_output_bytes ||
++		config->max_output_bytes > MYKS_DEBUGFS_MAX_BYTES)
++		return -EINVAL;
++	*open_snapshot = (struct myks_debugfs_open_snapshot) { 0 };
++	open_snapshot->buffer = kzalloc(config->max_output_bytes, GFP_KERNEL);
++	if (!open_snapshot->buffer)
++		return -ENOMEM;
++	ret = ops->collect(config, &snapshot, ops->opaque);
++	if (ret) {
++		kfree(open_snapshot->buffer);
++		*open_snapshot = (struct myks_debugfs_open_snapshot) { 0 };
++		return ret;
++	}
++	return myks_debugfs_append_snapshot(open_snapshot->buffer,
++					config->max_output_bytes, open_snapshot,
++					config, &snapshot);
++}
++
++ssize_t myks_debugfs_read_snapshot(struct myks_debugfs_open_snapshot *snapshot,
++				char *buffer, size_t length)
++{
++	size_t available;
++
++	if (!snapshot || !buffer)
++		return -EINVAL;
++	if (snapshot->position >= snapshot->length)
++		return 0;
++	available = min(length, snapshot->length - snapshot->position);
++	memcpy(buffer, snapshot->buffer + snapshot->position, available);
++	snapshot->position += available;
++	return available;
++}
++
++void myks_debugfs_close_snapshot(struct myks_debugfs_open_snapshot *snapshot)
++{
++	if (!snapshot)
++		return;
++	kfree(snapshot->buffer);
++	*snapshot = (struct myks_debugfs_open_snapshot) { 0 };
++}
++// #lzx--------------------------- 单次 snapshot 缓存结束 ---------------------------
++
++int myks_debugfs_format_status(const struct myks_debugfs_config *config,
++				const struct myks_observer *observer, char *buffer,
++				size_t length)
++{
++	if (!config || !observer || !buffer || !length)
++		return -EINVAL;
++	return scnprintf(buffer, length,
++			"active=%d state=%d mode=%d mglru_rejected=%d "
++			"config_generation=%llu runtime_reject_count=%llu "
++			"snapshot_generated=%llu trace_emit_attempted=%llu "
++			"collection_errors=%llu "
++			"snapshot_skipped_disabled=%llu snapshot_skipped_mglru=%llu "
++			"last_error=%d max_snapshot_entries=%u max_output_bytes=%u\n",
++			observer->state == MYKS_OBSERVER_ACTIVE,
++			observer->state, config->mode,
++			observer->state == MYKS_OBSERVER_REJECTED_MGLRU,
++			config->generation, observer->counters.runtime_reject_count,
++			observer->counters.snapshot_generated,
++			observer->counters.trace_emit_attempted,
++			observer->counters.collection_errors,
++			observer->counters.snapshot_skipped_disabled,
++			observer->counters.snapshot_skipped_mglru,
++			observer->counters.last_error, config->max_snapshot_entries,
++			config->max_output_bytes);
++}
++
++// #lzx--------------------------- debugfs 文件适配 ---------------------------
++static ssize_t myks_debugfs_status_read(struct file *file, char __user *buf,
++					 size_t count, loff_t *ppos)
++{
++	char output[512];
++	struct myks_debugfs_config config;
++	int length;
++
++	mutex_lock(&myks_debugfs_config_lock);
++	config = myks_debugfs_config;
++	length = myks_debugfs_format_status(&config, &myks_debugfs_observer,
++					output, sizeof(output));
++	mutex_unlock(&myks_debugfs_config_lock);
++	if (length < 0)
++		return length;
++	return simple_read_from_buffer(buf, count, ppos, output, length);
++}
++
++static ssize_t myks_debugfs_config_read(struct file *file, char __user *buf,
++					 size_t count, loff_t *ppos)
++{
++	char output[512];
++	struct myks_debugfs_config config;
++	int length;
++
++	mutex_lock(&myks_debugfs_config_lock);
++	config = myks_debugfs_config;
++	mutex_unlock(&myks_debugfs_config_lock);
++	length = scnprintf(output, sizeof(output),
++			"enabled=%d mode=%d filter_memcg_id=%llu filter_nid=%d "
++			"heartbeat_ms=%u sample_enabled=%d sample_limit_per_lru=%u "
++			"max_snapshot_entries=%u max_output_bytes=%u generation=%llu\n",
++			config.enabled, config.mode, config.filter_memcg_id,
++			config.filter_nid, config.heartbeat_ms, config.sample_enabled,
++			config.sample_limit_per_lru, config.max_snapshot_entries,
++			config.max_output_bytes, config.generation);
++	return simple_read_from_buffer(buf, count, ppos, output, length);
++}
++
++static ssize_t myks_debugfs_config_write(struct file *file,
++					  const char __user *buf, size_t count,
++					  loff_t *ppos)
++{
++	struct myks_debugfs_config parsed;
++	char *input;
++	int ret;
++
++	if (!count || count > 4095)
++		return -EINVAL;
++	input = memdup_user_nul(buf, count);
++	if (IS_ERR(input))
++		return PTR_ERR(input);
++
++	mutex_lock(&myks_debugfs_config_lock);
++	ret = myks_debugfs_config_parse(&myks_debugfs_config, input, &parsed);
++	if (!ret && parsed.enabled)
++		ret = myks_observer_enable(&myks_debugfs_observer);
++	if (!ret) {
++		if (!parsed.enabled)
++			myks_observer_disable(&myks_debugfs_observer);
++		myks_debugfs_config = parsed;
++	}
++	mutex_unlock(&myks_debugfs_config_lock);
++	kfree(input);
++	return ret ? ret : count;
++}
++
++static int myks_debugfs_collect_default(
++		const struct myks_debugfs_config *config,
++		struct myks_lruvec_snapshot *snapshot, void *opaque)
++{
++	struct myks_reclaim_observer_ctx ctx = {
++		.source = MYKS_RECLAIM_UNKNOWN,
++		.active = true,
++		.observer = &myks_debugfs_observer,
++	};
++	struct myks_lruvec_identity identity;
++	struct lruvec *lruvec;
++	struct pglist_data *pgdat;
++	struct mem_cgroup *memcg = NULL;
++#ifdef CONFIG_MEMCG
++	struct cgroup *cgroup;
++	struct cgroup_subsys_state *css;
++#endif
++	int ret;
++
++	(void)opaque;
++	if (!myks_observer_snapshot_allowed(&myks_debugfs_observer))
++		return -EACCES;
++	if (config->filter_nid < 0 ||
++		!node_online(config->filter_nid))
++		return -EINVAL;
++	pgdat = NODE_DATA(config->filter_nid);
++	if (config->mode == MYKS_LRU_MODE_MEMCG) {
++#ifdef CONFIG_MEMCG
++		if (!config->filter_memcg_id)
++			return -EINVAL;
++		cgroup = cgroup_get_from_id(config->filter_memcg_id);
++		if (IS_ERR(cgroup))
++			return PTR_ERR(cgroup);
++		css = cgroup_get_e_css(cgroup, &memory_cgrp_subsys);
++		if (!css) {
++			cgroup_put(cgroup);
++			return -ENOENT;
++		}
++		memcg = mem_cgroup_from_css(css);
++		ret = myks_lruvec_resolve(config->mode, memcg, pgdat,
++				&identity, &lruvec);
++		cgroup_put(cgroup);
++#else
++		return -EOPNOTSUPP;
++#endif
++	} else {
++		ret = myks_lruvec_resolve(config->mode, NULL, pgdat,
++				&identity, &lruvec);
++	}
++	if (ret)
++		return ret;
++	ctx.identity = identity;
++	ctx.identity_valid = true;
++	return myks_lruvec_collect(&ctx, 0, lruvec, pgdat,
++			MYKS_STAGE_DEBUGFS, -1, 0, 0, snapshot);
++}
++
++static int myks_debugfs_snapshot_open(struct inode *inode, struct file *file)
++{
++	struct myks_debugfs_open_snapshot *snapshot;
++	struct myks_debugfs_config config;
++	const struct myks_debugfs_collect_ops ops = {
++		.collect = myks_debugfs_collect_default,
++	};
++	int ret;
++
++	mutex_lock(&myks_debugfs_config_lock);
++	config = myks_debugfs_config;
++	mutex_unlock(&myks_debugfs_config_lock);
++	snapshot = kzalloc(sizeof(*snapshot), GFP_KERNEL);
++	if (!snapshot)
++		return -ENOMEM;
++	ret = myks_debugfs_open_snapshot(&config, &ops, snapshot);
++	if (ret) {
++		myks_debugfs_observer.counters.collection_errors++;
++		myks_debugfs_observer.counters.last_error = ret;
++		kfree(snapshot);
++		return ret;
++	}
++	file->private_data = snapshot;
++	return 0;
++}
++
++static ssize_t myks_debugfs_snapshot_read(struct file *file, char __user *buf,
++					   size_t count, loff_t *ppos)
++{
++	struct myks_debugfs_open_snapshot *snapshot = file->private_data;
++
++	return simple_read_from_buffer(buf, count, ppos, snapshot->buffer,
++				snapshot->length);
++}
++
++static int myks_debugfs_snapshot_release(struct inode *inode,
++						struct file *file)
++{
++	struct myks_debugfs_open_snapshot *snapshot = file->private_data;
++
++	myks_debugfs_close_snapshot(snapshot);
++	kfree(snapshot);
++	return 0;
++}
++
++static const struct file_operations myks_debugfs_status_fops = {
++	.owner = THIS_MODULE,
++	.read = myks_debugfs_status_read,
++	.llseek = default_llseek,
++};
++
++static const struct file_operations myks_debugfs_config_fops = {
++	.owner = THIS_MODULE,
++	.read = myks_debugfs_config_read,
++	.write = myks_debugfs_config_write,
++	.llseek = default_llseek,
++};
++
++static const struct file_operations myks_debugfs_snapshot_fops = {
++	.owner = THIS_MODULE,
++	.open = myks_debugfs_snapshot_open,
++	.read = myks_debugfs_snapshot_read,
++	.release = myks_debugfs_snapshot_release,
++	.llseek = default_llseek,
++};
++
++static int __init myks_debugfs_init(void)
++{
++	myks_debugfs_config_default(&myks_debugfs_config);
++	myks_observer_init(&myks_debugfs_observer);
++	myks_debugfs_root = debugfs_create_dir("myself_kswapd", NULL);
++	if (IS_ERR_OR_NULL(myks_debugfs_root))
++		return 0;
++	debugfs_create_file("observer_status", 0444, myks_debugfs_root, NULL,
++				&myks_debugfs_status_fops);
++	debugfs_create_file("observer_config", 0644, myks_debugfs_root, NULL,
++				&myks_debugfs_config_fops);
++	debugfs_create_file("snapshot", 0444, myks_debugfs_root, NULL,
++				&myks_debugfs_snapshot_fops);
++	return 0;
++}
++late_initcall(myks_debugfs_init);
++// #lzx--------------------------- debugfs 文件适配结束 ---------------------------
 diff --git a/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h b/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h
 index bbdc876..bc434be 100644
 --- a/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h
@@ -680,10 +1170,10 @@ index bbdc876..bc434be 100644
  	u64 round_begin_ns;
 diff --git a/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h b/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h
 new file mode 100644
-index 0000000..7769ce3
+index 0000000..dd1867e
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h
-@@ -0,0 +1,227 @@
+@@ -0,0 +1,278 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +#ifndef _MM_MYSELF_KSWAPD_LRUVEC_OBSERVER_H
 +#define _MM_MYSELF_KSWAPD_LRUVEC_OBSERVER_H
@@ -836,6 +1326,42 @@ index 0000000..7769ce3
 +	void *opaque;
 +};
 +
++#define MYKS_DEBUGFS_DEFAULT_MAX_ENTRIES	1U
++#define MYKS_DEBUGFS_DEFAULT_MAX_BYTES	4096U
++#define MYKS_DEBUGFS_MAX_ENTRIES		1024U
++#define MYKS_DEBUGFS_MAX_BYTES		(1U << 20)
++
++struct myks_debugfs_config {
++	bool enabled;
++	enum myks_lru_mode mode;
++	u64 filter_memcg_id;
++	int filter_nid;
++	u32 heartbeat_ms;
++	bool sample_enabled;
++	u32 sample_limit_per_lru;
++	u32 max_snapshot_entries;
++	u32 max_output_bytes;
++	u64 generation;
++};
++
++typedef int (*myks_debugfs_collect_callback)(
++		const struct myks_debugfs_config *config,
++		struct myks_lruvec_snapshot *snapshot, void *opaque);
++
++struct myks_debugfs_collect_ops {
++	myks_debugfs_collect_callback collect;
++	void *opaque;
++};
++
++struct myks_debugfs_open_snapshot {
++	char *buffer;
++	size_t length;
++	size_t position;
++	u32 nr_total;
++	u32 nr_emitted;
++	bool truncated;
++};
++
 +enum myks_observer_state {
 +	MYKS_OBSERVER_DISABLED = 0,
 +	MYKS_OBSERVER_ACTIVE,
@@ -843,6 +1369,9 @@ index 0000000..7769ce3
 +};
 +
 +struct myks_observer_counters {
++	u64 snapshot_generated;
++	u64 trace_emit_attempted;
++	u64 collection_errors;
 +	u64 snapshot_skipped_disabled;
 +	u64 snapshot_skipped_mglru;
 +	u64 runtime_reject_count;
@@ -902,6 +1431,18 @@ index 0000000..7769ce3
 +				unsigned long reclaimed_total,
 +				struct myks_lruvec_snapshot *out,
 +				const struct myks_lruvec_emit_ops *ops);
++void myks_debugfs_config_default(struct myks_debugfs_config *config);
++int myks_debugfs_config_parse(const struct myks_debugfs_config *old_config,
++				char *input, struct myks_debugfs_config *new_config);
++int myks_debugfs_open_snapshot(const struct myks_debugfs_config *config,
++				const struct myks_debugfs_collect_ops *ops,
++				struct myks_debugfs_open_snapshot *open_snapshot);
++ssize_t myks_debugfs_read_snapshot(struct myks_debugfs_open_snapshot *snapshot,
++				char *buffer, size_t length);
++void myks_debugfs_close_snapshot(struct myks_debugfs_open_snapshot *snapshot);
++int myks_debugfs_format_status(const struct myks_debugfs_config *config,
++				const struct myks_observer *observer, char *buffer,
++				size_t length);
 +void myks_observer_init(struct myks_observer *observer);
 +int myks_observer_enable(struct myks_observer *observer);
 +int myks_observer_enable_with_query(struct myks_observer *observer,
@@ -922,16 +1463,17 @@ index 0000000..244d2de
 +obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += lruvec_observer_test.o
 diff --git a/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c b/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c
 new file mode 100644
-index 0000000..b382e39
+index 0000000..de52d64
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c
-@@ -0,0 +1,514 @@
+@@ -0,0 +1,668 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include <kunit/test.h>
 +
 +#include <linux/errno.h>
 +#include <linux/mmzone.h>
++#include <linux/string.h>
 +
 +#include "../include/lruvec_observer.h"
 +
@@ -1208,6 +1750,155 @@ index 0000000..b382e39
 +	KUNIT_EXPECT_EQ(test, ctx.request_id, request_id);
 +}
 +
++static void myks_debugfs_config_parser_test(struct kunit *test)
++{
++	struct myks_debugfs_config old_config;
++	struct myks_debugfs_config new_config;
++	char valid[] = "enabled=1 mode=memcg filter_memcg_id=17 filter_nid=2 "
++		"heartbeat_ms=1000 sample_enabled=1 sample_limit_per_lru=32 "
++		"max_snapshot_entries=4 max_output_bytes=8192";
++	char invalid[] = "sample_limit_per_lru=33";
++
++	myks_debugfs_config_default(&old_config);
++	KUNIT_ASSERT_EQ(test, myks_debugfs_config_parse(&old_config, valid,
++			&new_config), 0);
++	KUNIT_EXPECT_TRUE(test, new_config.enabled);
++	KUNIT_EXPECT_EQ(test, new_config.filter_memcg_id, 17ULL);
++	KUNIT_EXPECT_EQ(test, new_config.filter_nid, 2);
++	KUNIT_EXPECT_EQ(test, new_config.sample_limit_per_lru, 32U);
++	KUNIT_EXPECT_EQ(test, new_config.max_snapshot_entries, 4U);
++	KUNIT_EXPECT_EQ(test, new_config.max_output_bytes, 8192U);
++
++	KUNIT_EXPECT_EQ(test, myks_debugfs_config_parse(&new_config, invalid,
++			&old_config), -EINVAL);
++	KUNIT_EXPECT_EQ(test, new_config.sample_limit_per_lru, 32U);
++}
++
++static void myks_debugfs_config_rejection_test(struct kunit *test)
++{
++	struct myks_debugfs_config config;
++	char unknown[] = "unknown_key=1";
++	char heartbeat[] = "heartbeat_ms=999";
++	char no_filter[] = "heartbeat_ms=1000 filter_memcg_id=0 filter_nid=-1";
++	char zero_entries[] = "max_snapshot_entries=0";
++	char zero_bytes[] = "max_output_bytes=0";
++	char invalid_integer[] = "max_output_bytes=not_an_integer";
++	char global_mode[] = "mode=global";
++	struct myks_debugfs_config parsed;
++
++	myks_debugfs_config_default(&config);
++	KUNIT_EXPECT_EQ(test, myks_debugfs_config_parse(&config, unknown,
++			&config), -EINVAL);
++	KUNIT_EXPECT_EQ(test, myks_debugfs_config_parse(&config, heartbeat,
++			&config), -EINVAL);
++	KUNIT_EXPECT_EQ(test, myks_debugfs_config_parse(&config, no_filter,
++			&config), -EINVAL);
++	KUNIT_EXPECT_EQ(test, myks_debugfs_config_parse(&config, zero_entries,
++			&config), -EINVAL);
++	KUNIT_EXPECT_EQ(test, myks_debugfs_config_parse(&config, zero_bytes,
++			&config), -EINVAL);
++	KUNIT_EXPECT_EQ(test, myks_debugfs_config_parse(&config, invalid_integer,
++			&config), -EINVAL);
++#if IS_ENABLED(CONFIG_MEMCG)
++	KUNIT_EXPECT_EQ(test, myks_debugfs_config_parse(&config, global_mode,
++			&parsed), -EOPNOTSUPP);
++#else
++	KUNIT_EXPECT_EQ(test, myks_debugfs_config_parse(&config, global_mode,
++			&parsed), 0);
++#endif
++}
++
++struct myks_debugfs_test_collect_state {
++	unsigned int calls;
++};
++
++static int myks_debugfs_test_collect(
++		const struct myks_debugfs_config *config,
++		struct myks_lruvec_snapshot *snapshot, void *opaque)
++{
++	struct myks_debugfs_test_collect_state *state = opaque;
++
++	state->calls++;
++	*snapshot = (struct myks_lruvec_snapshot) {
++		.snapshot_seq = 9,
++		.timestamp_ns = 10,
++		.key = {
++			.mode = config->mode,
++			.memcg_id = config->filter_memcg_id,
++			.nid = config->filter_nid,
++		},
++		.stage = MYKS_STAGE_DEBUGFS,
++		.consistency = MYKS_SNAPSHOT_APPROXIMATE,
++		.lru_scope = MYKS_SCOPE_MEMCG_NODE,
++		.isolated_scope = MYKS_SCOPE_NODE,
++		.inactive_anon = 1,
++		.active_anon = 2,
++		.inactive_file = 3,
++		.active_file = 4,
++		.isolated_anon = 5,
++		.isolated_file = 6,
++		.field_valid_mask = 0xff,
++	};
++	return 0;
++}
++
++static void myks_debugfs_one_open_one_collect_test(struct kunit *test)
++{
++	struct myks_debugfs_config config;
++	struct myks_debugfs_open_snapshot open_snapshot = { 0 };
++	struct myks_debugfs_test_collect_state state = { 0 };
++	const struct myks_debugfs_collect_ops ops = {
++		.collect = myks_debugfs_test_collect,
++		.opaque = &state,
++	};
++	char first[8];
++	char rest[512];
++
++	myks_debugfs_config_default(&config);
++	config.enabled = true;
++	config.filter_memcg_id = 17;
++	config.filter_nid = 2;
++	KUNIT_ASSERT_EQ(test, myks_debugfs_open_snapshot(&config, &ops,
++			&open_snapshot), 0);
++	KUNIT_EXPECT_EQ(test, state.calls, 1U);
++	KUNIT_EXPECT_GT(test, open_snapshot.nr_total, 0U);
++	KUNIT_EXPECT_EQ(test, myks_debugfs_read_snapshot(&open_snapshot, first,
++			sizeof(first)), (ssize_t)sizeof(first));
++	KUNIT_EXPECT_EQ(test, myks_debugfs_read_snapshot(&open_snapshot, rest,
++			sizeof(rest)), (ssize_t)(open_snapshot.length - sizeof(first)));
++	KUNIT_EXPECT_EQ(test, state.calls, 1U);
++	myks_debugfs_close_snapshot(&open_snapshot);
++}
++
++static void myks_debugfs_bounds_and_status_test(struct kunit *test)
++{
++	struct myks_debugfs_config config;
++	struct myks_debugfs_open_snapshot open_snapshot = { 0 };
++	struct myks_debugfs_test_collect_state state = { 0 };
++	const struct myks_debugfs_collect_ops ops = {
++		.collect = myks_debugfs_test_collect,
++		.opaque = &state,
++	};
++	struct myks_observer observer;
++	char status[512];
++
++	myks_debugfs_config_default(&config);
++	config.enabled = true;
++	config.filter_memcg_id = 17;
++	config.filter_nid = 2;
++	config.max_output_bytes = 64;
++	myks_observer_init(&observer);
++	KUNIT_ASSERT_EQ(test, myks_debugfs_open_snapshot(&config, &ops,
++			&open_snapshot), 0);
++	KUNIT_EXPECT_TRUE(test, open_snapshot.truncated);
++	KUNIT_EXPECT_EQ(test, open_snapshot.nr_total, 1U);
++	KUNIT_EXPECT_EQ(test, open_snapshot.nr_emitted, 0U);
++	myks_debugfs_close_snapshot(&open_snapshot);
++	KUNIT_EXPECT_GT(test, myks_debugfs_format_status(&config, &observer,
++			status, sizeof(status)), 0);
++	KUNIT_EXPECT_EQ(test, state.calls, 1U);
++}
++
 +struct myks_test_emit_state {
 +	int collect_error;
 +	unsigned int emit_count;
@@ -1425,6 +2116,10 @@ index 0000000..b382e39
 +	KUNIT_CASE(myks_reclaim_context_unknown_source_test),
 +	KUNIT_CASE(myks_direct_request_spans_scans_test),
 +	KUNIT_CASE(myks_memcg_nested_request_dedup_test),
++	KUNIT_CASE(myks_debugfs_config_parser_test),
++	KUNIT_CASE(myks_debugfs_config_rejection_test),
++	KUNIT_CASE(myks_debugfs_one_open_one_collect_test),
++	KUNIT_CASE(myks_debugfs_bounds_and_status_test),
 +	KUNIT_CASE(myks_lruvec_emit_pair_test),
 +	KUNIT_CASE(myks_lruvec_emit_rejection_and_error_test),
 +	KUNIT_CASE(myks_observer_enable_rejects_mglru_test),
