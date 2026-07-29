@@ -922,10 +922,10 @@ index 0000000..244d2de
 +obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += lruvec_observer_test.o
 diff --git a/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c b/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c
 new file mode 100644
-index 0000000..d0e0d8f
+index 0000000..db871da
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c
-@@ -0,0 +1,477 @@
+@@ -0,0 +1,496 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include <kunit/test.h>
@@ -1173,6 +1173,24 @@ index 0000000..d0e0d8f
 +	KUNIT_EXPECT_EQ(test, ctx.source, MYKS_RECLAIM_DIRECT);
 +}
 +
++static void myks_direct_request_spans_scans_test(struct kunit *test)
++{
++	struct myks_reclaim_observer_ctx ctx = { 0 };
++	u64 request_id;
++
++	myks_reclaim_ctx_begin_request(&ctx, MYKS_RECLAIM_DIRECT);
++	request_id = ctx.request_id;
++	KUNIT_EXPECT_EQ(test, myks_reclaim_ctx_begin_priority(&ctx), 1ULL);
++	KUNIT_EXPECT_EQ(test, myks_reclaim_ctx_begin_scan(&ctx), 1ULL);
++	KUNIT_EXPECT_EQ(test, myks_reclaim_ctx_begin_scan(&ctx), 2ULL);
++	KUNIT_EXPECT_EQ(test, myks_reclaim_ctx_begin_priority(&ctx), 2ULL);
++	KUNIT_EXPECT_EQ(test, myks_reclaim_ctx_begin_scan(&ctx), 3ULL);
++	KUNIT_EXPECT_EQ(test, ctx.request_id, request_id);
++	KUNIT_EXPECT_EQ(test, ctx.source, MYKS_RECLAIM_DIRECT);
++	myks_reclaim_ctx_end_request(&ctx);
++	KUNIT_EXPECT_FALSE(test, ctx.active);
++}
++
 +struct myks_test_emit_state {
 +	int collect_error;
 +	unsigned int emit_count;
@@ -1388,6 +1406,7 @@ index 0000000..d0e0d8f
 +	KUNIT_CASE(myks_lruvec_collection_scope_test),
 +	KUNIT_CASE(myks_reclaim_context_hierarchy_test),
 +	KUNIT_CASE(myks_reclaim_context_unknown_source_test),
++	KUNIT_CASE(myks_direct_request_spans_scans_test),
 +	KUNIT_CASE(myks_lruvec_emit_pair_test),
 +	KUNIT_CASE(myks_lruvec_emit_rejection_and_error_test),
 +	KUNIT_CASE(myks_observer_enable_rejects_mglru_test),
@@ -1417,7 +1436,7 @@ index 0000000..fcbcbed
 +
 +#endif /* _MM_MYSELF_KSWAPD_LRUVEC_TRACE_H */
 diff --git a/Linux6.17/mm/vmscan.c b/Linux6.17/mm/vmscan.c
-index a9d20fa..6194fe2 100644
+index a9d20fa..35e7691 100644
 --- a/Linux6.17/mm/vmscan.c
 +++ b/Linux6.17/mm/vmscan.c
 @@ -75,6 +75,10 @@
@@ -1431,46 +1450,94 @@ index a9d20fa..6194fe2 100644
  	/* How many pages shrink_list() should reclaim */
  	unsigned long nr_to_reclaim;
  
-@@ -5812,11 +5816,24 @@ static void shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
+@@ -5812,11 +5816,25 @@ static void shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
  	unsigned long nr_to_reclaim = sc->nr_to_reclaim;
  	bool proportional_reclaim;
  	struct blk_plug plug;
-+	#ifdef CONFIG_MYSELF_KSWAPD
++#ifdef CONFIG_MYSELF_KSWAPD
 +	u64 myks_scan_seq = 0; // #lzx
-+	#endif
++#endif
  
  	if (lru_gen_enabled() && !root_reclaim(sc)) {
  		lru_gen_shrink_lruvec(lruvec, sc);
  		return;
  	}
-+	#ifdef CONFIG_MYSELF_KSWAPD
++#ifdef CONFIG_MYSELF_KSWAPD
 +	if (sc->myks_observer_ctx && sc->myks_observer_ctx->active &&
-+	    sc->myks_observer_ctx->source == MYKS_RECLAIM_KSWAPD) {
++	    (sc->myks_observer_ctx->source == MYKS_RECLAIM_KSWAPD ||
++	     sc->myks_observer_ctx->source == MYKS_RECLAIM_DIRECT)) {
 +		myks_scan_seq = myks_reclaim_ctx_begin_scan(sc->myks_observer_ctx);
 +		myks_lruvec_emit_snapshot(sc->myks_observer_ctx, lruvec,
 +				lruvec_pgdat(lruvec), myks_scan_seq,
 +				MYKS_STAGE_SCAN_BEFORE, sc->priority, sc->nr_scanned,
 +				sc->nr_reclaimed);
 +	}
-+	#endif
++#endif
  
  	get_scan_count(lruvec, sc, nr);
  
-@@ -5918,6 +5935,13 @@ static void shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
+@@ -5918,6 +5936,13 @@ static void shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
  	    inactive_is_low(lruvec, LRU_INACTIVE_ANON))
  		shrink_active_list(SWAP_CLUSTER_MAX, lruvec,
  				   sc, LRU_ACTIVE_ANON);
-+	#ifdef CONFIG_MYSELF_KSWAPD
++#ifdef CONFIG_MYSELF_KSWAPD
 +	if (myks_scan_seq && sc->myks_observer_ctx)
 +		myks_lruvec_emit_snapshot(sc->myks_observer_ctx, lruvec,
 +				lruvec_pgdat(lruvec), myks_scan_seq,
 +				MYKS_STAGE_SCAN_AFTER, sc->priority, sc->nr_scanned,
 +				sc->nr_reclaimed);
-+	#endif
++#endif
  }
  
  /* Use reclaim/compaction for costly allocs or under memory pressure */
-@@ -7009,6 +7033,9 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
+@@ -6393,6 +6418,10 @@ static unsigned long do_try_to_free_pages(struct zonelist *zonelist,
+ 		__count_zid_vm_events(ALLOCSTALL, sc->reclaim_idx, 1);
+ 
+ 	do {
++#ifdef CONFIG_MYSELF_KSWAPD
++		if (sc->myks_observer_ctx && sc->myks_observer_ctx->active)
++			myks_reclaim_ctx_begin_priority(sc->myks_observer_ctx);
++#endif
+ 		if (!sc->proactive)
+ 			vmpressure_prio(sc->gfp_mask, sc->target_mem_cgroup,
+ 					sc->priority);
+@@ -6623,6 +6652,10 @@ unsigned long try_to_free_pages(struct zonelist *zonelist, int order,
+ 		.may_unmap = 1,
+ 		.may_swap = 1,
+ 	};
++#ifdef CONFIG_MYSELF_KSWAPD
++	struct myks_observer myks_observer;
++	struct myks_reclaim_observer_ctx myks_ctx = { 0 };
++#endif
+ 
+ 	/*
+ 	 * scan_control uses s8 fields for order, priority, and reclaim_idx.
+@@ -6640,12 +6673,24 @@ unsigned long try_to_free_pages(struct zonelist *zonelist, int order,
+ 	if (throttle_direct_reclaim(sc.gfp_mask, zonelist, nodemask))
+ 		return 1;
+ 
++#ifdef CONFIG_MYSELF_KSWAPD
++	myks_observer_init(&myks_observer);
++	myks_observer_enable(&myks_observer);
++	myks_reclaim_ctx_begin_request(&myks_ctx, MYKS_RECLAIM_DIRECT);
++	myks_ctx.observer = &myks_observer;
++	sc.myks_observer_ctx = &myks_ctx;
++#endif
++
+ 	set_task_reclaim_state(current, &sc.reclaim_state);
+ 	trace_mm_vmscan_direct_reclaim_begin(order, sc.gfp_mask);
+ 
+ 	nr_reclaimed = do_try_to_free_pages(zonelist, &sc);
+ 
+ 	trace_mm_vmscan_direct_reclaim_end(nr_reclaimed);
++
++#ifdef CONFIG_MYSELF_KSWAPD
++	myks_reclaim_ctx_end_request(&myks_ctx);
++#endif
+ 	set_task_reclaim_state(current, NULL);
+ 
+ 	return nr_reclaimed;
+@@ -7009,6 +7054,9 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
  		.may_unmap = 1,
  	};
  	struct myks_kswapd_request_ctx myks_ctx = { 0 }; // #lzx
