@@ -922,10 +922,10 @@ index 0000000..244d2de
 +obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += lruvec_observer_test.o
 diff --git a/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c b/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c
 new file mode 100644
-index 0000000..db871da
+index 0000000..b382e39
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c
-@@ -0,0 +1,496 @@
+@@ -0,0 +1,514 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include <kunit/test.h>
@@ -1191,6 +1191,23 @@ index 0000000..db871da
 +	KUNIT_EXPECT_FALSE(test, ctx.active);
 +}
 +
++static void myks_memcg_nested_request_dedup_test(struct kunit *test)
++{
++	struct myks_reclaim_observer_ctx ctx = { 0 };
++	u64 request_id;
++
++	myks_reclaim_ctx_begin_request(&ctx, MYKS_RECLAIM_MEMCG);
++	request_id = ctx.request_id;
++	myks_reclaim_ctx_begin_request(&ctx, MYKS_RECLAIM_DIRECT);
++	KUNIT_EXPECT_EQ(test, ctx.request_id, request_id);
++	KUNIT_EXPECT_EQ(test, ctx.source, MYKS_RECLAIM_MEMCG);
++	KUNIT_EXPECT_EQ(test, myks_reclaim_ctx_begin_priority(&ctx), 1ULL);
++	KUNIT_EXPECT_EQ(test, myks_reclaim_ctx_begin_scan(&ctx), 1ULL);
++	myks_reclaim_ctx_end_request(&ctx);
++	KUNIT_EXPECT_FALSE(test, ctx.active);
++	KUNIT_EXPECT_EQ(test, ctx.request_id, request_id);
++}
++
 +struct myks_test_emit_state {
 +	int collect_error;
 +	unsigned int emit_count;
@@ -1407,6 +1424,7 @@ index 0000000..db871da
 +	KUNIT_CASE(myks_reclaim_context_hierarchy_test),
 +	KUNIT_CASE(myks_reclaim_context_unknown_source_test),
 +	KUNIT_CASE(myks_direct_request_spans_scans_test),
++	KUNIT_CASE(myks_memcg_nested_request_dedup_test),
 +	KUNIT_CASE(myks_lruvec_emit_pair_test),
 +	KUNIT_CASE(myks_lruvec_emit_rejection_and_error_test),
 +	KUNIT_CASE(myks_observer_enable_rejects_mglru_test),
@@ -1436,7 +1454,7 @@ index 0000000..fcbcbed
 +
 +#endif /* _MM_MYSELF_KSWAPD_LRUVEC_TRACE_H */
 diff --git a/Linux6.17/mm/vmscan.c b/Linux6.17/mm/vmscan.c
-index a9d20fa..35e7691 100644
+index a9d20fa..c11c969 100644
 --- a/Linux6.17/mm/vmscan.c
 +++ b/Linux6.17/mm/vmscan.c
 @@ -75,6 +75,10 @@
@@ -1537,7 +1555,44 @@ index a9d20fa..35e7691 100644
  	set_task_reclaim_state(current, NULL);
  
  	return nr_reclaimed;
-@@ -7009,6 +7054,9 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
+@@ -6714,6 +6759,10 @@ unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
+ 		.may_swap = !!(reclaim_options & MEMCG_RECLAIM_MAY_SWAP),
+ 		.proactive = !!(reclaim_options & MEMCG_RECLAIM_PROACTIVE),
+ 	};
++#ifdef CONFIG_MYSELF_KSWAPD
++	struct myks_observer myks_observer;
++	struct myks_reclaim_observer_ctx myks_ctx = { 0 };
++#endif
+ 	/*
+ 	 * Traverse the ZONELIST_FALLBACK zonelist of the current node to put
+ 	 * equal pressure on all the nodes. This is based on the assumption that
+@@ -6721,6 +6770,14 @@ unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
+ 	 */
+ 	struct zonelist *zonelist = node_zonelist(numa_node_id(), sc.gfp_mask);
+ 
++#ifdef CONFIG_MYSELF_KSWAPD
++	myks_observer_init(&myks_observer);
++	myks_observer_enable(&myks_observer);
++	myks_reclaim_ctx_begin_request(&myks_ctx, MYKS_RECLAIM_MEMCG);
++	myks_ctx.observer = &myks_observer;
++	sc.myks_observer_ctx = &myks_ctx;
++#endif
++
+ 	set_task_reclaim_state(current, &sc.reclaim_state);
+ 	trace_mm_vmscan_memcg_reclaim_begin(0, sc.gfp_mask);
+ 	noreclaim_flag = memalloc_noreclaim_save();
+@@ -6729,6 +6786,10 @@ unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
+ 
+ 	memalloc_noreclaim_restore(noreclaim_flag);
+ 	trace_mm_vmscan_memcg_reclaim_end(nr_reclaimed);
++
++#ifdef CONFIG_MYSELF_KSWAPD
++	myks_reclaim_ctx_end_request(&myks_ctx);
++#endif
+ 	set_task_reclaim_state(current, NULL);
+ 
+ 	return nr_reclaimed;
+@@ -7009,6 +7070,9 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
  		.may_unmap = 1,
  	};
  	struct myks_kswapd_request_ctx myks_ctx = { 0 }; // #lzx
