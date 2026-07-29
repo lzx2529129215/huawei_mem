@@ -1,3 +1,109 @@
+diff --git a/Linux6.17/include/trace/events/myself_kswapd.h b/Linux6.17/include/trace/events/myself_kswapd.h
+index 84c106d..d45aa86 100644
+--- a/Linux6.17/include/trace/events/myself_kswapd.h
++++ b/Linux6.17/include/trace/events/myself_kswapd.h
+@@ -238,6 +238,101 @@ TRACE_EVENT(myself_kswapd_request_end,
+ 		  __entry->exit_reason,
+ 		  __entry->elapsed_ns, __entry->validation_flags)
+ );
++
++TRACE_EVENT(lruvec_snapshot,
++
++	TP_PROTO(u64 snapshot_seq, u64 timestamp_ns, u64 request_id,
++		 u64 priority_seq, u64 scan_seq, int mode, u64 memcg_id, int nid,
++		 u32 memcg_css_id, int reclaim_source, int stage, int consistency,
++		 int priority, int lru_scope, int isolated_scope,
++		 unsigned long inactive_anon, unsigned long active_anon,
++		 unsigned long inactive_file, unsigned long active_file,
++		 unsigned long isolated_anon, unsigned long isolated_file,
++		 unsigned long scanned_total, unsigned long reclaimed_total,
++		 u64 field_valid_mask, u64 validation_flags),
++
++	TP_ARGS(snapshot_seq, timestamp_ns, request_id, priority_seq, scan_seq,
++		mode, memcg_id, nid, memcg_css_id, reclaim_source, stage,
++		consistency, priority, lru_scope, isolated_scope, inactive_anon,
++		active_anon, inactive_file, active_file, isolated_anon,
++		isolated_file, scanned_total, reclaimed_total, field_valid_mask,
++		validation_flags),
++
++	TP_STRUCT__entry(
++		__field(u64, snapshot_seq)
++		__field(u64, timestamp_ns)
++		__field(u64, request_id)
++		__field(u64, priority_seq)
++		__field(u64, scan_seq)
++		__field(int, mode)
++		__field(u64, memcg_id)
++		__field(int, nid)
++		__field(u32, memcg_css_id)
++		__field(int, reclaim_source)
++		__field(int, stage)
++		__field(int, consistency)
++		__field(int, priority)
++		__field(int, lru_scope)
++		__field(int, isolated_scope)
++		__field(unsigned long, inactive_anon)
++		__field(unsigned long, active_anon)
++		__field(unsigned long, inactive_file)
++		__field(unsigned long, active_file)
++		__field(unsigned long, isolated_anon)
++		__field(unsigned long, isolated_file)
++		__field(unsigned long, scanned_total)
++		__field(unsigned long, reclaimed_total)
++		__field(u64, field_valid_mask)
++		__field(u64, validation_flags)
++	),
++
++	TP_fast_assign(
++		__entry->snapshot_seq = snapshot_seq;
++		__entry->timestamp_ns = timestamp_ns;
++		__entry->request_id = request_id;
++		__entry->priority_seq = priority_seq;
++		__entry->scan_seq = scan_seq;
++		__entry->mode = mode;
++		__entry->memcg_id = memcg_id;
++		__entry->nid = nid;
++		__entry->memcg_css_id = memcg_css_id;
++		__entry->reclaim_source = reclaim_source;
++		__entry->stage = stage;
++		__entry->consistency = consistency;
++		__entry->priority = priority;
++		__entry->lru_scope = lru_scope;
++		__entry->isolated_scope = isolated_scope;
++		__entry->inactive_anon = inactive_anon;
++		__entry->active_anon = active_anon;
++		__entry->inactive_file = inactive_file;
++		__entry->active_file = active_file;
++		__entry->isolated_anon = isolated_anon;
++		__entry->isolated_file = isolated_file;
++		__entry->scanned_total = scanned_total;
++		__entry->reclaimed_total = reclaimed_total;
++		__entry->field_valid_mask = field_valid_mask;
++		__entry->validation_flags = validation_flags;
++	),
++
++	TP_printk("snapshot_seq=%llu timestamp_ns=%llu request_id=%llu "
++		  "priority_seq=%llu scan_seq=%llu mode=%d memcg_id=%llu nid=%d "
++		  "memcg_css_id=%u reclaim_source=%d stage=%d consistency=%d "
++		  "priority=%d lru_scope=%d isolated_scope=%d "
++		  "inactive_anon=%lu active_anon=%lu inactive_file=%lu "
++		  "active_file=%lu isolated_anon=%lu isolated_file=%lu "
++		  "scanned_total=%lu reclaimed_total=%lu "
++		  "field_valid_mask=0x%llx validation_flags=0x%llx",
++		  __entry->snapshot_seq, __entry->timestamp_ns, __entry->request_id,
++		  __entry->priority_seq, __entry->scan_seq, __entry->mode,
++		  __entry->memcg_id, __entry->nid, __entry->memcg_css_id,
++		  __entry->reclaim_source, __entry->stage, __entry->consistency,
++		  __entry->priority, __entry->lru_scope, __entry->isolated_scope,
++		  __entry->inactive_anon, __entry->active_anon,
++		  __entry->inactive_file, __entry->active_file,
++		  __entry->isolated_anon, __entry->isolated_file,
++		  __entry->scanned_total, __entry->reclaimed_total,
++		  __entry->field_valid_mask, __entry->validation_flags)
++);
+ // #lzx--------------------------- kswapd 观察事件结束 ---------------------------
+ 
+ #endif /* _TRACE_MYSELF_KSWAPD_H */
 diff --git a/Linux6.17/mm/myself_kswapd/Kconfig b/Linux6.17/mm/myself_kswapd/Kconfig
 index 81eeaaa..1b377ee 100644
 --- a/Linux6.17/mm/myself_kswapd/Kconfig
@@ -1013,6 +1119,19 @@ index 0000000..cb6fa8e
 +};
 +
 +kunit_test_suite(myks_lruvec_observer_test_suite);
+diff --git a/Linux6.17/mm/myself_kswapd/trace/lruvec_trace.h b/Linux6.17/mm/myself_kswapd/trace/lruvec_trace.h
+new file mode 100644
+index 0000000..527d2d4
+--- /dev/null
++++ b/Linux6.17/mm/myself_kswapd/trace/lruvec_trace.h
+@@ -0,0 +1,7 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef _MM_MYSELF_KSWAPD_LRUVEC_TRACE_H
++#define _MM_MYSELF_KSWAPD_LRUVEC_TRACE_H
++
++#include <trace/events/myself_kswapd_lruvec.h>
++
++#endif /* _MM_MYSELF_KSWAPD_LRUVEC_TRACE_H */
 diff --git a/Linux6.17/mm/vmscan.c b/Linux6.17/mm/vmscan.c
 index a9d20fa..7dc5958 100644
 --- a/Linux6.17/mm/vmscan.c

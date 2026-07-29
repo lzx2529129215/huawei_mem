@@ -67,6 +67,8 @@ TMP_OUTPUT="$TMP_DIR/output"
 is_allowed() {
     local rel=$1
     case "$rel" in
+        include/trace/events/myself_kswapd.h)
+            ;;
         mm/vmscan.c|mm/myself_kswapd/Kconfig|mm/myself_kswapd/Makefile|\
         mm/myself_kswapd/include/*|mm/myself_kswapd/adapter/*|\
         mm/myself_kswapd/debugfs/*|mm/myself_kswapd/trace/*|\
