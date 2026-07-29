@@ -1,550 +1,1647 @@
-# Linux L0.2 Classic-LRU lruvec Observer 设计
+# Linux L0.2 Classic-LRU lruvec Observer 设计规范（修订版）
 
-状态：设计规范，等待人工审阅
+**状态：设计冻结，可进入实施计划阶段**
 
-本文只规定 Linux 6.17 classic-LRU 的只读 `lruvec` 观测边界、数据契约、
-验证方式和后续实现拆分。本轮不实现其中任何内核、用户态或测试代码。
+**基线：** `main@a89e7f692f51526ef22a51ad246e4cb007a4b9d7`
+**目标分支：** `feat/linux-l02-lruvec-observer`
+**设计范围：** Linux 6.17 classic LRU 的只读 `lruvec` 观测、用户态解析、聚合存储及 Shadow 对齐
+**非目标：** 页面生命周期事件、策略执行、真实 LRU 调整、MGLRU 支持
 
-## 1. 背景、目标与非目标
+本文在原始 L0.2 设计规范基础上，关闭了以下接口级未决项：
 
-### 1.1 目标链路
+1. per-memcg isolated 不可获得时的字段作用域；
+2. direct reclaim 跨多个 lruvec 时的 request/scan 边界；
+3. memcg reclaim 嵌套调用的来源判定与去重；
+4. cgroup ID、CSS ID 与 GLOBAL/MEMCG 身份空间；
+5. `CONFIG_MEMCG=y/n` 的后端边界；
+6. trace 丢失、sequence gap 和 debugfs bounded 输出语义；
+7. MGLRU 的启用时与运行时双重拒绝机制。
 
-L0.2 的数据链路固定为：
+剩余未完成项均属于**实施证据**，不再改变本设计的数据契约和组件边界。
 
-```text
-Linux reclaim path
-  -> 当前 (memcg_id, nid, lruvec) 聚合快照
-  -> tracepoint / debugfs
-  -> lruvec_trace_parser
-  -> kernel_lruvec_snapshot store
-  -> Shadow alignment checker
-```
+---
 
-L0.2 只把 Linux 原生 classic-LRU 的当前聚合状态送入用户态，供后续对照
-现有 Shadow LRU。观测对象是实际正在处理的 `(memcg_id, nid, lruvec)`，不是
-全系统页面图。
+## 1. 背景与目标
 
-### 1.2 硬边界
+### 1.1 当前基础
 
-L0.2 必须满足以下不变量：
+主分支已经具备用户态 per-`(memcg_id,nid)` Shadow LRU，包含：
 
-1. 不改变 Linux 原生回收、优先级、扫描比例、写回、换出、demotion 或
-   kswapd/direct/memcg 决策。
-2. 不修改 Shadow 页面链，不创建 Shadow domain/lruvec，不移动页面，不执行
-   candidate，也不把内核聚合计数解释成页面级对齐。
-3. 不实现 `PAGE_ADD`、`PAGE_ACTIVATE`、`PAGE_DEACTIVATE`、`PAGE_MOVE`、
-   `PAGE_ISOLATE`、`PAGE_PUTBACK`、`PAGE_RECLAIMED` 等生命周期事件。
-4. 不调用或改变 `shrink_folio_list()`、`isolate_lru_folios()`、原生 LRU 链、
-   folio flags 或任何原生回收决策。
-5. 不实现 demote/reclaim/protect/prewash 执行接口，不实现预测策略，不做
-   MGLRU generation 到四条 classic LRU 的映射。
-6. 观测器关闭、采集失败、trace 缓冲区满、debugfs 无人读取或用户态组件退出
-   时，Linux 行为必须等同于未启用观测器。
+- `shadow_domain`；
+- 稀疏 `nid -> shadow_lruvec`；
+- 四条 classic physical LRU；
+- `isolated` 链；
+- candidate snapshot 与 revalidation；
+- page/domain 生命周期和并发保护；
+- quiescent 双向 validator；
+- `shadow_lruvec_get_stats()` 只读聚合统计。
 
-## 2. 基线、分支与历史策略
+L0.1 位于独立 worktree，已经实现 Linux 6.17 `balance_pgdat()` 的 kswapd
+observe-only request/priority/end 观测，但尚未提供：
 
-L0.2 从 `main@a89e7f692f51526ef22a51ad246e4cb007a4b9d7` 创建：
+- 当前 `lruvec` 聚合快照；
+- direct reclaim 观测；
+- memcg reclaim 观测；
+- debugfs 快照；
+- folio 受限采样；
+- 用户态 snapshot store；
+- Shadow alignment checker。
 
-- 分支：`feat/linux-l02-lruvec-observer`
-- worktree：`/home/lzx/Desktop/huawei/myself-kswapd-l02`
-- 原 L0.1 worktree：`/home/lzx/Desktop/huawei/myself-kswapd-l01`
+### 1.2 L0.2 目标链路
 
-主分支已有 per-`(memcg_id,nid)` Shadow LRU、candidate snapshot/revalidation、
-双向 validator 和 physical Shadow 链。L0.1 worktree 与 Shadow、integration
-等既有 worktree 均为只读输入，不在本任务中修改、合并、删除或 push。
-
-后续实施若需要 L0.1 前置，只能以审阅过的提交边界选择性引入 observe-only
-前置；不直接 merge 整个 L0.1 历史。L0.1 的 patch 只作为 Linux 6.17 本地源树
-的受控迁移材料，不能把 `Linux6.17/` 整树纳入仓库。
-
-## 3. 现有实现事实与复用边界
-
-### 3.1 Shadow 侧
-
-当前 Shadow 实际对象关系为：
+L0.2 的完整数据流固定为：
 
 ```text
-reclaim_engine
-  +-- shadow_pages: page_id -> shadow_page
-  +-- shadow_domains: memcg_id -> shadow_domain
-                         +-- node_table: nid -> shadow_lruvec
+Linux native reclaim
+  ├── request/priority context
+  └── current classic lruvec
+          ↓
+kernel lruvec aggregate snapshot
+          ↓
+tracepoint / debugfs
+          ↓
+lruvec_trace_parser
+          ↓
+kernel_snapshot_store
+          ↓
+STRICT_COMPARE / BOOTSTRAP_AGGREGATE
+          ↓
+diagnostic output
 ```
 
-`shadow_lruvec` 由 `(memcg_id,nid)` 唯一定位，含四条普通链和一条
-`isolated` 链。`shadow_lruvec_get_stats(engine, memcg_id, nid, stats)` 是现有
-只读 aggregate 接口，返回四条链的 `nr_pages[]`、isolated 计数、回收/迁移计数
-和 validation flags。`shadow_collect_lruvec_candidates()` 只复制候选快照，
-`shadow_candidate_revalidate()` 按位置、状态、LRU 和 event sequence 重验证。
+L0.2 的任务是：
 
-Shadow 的 `shadow_engine_validate()` 只能在没有并发 Shadow 事件、扫描、候选
-收集、domain destroy 或 engine destroy 的 quiescent 点调用。L0.2 alignment
-必须调用公开只读统计接口；不得触碰 `shadow_page *`、内部锁或生命周期接口。
+> 观测 Linux 当前正在处理的 classic `lruvec`，将其聚合状态可靠地送入用户态，
+> 并与 Shadow physical LRU 做只读诊断比较。
 
-当前 Shadow 有 `reclaim_domain` 的既有 v1 策略/统计对象，但没有 L0.2 所需的
-`kernel_lruvec_snapshot` store、对齐状态机或内核事件适配器。当前公开
-`policy.h` 的动作/配置不构成 L0.2 policy overlay，不能用它改变 physical 链。
+### 1.3 硬边界
 
-### 3.2 L0.1 事实
+L0.2 必须满足：
 
-L0.1 分支为 `feat/linux617-myself-kswapd-l01`，当前 HEAD 为
-`bd1bb6c4d435eb0a29c23181e82ba960814ad0a5`。它在 `balance_pgdat()` 中观测
-kswapd request、priority round 和 request end，使用：
+1. 不改变 Linux 原生回收决策、扫描比例、优先级、写回、换出或 demotion。
+2. 不修改任何 Linux 原生 LRU 链、folio flags 或 vmstat。
+3. 不调用或替代 `shrink_folio_list()`、`isolate_lru_folios()` 等执行路径。
+4. 不修改 Shadow physical 页面链。
+5. 不创建 Shadow page/domain/lruvec 以“补齐”内核状态。
+6. 不执行 Shadow candidate。
+7. 不实现页面级 `PAGE_ADD/MOVE/ACTIVATE/DEACTIVATE/ISOLATE/PUTBACK/RECLAIMED`。
+8. 不实现 demote/reclaim/protect/prewash 请求接口。
+9. 不支持 MGLRU，也不做 generation 到四条 classic LRU 的近似映射。
+10. 任何 observer、trace、debugfs 或用户态错误都不能阻塞或改变 native reclaim。
 
-- `struct myks_kswapd_request_ctx` 保存 request id、pass/round 序号、累计
-  scanned/reclaimed、停止/冻结/退出原因和 validation flags；
-- `myks_kswapd_request_begin()`、`myks_kswapd_round_begin()`、
-  `myks_kswapd_priority_round()`、`myks_kswapd_request_end()` 等函数生成
-  observe-only 事件；
-- trace 事件 `myself_kswapd_request_begin`、`priority_round`、`request_end`；
-- `tools/myself_kswapd/parse_kswapd_trace.py` 将文本解析成请求、round 和
-  efficiency CSV，并保留不完整请求、序号错误、总量不符和 validation flags。
+---
 
-L0.1 的真实 trace 字段包括 `request_id`、`nid`、`priority`、`reclaim_idx`、
-`nr_to_reclaim`、`main_scanned`、`soft_scanned`、`total_scanned`、
-`main_reclaimed`、`soft_reclaimed`、`reclaimed_delta`、回收能力布尔值、
-`pass_seq`/`round_seq`、`elapsed_ns` 和 `validation_flags`。这些字段可作为
-L0.2 的 request/stage 关联输入，但不能替代 lruvec snapshot 字段。
+## 2. 分支与历史边界
 
-L0.1 当前只覆盖 kswapd；没有 direct reclaim 或 memcg reclaim 的完整观测
-基础，也没有 lruvec 聚合、debugfs、sample、heartbeat 或 Shadow 对齐。
+### 2.1 开发分支
 
-## 4. 双模式与身份映射
-
-### 4.1 模式
-
-观测器启动时必须选择一个且仅一个模式：
-
-| 模式 | `memcg_id` | `nid` | 原生对象 | 用途 |
-| --- | --- | --- | --- | --- |
-| `MEMCG_LRUVEC` | `cgroup_id(memcg->css.cgroup)` | `pgdat->node_id` | `mem_cgroup_lruvec(memcg, pgdat)` | Linux 6.17 主验证模式 |
-| `GLOBAL_LRU` | `SHADOW_ROOT_MEMCG_ID` | `pgdat->node_id` | `mem_cgroup_lruvec(NULL, pgdat)` | 后续 OpenHarmony 传统全局 LRU |
-
-`memcg_css_id = memcg->css.id` 仅作为 debug 字段输出，不作为稳定对齐键。
-对齐键永远是 `(memcg_id,nid)`。`SHADOW_ROOT_MEMCG_ID` 必须与真实
-`cgroup_id()` 返回值建立明确的保留值约束，不能与任意真实 cgroup id 冲突。
-
-`CONFIG_MEMCG=n` 时只允许 `GLOBAL_LRU`。此时 Linux 的
-`mem_cgroup_lruvec()` 是返回 `&pgdat->__lruvec` 的 inline helper，不能把
-不存在的 memcg 解释为 `MEMCG_LRUVEC`。
-
-### 4.2 classic-LRU 运行条件
-
-本轮只支持 classic LRU。`lru_gen_enabled()` 位于 Linux 6.17
-`include/linux/mm_inline.h`，通过 LRU_GEN static key 表示运行时状态。
-
-- `lru_gen_enabled() == false`：允许 classic-LRU observer；
-- `lru_gen_enabled() == true`：observer 拒绝启动，状态为
-  `REJECTED_MGLRU`，不输出伪装的四链快照；
-- `CONFIG_LRU_GEN=y` 可以编译，但运行时仍必须拒绝；
-- 内核模块不得自行改变 MGLRU 开关；启动脚本可在外部显式关闭 MGLRU。
-
-拒绝发生在配置生效前，不得进入 reclaim 热路径。用户态 parser/store 也必须
-保留 `UNSUPPORTED_MGLRU`，不能把拒绝记录当作零值快照。
-
-## 5. Linux 6.17 观测模型
-
-### 5.1 真实结构和 LRU 映射
-
-Linux 6.17 `include/linux/mmzone.h` 中的 `struct lruvec` 包含
-`lists[NR_LRU_LISTS]`、`spinlock_t lru_lock`、cost/refault 状态、可选的
-`lrugen` 和 `pgdat`。`enum lru_list` 的四条 classic 链为：
+L0.2 从以下基线创建：
 
 ```text
-LRU_INACTIVE_ANON
-LRU_ACTIVE_ANON
-LRU_INACTIVE_FILE
-LRU_ACTIVE_FILE
+main@a89e7f692f51526ef22a51ad246e4cb007a4b9d7
 ```
 
-`include/linux/mm_inline.h:folio_lru_list()` 根据 unevictable、file 和 active
-flags 计算 folio 应处的 LRU 枚举；它只能用于受控的 debug sample，不能遍历
-folio 链构成聚合统计。
+目标：
 
-`struct pglist_data` 的 `node_id` 是 nid，`__lruvec` 是 memcg 关闭时的节点
-LRU；在 memcg 开启时，注释明确要求使用 `mem_cgroup_lruvec()` 查找 lruvec。
-`struct mem_cgroup` 含 `css` 和 `nodeinfo[]`，其中 per-node `lruvec` 是
-memcg 模式的原生对象。
+```text
+branch:   feat/linux-l02-lruvec-observer
+worktree: /home/lzx/Desktop/huawei/myself-kswapd-l02
+```
 
-四条聚合字段的来源固定为：
+### 2.2 L0.1 导入原则
 
-| 快照字段 | Linux helper/index | 语义 |
-| --- | --- | --- |
-| `inactive_anon` | `lruvec_page_state(lruvec, NR_INACTIVE_ANON)` | 当前 lruvec 的近似计数 |
-| `active_anon` | `lruvec_page_state(lruvec, NR_ACTIVE_ANON)` | 当前 lruvec 的近似计数 |
-| `inactive_file` | `lruvec_page_state(lruvec, NR_INACTIVE_FILE)` | 当前 lruvec 的近似计数 |
-| `active_file` | `lruvec_page_state(lruvec, NR_ACTIVE_FILE)` | 当前 lruvec 的近似计数 |
-| `isolated_anon` | `node_page_state(pgdat, NR_ISOLATED_ANON)` | 当前 Linux 版本的 node 级计数 |
-| `isolated_file` | `node_page_state(pgdat, NR_ISOLATED_FILE)` | 当前 Linux 版本的 node 级计数 |
+L0.1 历史不直接 merge。实施阶段只能：
 
-`lruvec_page_state()`/`lruvec_page_state_local()` 位于
-`include/linux/memcontrol.h`；memcg 版本从 lruvec 的 vmstat 读取，memcg 关闭
-版本退化到 `node_page_state(lruvec_pgdat(lruvec), idx)`。这些读取是近似
-统计快照，不长期持有 `lru_lock`，不能声称四条链在同一时刻具有强一致性。
+- 逐文件审查；
+- 选择性导入 observe-only 基础；
+- 保留 request、priority、trace、parser 的必要契约；
+- 重新验证导入后的 Shadow `25/25`；
+- 不把 `Linux6.17/` 整树纳入 Git；
+- 不修改原 L0.1 worktree。
 
-真实 classic reclaim 的锁区间也必须保持只读设计：
-`shrink_inactive_list()` 在 `isolate_lru_folios()` 前持有
-`spin_lock_irq(&lruvec->lru_lock)`，完成 isolate 计数后解锁；folio list 在锁外
-交给 `shrink_folio_list()`，随后再次持有同一把锁执行 putback/回链和计数更新。
-`shrink_active_list()` 同样围绕 LRU 摘取和回链分段持有该锁，不能把其内部
-folio 操作当作可插入的长期锁区间。L0.2 聚合 observer 不插入这些锁区间，
-bounded sample 才允许在明确的短锁区间内复制轻量字段。
+### 2.3 L0.2 完成后的集成边界
 
-当前 Linux 6.17 的 isolated 统计在 `mm/vmscan.c` 中通过
-`__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, ...)` 更新，因此
-`MEMCG_LRUVEC` 下不能按 memcg 归属拆分。快照必须同时带
-`field_valid_mask`/`field_scope`：memcg 模式的 isolated 字段标记
-`NODE_SCOPE_UNSUITABLE_FOR_MEMCG`，alignment 不得比较该字段；global 模式
-可以比较 node 级 isolated 值。不能以 node 值复制到每个 memcg 快照。
+L0.2 分支完成前：
 
-### 5.2 回收上下文关联
+- 不 merge main；
+- 不 push；
+- 不删除任何既有 worktree；
+- 不清理 feature/integration/backup 分支；
+- 必须完成独立只读审查。
 
-`struct scan_control` 的 `nr_scanned`、`nr_reclaimed`、`priority`、
-`reclaim_idx`、`nr_to_reclaim` 和 `target_mem_cgroup` 是回收上下文统计。
-它们不是 LRU 链长度。L0.2 快照中的 `scanned_total` 和 `reclaimed_total`
-保留上下文的累计值，用户态通过同一 request 的前后 snapshot 计算 delta，
-不将累计值与链长度相加或混用。
+---
 
-回收来源枚举固定为：`RECLAIM_KSWAPD`、`RECLAIM_DIRECT`、
-`RECLAIM_MEMCG`、`RECLAIM_UNKNOWN`。每条记录必须带
-`request_id`、`snapshot_seq`、`timestamp_ns`、`reclaim_source`、`stage`、
-`priority`、`memcg_id` 和 `nid`。
+## 3. Shadow physical 与 policy 的语义分离
 
-阶段枚举固定为：`REQUEST_BEGIN`、`PRIORITY_BEGIN`、`SCAN_BEFORE`、
-`SCAN_AFTER`、`PRIORITY_END`、`REQUEST_END`、`HEARTBEAT`、`DEBUGFS`。
-接入顺序是 kswapd、direct reclaim、memcg reclaim。每个接入点必须记录
-实际 lruvec，而不是在 request 结束时枚举所有 memcg×nid。
+### 3.1 Physical 层
 
-Linux 6.17 的候选接入位置如下：
+Shadow 中以下五条链只表示**内核真实页面状态的镜像**：
 
-| 来源 | request/priority 关联 | scan-before/after 关联 | 说明 |
-| --- | --- | --- | --- |
-| kswapd | `balance_pgdat()` 中已有 L0.1 request/round 边界 | `shrink_node()` 调用前后及 `scan_control` 累计值 | 复用 request 上下文，不改控制流 |
-| direct | `try_to_free_pages()`/`do_try_to_free_pages()` 的一次调用 | `shrink_node()` 或其当前 lruvec 调用前后 | 需避免把一个 zonelist 调用误标成单一 lruvec |
-| memcg | `try_to_free_mem_cgroup_pages()`、`mem_cgroup_shrink_node()` | `shrink_lruvec()` 当前 lruvec 调用前后 | 以 `target_mem_cgroup` 和 pgdat 映射 |
+```text
+inactive_anon
+active_anon
+inactive_file
+active_file
+isolated
+```
 
-`shrink_node_memcgs()` 已按 memcg 迭代并调用
-`mem_cgroup_lruvec(memcg, pgdat)`；`shrink_lruvec()` 是 classic LRU 的主要
-聚合关联点。L0.2 只在这些真实上下文存在时采样，不为没有明确归属的记录
-猜测 memcg 或 nid，无法关联时使用 `RECLAIM_UNKNOWN` 并设置错误计数。
+只有真实内核生命周期事件才有权改变 physical 链。
 
-### 5.3 锁与一致性
+L0.2 聚合快照本身没有页面身份，因此：
+
+- 不能通过聚合数量移动 Shadow 页面；
+- 不能通过数量差值执行“自动修复”；
+- 不能从内核快照创建 Shadow 页面；
+- 不能把内核快照当作 L0.3 页面事件。
+
+### 3.2 Policy 层
+
+未来策略层可以独立维护：
+
+```text
+reclaim_score
+protect_score
+suggested_action
+confidence
+valid_until_ns
+policy_seq
+```
+
+建议动作可包括：
+
+```text
+NONE
+PROTECT
+DEMOTE
+RECLAIM
+PREWASH
+```
+
+关键不变量：
+
+```text
+policy DEMOTE_HINT
+    ≠
+Shadow physical ACTIVE -> INACTIVE
+```
+
+正确的未来路径是：
+
+```text
+policy 产生建议
+  -> 内核执行适配器提交请求
+  -> 内核重新验证
+  -> 内核接受或拒绝
+  -> 内核真实生命周期事件
+  -> Shadow physical 链同步
+```
+
+### 3.3 L0.2 对齐范围
+
+L0.2 alignment：
+
+- 只读取 physical aggregate；
+- 不读取 policy hint 数量；
+- 不根据 policy 调整 expected kernel count；
+- policy 中存在 20 个 DEMOTE_HINT 时，只要 physical 链与内核一致，仍返回
+  `MATCH`。
+
+---
+
+## 4. Classic-LRU 模式与身份键
+
+### 4.1 模式枚举
+
+统一定义两种后端：
+
+```c
+enum myks_lru_mode {
+    MYKS_LRU_MODE_MEMCG = 0,
+    MYKS_LRU_MODE_GLOBAL,
+};
+```
+
+### 4.2 正式身份键
+
+正式键必须包含模式：
+
+```c
+struct myks_lruvec_key {
+    enum myks_lru_mode mode;
+    u64 memcg_id;
+    int nid;
+};
+```
+
+因此对齐键是：
+
+```text
+(mode, memcg_id, nid)
+```
+
+而不是单独的 `(memcg_id,nid)`。
+
+这样避免：
+
+- GLOBAL 与 MEMCG 身份空间碰撞；
+- 为 root 人为选择“永不冲突”的特殊 cgroup ID；
+- 将 root memcg lruvec 错误解释为全局 LRU。
+
+### 4.3 MEMCG_LRUVEC 模式
+
+Linux 6.17 主验证模式：
+
+```text
+mode          = MYKS_LRU_MODE_MEMCG
+memcg_id      = cgroup_id(memcg->css.cgroup)
+memcg_css_id  = memcg->css.id
+nid           = pgdat->node_id
+lruvec        = mem_cgroup_lruvec(memcg, pgdat)
+```
+
+`memcg_id` 是正式键的一部分。
+
+`memcg_css_id` 不作为主键，但作为对象代际和调试保护字段：
+
+```text
+同一 (mode, memcg_id, nid)
+但 css_id 发生变化
+    -> MEMCG_INCARCATION_CHANGED
+    -> 旧 store entry 失效
+```
+
+实施时必须依据本地 Linux 6.17 源码和运行证据确认具体复用语义，但不再改变上述接口。
+
+### 4.4 GLOBAL_LRU 模式
+
+GLOBAL 后端的正式键固定为：
+
+```text
+mode          = MYKS_LRU_MODE_GLOBAL
+memcg_id      = 0
+memcg_css_id  = 0
+nid           = pgdat->node_id
+```
+
+#### Linux `CONFIG_MEMCG=n`
+
+此时：
+
+```text
+pgdat->__lruvec
+```
+
+代表真实 node global classic LRU，GLOBAL 后端可用。
+
+#### Linux `CONFIG_MEMCG=y`
+
+本轮禁止启用 GLOBAL 后端。
+
+原因：
+
+> root memcg lruvec 不代表所有子 memcg 页面，不能冒充整个系统的全局 LRU。
+
+因此 Linux 6.17 `CONFIG_MEMCG=y` 的实际验证模式只能是：
+
+```text
+MYKS_LRU_MODE_MEMCG
+```
+
+#### OpenHarmony
+
+后续 OpenHarmony 全局 LRU 适配可以复用同一 GLOBAL 数据契约，但使用平台专用
+resolver，不要求复用 Linux `mem_cgroup_lruvec(NULL, pgdat)`。
+
+---
+
+## 5. `CONFIG_MEMCG` 后端边界
+
+实现必须通过 wrapper/stub 隔离 MEMCG-only 依赖。
+
+概念接口：
+
+```c
+int myks_resolve_lruvec(
+    enum myks_lru_mode mode,
+    struct mem_cgroup *memcg,
+    pg_data_t *pgdat,
+    struct myks_lruvec_identity *identity,
+    struct lruvec **lruvec);
+```
+
+### 5.1 `CONFIG_MEMCG=y`
+
+允许：
+
+```text
+MEMCG_LRUVEC  supported
+GLOBAL_LRU    rejected on Linux 6.17
+```
+
+### 5.2 `CONFIG_MEMCG=n`
+
+允许：
+
+```text
+GLOBAL_LRU    supported
+MEMCG_LRUVEC  returns UNSUPPORTED_CONFIG
+```
+
+### 5.3 编译要求
+
+MEMCG-only 符号不得泄漏到 GLOBAL-only 构建路径。
+
+实施验收必须覆盖：
+
+```text
+CONFIG_MEMCG=y
+CONFIG_MEMCG=n
+```
+
+并确认：
+
+- 公共头文件可编译；
+- disabled inline/stub 可用；
+- GLOBAL 后端不引用 MEMCG-only 字段；
+- MEMCG 后端不会在 `CONFIG_MEMCG=n` 下形成 unresolved symbol。
+
+---
+
+## 6. MGLRU 拒绝机制
+
+本轮只支持 classic LRU。
+
+### 6.1 启用时检查
+
+observer 配置从 inactive 转为 active 前执行：
+
+```text
+lru_gen_enabled() == true
+    -> 拒绝配置生效
+    -> state = REJECTED_MGLRU
+    -> 不注册/启用 classic snapshot 输出
+```
+
+内核 observer 不自行关闭 MGLRU。
+
+启动脚本可以显式关闭 MGLRU，但必须：
+
+- 记录关闭前状态；
+- 检查关闭是否成功；
+- 失败时不启动 classic observer。
+
+### 6.2 运行时轻量 guard
+
+仅启用时检查一次不够。每次准备发出 classic 快照前执行轻量检查：
+
+```c
+if (unlikely(lru_gen_enabled())) {
+    /* record reject and skip classic snapshot */
+}
+```
+
+运行中发现 MGLRU 被重新开启时：
+
+```text
+停止发出 classic 快照
+state = REJECTED_MGLRU
+runtime_reject_count++
+记录 last_error
+```
+
+不能：
+
+- 先发一条 classic 快照再拒绝；
+- 输出四条全零数据；
+- 把拒绝解释成 `MATCH`；
+- 自动修改 MGLRU 开关。
+
+---
+
+## 7. Linux 6.17 classic LRU 字段来源
+
+### 7.1 四条普通 LRU
+
+快照字段：
+
+| 字段 | Linux helper/index | 作用域 | 一致性 |
+|---|---|---|---|
+| `inactive_anon` | `lruvec_page_state(lruvec, NR_INACTIVE_ANON)` | MEMCG_NODE 或 NODE | 近似 |
+| `active_anon` | `lruvec_page_state(lruvec, NR_ACTIVE_ANON)` | MEMCG_NODE 或 NODE | 近似 |
+| `inactive_file` | `lruvec_page_state(lruvec, NR_INACTIVE_FILE)` | MEMCG_NODE 或 NODE | 近似 |
+| `active_file` | `lruvec_page_state(lruvec, NR_ACTIVE_FILE)` | MEMCG_NODE 或 NODE | 近似 |
 
 聚合快照：
 
-- 不遍历 `folio` 链；
+- 不遍历 LRU 链；
 - 不长期持有 `lru_lock`；
-- 使用现有统计 helper，标记 `consistency=APPROXIMATE`；
-- 不把多个 helper 读取包装成强一致事务；
-- 不能在统计 helper 失败时回退为未标记的零值。
+- 不声称四个计数属于同一个强一致瞬间；
+- 标记 `consistency=APPROXIMATE`。
 
-folio 调试 sample 只在 `sample_enabled=1` 时执行。它短暂持有当前
-`lruvec->lru_lock`，每条普通 LRU 最多复制 `N` 项，建议硬上限
-`sample_limit_per_lru <= 32`，锁内只复制固定大小轻量字段，立即解锁，
-锁外再格式化、trace 或写 debugfs。sample 的 `consistency` 为
-`LOCKED_SAMPLE`。
+### 7.2 isolated 字段
 
-锁内禁止动态扩容、路径解析、用户态拷贝、获取会形成反向锁序的 page lock、
-修改 folio/LRU。默认不采样 isolated 或 unevictable；未来若支持必须新增
-明确的数据契约和验证项。
-
-## 6. 聚合快照契约
-
-### 6.1 结构
-
-`kernel_lruvec_snapshot` 至少包含：
+Linux 6.17 当前来源为：
 
 ```text
-snapshot_seq       : 全局单调递增 u64
-timestamp_ns       : monotonic timestamp
-request_id         : request 关联 u64
-memcg_id           : 稳定对齐键
-memcg_css_id       : 仅 debug
-nid                : pgdat->node_id
-reclaim_source     : 枚举
-lru_mode           : MEMCG_LRUVEC 或 GLOBAL_LRU
-consistency        : APPROXIMATE 或 LOCKED_SAMPLE
-stage              : 阶段枚举
-priority           : scan_control priority；无上下文时显式无效
-inactive_anon      : 采集瞬间数量
-active_anon        : 采集瞬间数量
-inactive_file      : 采集瞬间数量
-active_file        : 采集瞬间数量
-isolated_anon      : 按 field_scope 解读
-isolated_file      : 按 field_scope 解读
-scanned_total      : 回收上下文累计统计
-reclaimed_total    : 回收上下文累计统计
-field_valid_mask   : 字段可比较性
-validation_flags   : 采集/溢出/关联错误
+node_page_state(pgdat, NR_ISOLATED_ANON)
+node_page_state(pgdat, NR_ISOLATED_FILE)
 ```
 
-四条 LRU 数量是采集瞬间状态；`scanned_total`/`reclaimed_total` 是回收
-上下文统计。用户态可计算 delta，但不能把它们当成链长度。全局
-`snapshot_seq` 分配必须使用不可回退的原子序列；trace 丢失不会复用序号。
+它们是 **NODE scope**，不是 per-memcg `lruvec` scope。
 
-### 6.2 source/stage 顺序与丢失
+因此字段契约固定为：
 
-同一 request 的正常顺序是 `REQUEST_BEGIN`，一个或多个
-`PRIORITY_BEGIN -> SCAN_BEFORE -> SCAN_AFTER -> PRIORITY_END`，最后
-`REQUEST_END`。并发 CPU 的不同 request 不要求全局按时间串行；store 必须
-按 `(request_id, snapshot_seq)` 保存原始顺序并报告交错。
+```c
+enum myks_field_scope {
+    MYKS_SCOPE_INVALID = 0,
+    MYKS_SCOPE_MEMCG_NODE,
+    MYKS_SCOPE_NODE,
+};
+```
 
-trace buffer 满只增加 `observer_counters.trace_dropped`，不阻塞、不重试到
-回收上下文、不改变 reclaim。parser 看到 `snapshot_seq` 间隙必须报告 GAP，
-但坏记录不能阻止后续记录解析。
-
-## 7. Tracepoint 与 debugfs 接口
-
-### 7.1 Tracepoint
-
-新增事件组为 `myself_kswapd`：
-
-- `myself_kswapd:lruvec_snapshot`：默认的聚合快照事件；
-- `myself_kswapd:lruvec_sample`：默认关闭，仅受 `sample_enabled` 和
-  固定容量限制控制。
-
-两个事件都使用第 6 节字段契约；sample 额外带每条 LRU 的 sample count、
-sample limit 和 sample field validity。事件只在 observer active 且对应事件
-启用时发出。字段缺失、枚举非法、序列溢出和 MGLRU 拒绝必须进入
-`validation_flags`/error trace，不伪造数据。
-
-### 7.2 debugfs
-
-目录固定为 `/sys/kernel/debug/myself_kswapd/`：
-
-| 文件 | 方向 | 内容/限制 | 错误语义和权限 |
-| --- | --- | --- | --- |
-| `observer_status` | 只读 | active、mode、MGLRU 状态、计数器、最后错误、丢失数 | 普通读取不触发全量快照 |
-| `observer_config` | 读写 | enable、mode、memcg/nid 过滤、sample、heartbeat、输出上限 | 仅管理员可写；非法枚举/越界返回 `-EINVAL`，并保持旧配置 |
-| `snapshot` | 只读 | 单目标或已配置过滤的聚合快照 | 固定最大输出；读取失败只记 observer error |
-| `samples` | 只读 | 最近一次有界 sample 或 truncation 信息 | 无 sample 时返回明确空状态，不触发 sample |
-
-配置写入使用临时解析结果，完整校验通过后一次性替换；不允许并发写者
-交错形成半套配置。配置生效时不得等待 lru_lock 或执行全量枚举。读者看到的
-快照是固定上限的 bounded 输出，超限必须带 `truncated=1`。
-
-人工 `snapshot` 允许单目标、按 memcg、按 nid 或有上限的全量枚举。无过滤的
-全量请求必须拒绝或严格截断，并在结果中标明上限；它不能被热路径复用。
-
-## 8. Heartbeat 与人工观测
-
-`heartbeat_ms` 默认值为 `0`，只用于调试。启用后由延迟 workqueue 执行，最小
-周期不得低于 `1000ms`，且必须设置明确的 memcg 或 nid 过滤。没有过滤时
-拒绝周期性的全量枚举。heartbeat 失败只增加统计和 error trace，不影响任何
-reclaim。observer 关闭时取消或使待处理 heartbeat 失效，不向 native reclaim
-路径插入睡眠或同步等待。
-
-## 9. 用户态组件和严格边界
-
-### 9.1 Parser
-
-`lruvec_trace_parser` 将 trace 文本转为 `kernel_lruvec_snapshot`。解析步骤
-是字段存在性检查、整数范围检查、枚举检查、序列/阶段检查，再提交 store。
-错误类型至少包括 `MISSING_FIELD`、`INVALID_INTEGER`、`INVALID_ENUM`、
-`OVERFLOW`、`UNSUPPORTED_MODE`。坏记录标记并跳过，不阻止后续记录。
-
-现有 L0.1 parser 只解析 kswapd request/round/end，不能直接当作本组件的
-parser；它的保留错误证据和测试风格可以作为行为参考。
-
-### 9.2 Store
-
-`kernel_snapshot_store` 按 `(memcg_id,nid)` 保存最新有效快照，同时保留：
-
-`last_snapshot_seq`、`last_request_id`、`last_priority`、`last_stage`、
-`last_timestamp`、最新 snapshot、字段有效性和错误计数。
-
-状态检查至少识别 `DUPLICATE`、`STALE`、`GAP`、`STAGE_ORDER_ERROR`。旧数据
-不能覆盖新数据；重复数据可记录但不可重复计入 delta。跨 request 的阶段交错
-按 request_id 分开判断，不能用单一全局 stage 状态误报。
-
-### 9.3 Alignment
-
-`shadow_alignment` 只读 kernel snapshot 和 Shadow physical aggregate，输出：
-
-`MATCH`、`COUNT_DRIFT`、`MISSING_SHADOW_LRUVEC`、`MISSING_KERNEL_LRUVEC`、
-`STALE_KERNEL_SNAPSHOT`、`UNSUPPORTED_PAGE_LEVEL_COMPARE`、
-`UNSUPPORTED_MGLRU`。
-
-计数方向固定为：`delta = kernel_count - shadow_count`。对四条 physical LRU
-逐项报告 raw kernel、raw Shadow、delta、validity 和 consistency；Linux
-memcg 模式 isolated node-scope 字段不参与比较并报告字段不可比，而不是
-报告 MATCH 或 COUNT_DRIFT。
-
-Alignment 严禁创建 Shadow domain/lruvec、创建 `shadow_page`、移动页面、
-自愈、执行 candidate 或把缺失对象补零。它也不比较 policy 字段。
-
-### 9.4 STRICT 与 BOOTSTRAP_AGGREGATE
-
-`STRICT` 只接受当前 mode、键、MGLRU 状态和 freshness 均符合要求的快照；
-任何缺失或不支持字段都输出明确状态，不创建对象。
-
-`BOOTSTRAP_AGGREGATE` 仅建立独立的 kernel aggregate baseline，允许没有
-Shadow 对象，但不创建 `shadow_page`、不修改 Shadow 四链、不参与 candidate，
-不能称为页面级 Shadow 对齐。两种模式的输入、输出和通过条件必须分开，不能
-用 bootstrap baseline 伪造 strict match。
-
-`lruvec_observer_cli` 只负责配置、读取、解析、store 查询和 alignment 展示，
-不提供 reclaim 执行命令。
-
-## 10. Physical 与 policy 双层语义
-
-Shadow physical 层的可比较字段是：
-
-`active_anon`、`inactive_anon`、`active_file`、`inactive_file` 和
-`isolated`。它们代表内核真实状态，只能由后续真实内核生命周期事件更新；
-L0.2 聚合快照本身不更新 Shadow physical 链。
-
-policy 层仅固定未来边界，可含 `reclaim_score`、`protect_score`、
-`suggested_action`、`confidence`、`valid_until_ns`、`policy_seq`，动作名可
-表达 `NONE`、`PROTECT`、`DEMOTE`、`RECLAIM`、`PREWASH`。L0.2 不实现完整
-policy overlay，alignment 只比较 physical。
-
-特别地，policy 的 `DEMOTE_HINT` 不能自动把 Shadow physical active 链移到
-inactive 链。正确的未来流程是：
+#### MEMCG_LRUVEC
 
 ```text
-policy 产生 DEMOTE 请求
-  -> 内核验证并真实执行
-  -> 内核生命周期事件
-  -> Shadow physical 链更新
+四条普通LRU scope = MEMCG_NODE
+isolated scope     = NODE
 ```
 
-## 11. 错误隔离与资源上限
+alignment 规则：
 
-所有 observer 错误只通过 `observer_counters`、error trace 和
-`observer_status` 暴露。错误路径必须：
+- 比较四条普通 LRU；
+- 展示 node isolated 作为上下文；
+- isolated 不参与该 memcg 的 `MATCH/COUNT_DRIFT`；
+- 状态标记为 `FIELD_NOT_COMPARABLE`；
+- 禁止将 node isolated 复制给每个 memcg 后参与比较。
 
-- 不向 reclaim 返回策略性失败，不改变原生返回值；
-- 不在热路径动态分配大对象；
-- 不遍历全部 memcg×nid，不遍历 folio 链，不解析 cgroup 路径字符串；
-- 不因用户态 parser/store/alignment 退出而阻塞内核；
-- 不因 Shadow 缺失、错误或 validator flags 反向修改 Linux。
+#### GLOBAL_LRU
 
-热路径只处理当前 lruvec。debugfs 人工全量操作另行受过滤和硬上限约束。
-sample 每条 LRU 的上限默认由配置给出，但绝不能超过 32；heartbeat 的最小
-周期为 1000ms。
+```text
+四条普通LRU scope = NODE
+isolated scope     = NODE
+```
 
-## 12. 验收与测试设计
+在 GLOBAL 后端真实可用时，两类字段均可参与 node 级比较。
 
-后续实现必须用 TDD、小提交和每阶段独立验证；本节是验收契约，不是本轮
-实施计划。
+### 7.3 字段有效性
 
-### 12.1 内核/KUnit
+每条快照必须携带：
+
+```text
+field_valid_mask
+field_scope[]
+validation_flags
+```
+
+无效字段不能写成未标记的零。
+
+---
+
+## 8. Request、priority 与 scan 分层
+
+### 8.1 三层标识
+
+必须同时存在：
+
+```text
+request_id
+priority_seq
+scan_seq
+```
+
+层次：
+
+```text
+request_id
+  ├── priority_seq
+  │     ├── scan_seq -> lruvec A
+  │     ├── scan_seq -> lruvec B
+  │     └── scan_seq -> lruvec C
+  └── priority_seq
+        └── ...
+```
+
+`snapshot_seq` 仍是 observer 全局单调序列，用于传输顺序和丢失诊断，不替代层次标识。
+
+### 8.2 request 边界
+
+#### kswapd
+
+一次 `balance_pgdat()` 回收请求对应一个 `request_id`，复用 L0.1 上下文。
+
+#### direct reclaim
+
+一次顶层：
+
+```text
+try_to_free_pages()
+```
+
+或经源码确认的等价顶层调用，对应一个 `request_id`。
+
+一个 direct request 可以跨：
+
+- 多个 node；
+- 多个 zone；
+- 多个 lruvec；
+- 多个 priority。
+
+因此 direct request 绝不能绑定到单一 `(mode,memcg_id,nid)`。
+
+#### memcg reclaim
+
+一次顶层：
+
+```text
+try_to_free_mem_cgroup_pages()
+```
+
+或经源码确认的等价显式 memcg reclaim 入口，对应一个 `request_id`。
+
+### 8.3 priority 边界
+
+`priority_seq` 是 request 内单调序号。
+
+它与数值型 `priority` 分开：
+
+```text
+priority_seq = 第几轮
+priority     = scan_control 当前优先级数值
+```
+
+### 8.4 scan 边界
+
+每次真实处理一个当前 `lruvec` 时分配一个 `scan_seq`。
+
+canonical 观测边界为：
+
+```text
+进入 shrink_lruvec(current_lruvec, sc)
+    -> SCAN_BEFORE
+执行原生逻辑
+离开 shrink_lruvec
+    -> SCAN_AFTER
+```
+
+实施时可以通过最小 wrapper 或已存在调用点实现，但语义必须保持：
+
+```text
+同一 (request_id, priority_seq, scan_seq)
+只对应一个明确 lruvec
+```
+
+### 8.5 Observer context
+
+推荐使用与 `scan_control` 一一对应的 sidecar/context：
+
+```c
+struct myks_reclaim_observer_ctx {
+    u64 request_id;
+    u64 priority_seq;
+    u64 next_scan_seq;
+    enum myks_reclaim_source source;
+    bool active;
+};
+```
+
+它可以：
+
+- 作为 `scan_control` 的条件编译字段；
+- 或通过严格生命周期的一一对应 sidecar 传递。
+
+禁止：
+
+- 每层嵌套重新推断并生成 request；
+- 在同一 memcg reclaim 内部把 source 改为 DIRECT；
+- 在 `shrink_lruvec()` 重新创建 request。
+
+### 8.6 Source 判定优先级
+
+来源固定为：
+
+```c
+enum myks_reclaim_source {
+    MYKS_RECLAIM_KSWAPD = 0,
+    MYKS_RECLAIM_DIRECT,
+    MYKS_RECLAIM_MEMCG,
+    MYKS_RECLAIM_UNKNOWN,
+};
+```
+
+判定优先级：
+
+```text
+显式 observer context
+    >
+顶层入口初始化信息
+    >
+防御性运行时推断
+```
+
+已有有效 context 时，不得根据内部调用栈覆盖 source。
+
+---
+
+## 9. 事件模型：Request 事件与 lruvec 快照分离
+
+### 9.1 Request 生命周期事件
+
+沿用并扩展 L0.1 的独立事件类型：
+
+```text
+request_begin
+priority_begin / priority_round
+priority_end（可选独立或合并进round）
+request_end
+```
+
+它们描述 request 级控制流，不强制携带 lruvec 身份。
+
+`REQUEST_BEGIN` 时可能尚未知道具体 memcg/nid，因此不允许填入伪造键。
+
+### 9.2 lruvec snapshot 事件
+
+`myself_kswapd:lruvec_snapshot` 只用于：
+
+```text
+SCAN_BEFORE
+SCAN_AFTER
+HEARTBEAT
+DEBUGFS
+```
+
+其中 SCAN 事件必须携带：
+
+```text
+request_id
+priority_seq
+scan_seq
+lruvec_key
+```
+
+HEARTBEAT/DEBUGFS 没有 reclaim request 时：
+
+```text
+request_id  = 0
+priority_seq = 0
+scan_seq = 0
+priority = INVALID
+```
+
+并通过 stage 和 field-validity 明确标记，而不是伪造 request。
+
+---
+
+## 10. 聚合快照数据契约
+
+概念结构：
+
+```c
+struct myks_lruvec_snapshot {
+    u64 snapshot_seq;
+    u64 timestamp_ns;
+
+    u64 request_id;
+    u64 priority_seq;
+    u64 scan_seq;
+
+    struct myks_lruvec_key key;
+    u32 memcg_css_id;
+
+    enum myks_reclaim_source reclaim_source;
+    enum myks_snapshot_stage stage;
+    enum myks_snapshot_consistency consistency;
+
+    int priority;
+
+    unsigned long inactive_anon;
+    unsigned long active_anon;
+    unsigned long inactive_file;
+    unsigned long active_file;
+
+    unsigned long isolated_anon;
+    unsigned long isolated_file;
+
+    unsigned long scanned_total;
+    unsigned long reclaimed_total;
+
+    u64 field_valid_mask;
+    u64 validation_flags;
+};
+```
+
+### 10.1 Stage
+
+```c
+enum myks_snapshot_stage {
+    MYKS_STAGE_SCAN_BEFORE = 0,
+    MYKS_STAGE_SCAN_AFTER,
+    MYKS_STAGE_HEARTBEAT,
+    MYKS_STAGE_DEBUGFS,
+};
+```
+
+Request begin/end 不放入该枚举，由独立 request event 负责。
+
+### 10.2 计数语义
+
+四条 LRU：
+
+```text
+采集瞬间的聚合状态
+```
+
+`scanned_total` / `reclaimed_total`：
+
+```text
+当前 reclaim request/scan_control 的累计统计
+```
+
+用户态可计算：
+
+```text
+scanned_delta
+reclaimed_delta
+```
+
+但不能：
+
+- 与 LRU 长度相加；
+- 解释为页面链计数；
+- 跨 request 计算差值。
+
+### 10.3 `snapshot_seq`
+
+`snapshot_seq`：
+
+- 全局单调递增；
+- 由原子序列分配；
+- 即使 trace 未被用户读取也不复用；
+- 溢出按明确 validation/error 状态处理，不静默回绕。
+
+---
+
+## 11. Tracepoint 契约
+
+### 11.1 事件
+
+保留：
+
+```text
+myself_kswapd:lruvec_snapshot
+myself_kswapd:lruvec_sample
+```
+
+sample 默认关闭。
+
+### 11.2 Trace 丢失的可观测边界
+
+普通 trace event 发射路径不能保证向 producer 返回“此次事件是否因 ring buffer
+容量不足而丢失”。
+
+因此禁止维护虚假的精确计数：
+
+```text
+observer_counters.trace_dropped  // 禁止宣称精确
+```
+
+内核侧只维护：
+
+```text
+snapshot_generated
+trace_emit_attempted
+```
+
+用户态和 capture 工具维护：
+
+```text
+tracefs per-CPU overrun/dropped evidence
+snapshot_seq gap
+parser input truncation evidence
+```
+
+### 11.3 Gap 状态
+
+在线读取时：
+
+```text
+发现 snapshot_seq 间隙
+    -> PROVISIONAL_GAP
+```
+
+原因可能包括：
+
+- 多 CPU 事件尚未汇合；
+- trace filter；
+- ring buffer overrun；
+- capture 截断；
+- 用户态丢记录；
+- parser 丢弃坏记录。
+
+完成 capture、按时间/sequence 合并并读取 tracefs overrun 统计后，才可以固化：
+
+```text
+CONFIRMED_GAP
+```
+
+不能将所有 seq gap 自动归因于内核 ring buffer。
+
+---
+
+## 12. debugfs 接口
+
+目录：
+
+```text
+/sys/kernel/debug/myself_kswapd/
+├── observer_status
+├── observer_config
+├── snapshot
+└── samples
+```
+
+### 12.1 `observer_status`
+
+只读，展示：
+
+- active/state；
+- mode；
+- MGLRU 状态；
+- snapshot generated；
+- trace emit attempted；
+- config generation；
+- sample generation；
+- runtime reject count；
+- collection errors；
+- last error；
+- output limit；
+- heartbeat 状态。
+
+读取 status 不触发采集。
+
+### 12.2 `observer_config`
+
+管理员读写。
+
+至少支持：
+
+```text
+enabled
+mode
+filter_memcg_id
+filter_nid
+heartbeat_ms
+sample_enabled
+sample_limit_per_lru
+max_snapshot_entries
+max_output_bytes
+```
+
+配置更新采用：
+
+```text
+解析到临时对象
+-> 完整校验
+-> 原子替换配置
+```
+
+非法写入：
+
+- 返回明确错误；
+- 不改变旧配置；
+- 不执行快照；
+- 不持有 `lru_lock`。
+
+### 12.3 `snapshot`
+
+#### 单次触发语义
+
+每次 `open(snapshot)` 触发**一次**受控采集：
+
+1. 固化本次配置快照；
+2. 按过滤条件解析目标；
+3. 采集 aggregate；
+4. 若 `sample_enabled=1`，同步触发一次 bounded sample；
+5. 将文本结果缓存到该 open 实例；
+6. 后续分片 `read()` 只读取缓存，不重新遍历。
+
+这样避免：
+
+```text
+一次 cat 导致多次 read()
+-> 多次重复遍历 LRU
+```
+
+### 12.4 `samples`
+
+只返回最近一次成功 sample 的缓存结果。
+
+它本身：
+
+- 不触发新 sample；
+- 不重新加 `lru_lock`；
+- 无缓存时返回明确 `empty=1`；
+- 必须带 sample generation、snapshot seq、limit、total、emitted、truncated。
+
+### 12.5 Bounded 输出
+
+debugfs 快照固定携带：
+
+```text
+nr_total
+nr_emitted
+truncated
+max_snapshot_entries
+max_output_bytes
+```
+
+达到任一上限时：
+
+- 停止继续生成；
+- 保留已生成结果；
+- `truncated=1`；
+- 不把截断当作完整系统快照。
+
+具体常量在实施计划冻结。
+
+---
+
+## 13. Heartbeat
+
+默认：
+
+```text
+heartbeat_ms = 0
+```
+
+开启条件：
+
+- 仅调试；
+- 最小周期 `>= 1000ms`；
+- 必须配置明确 filter；
+- 禁止无过滤周期性枚举全系统；
+- 使用 delayed work；
+- observer disable 时取消或使 pending work 失效。
+
+heartbeat 不属于 reclaim request：
+
+```text
+request_id = 0
+priority_seq = 0
+scan_seq = 0
+stage = HEARTBEAT
+```
+
+失败只记录 observer 统计，不反馈到 reclaim。
+
+---
+
+## 14. Bounded folio sample
+
+### 14.1 目的
+
+sample 只用于验证：
+
+- lruvec 身份；
+- PFN；
+- nid；
+- memcg；
+- classic LRU 类型；
+- flags 摘要。
+
+不用于：
+
+- 初始化 Shadow page；
+- 生成 candidate；
+- 页面生命周期同步；
+- 聚合计数来源。
+
+### 14.2 锁模型
+
+仅 `sample_enabled=1` 时：
+
+```text
+准备固定容量缓冲区
+-> 短暂持有 lruvec->lru_lock
+-> 每条普通LRU最多复制N项
+-> 解锁
+-> 锁外格式化/trace/debugfs
+```
+
+锁内禁止：
+
+- 动态扩容；
+- 内存路径/文件路径解析；
+- 用户态拷贝；
+- 获取 page lock；
+- 调用可能睡眠的 helper；
+- 修改 folio；
+- 修改 list；
+- 采样 isolated/unevictable。
+
+硬上限：
+
+```text
+sample_limit_per_lru <= 32
+```
+
+---
+
+## 15. 用户态 Parser
+
+`lruvec_trace_parser` 负责：
+
+```text
+trace record
+-> event type
+-> required fields
+-> integer/enum/range validation
+-> snapshot object
+-> store
+```
+
+错误至少区分：
+
+```text
+MISSING_FIELD
+INVALID_INTEGER
+INVALID_ENUM
+OVERFLOW
+UNSUPPORTED_MODE
+INVALID_KEY
+INVALID_STAGE
+INVALID_SCOPE
+```
+
+坏记录：
+
+- 记录错误；
+- 不进入 store；
+- 不阻止后续记录；
+- 不修改 Shadow。
+
+Request events 与 lruvec snapshot events 分别解析，再通过标识关联。
+
+---
+
+## 16. Snapshot Store
+
+### 16.1 主键
+
+store 主键：
+
+```text
+(mode, memcg_id, nid)
+```
+
+并保留：
+
+```text
+memcg_css_id
+last_snapshot_seq
+last_request_id
+last_priority_seq
+last_scan_seq
+last_stage
+last_timestamp_ns
+latest_snapshot
+field_validity
+error counters
+```
+
+### 16.2 Sequence 处理
+
+```text
+seq > last_seq  -> ACCEPT
+seq == last_seq -> DUPLICATE
+seq < last_seq  -> STALE
+```
+
+旧记录不能覆盖新记录。
+
+### 16.3 Scan 配对
+
+`SCAN_BEFORE/SCAN_AFTER` 必须按：
+
+```text
+(request_id, priority_seq, scan_seq)
+```
+
+配对。
+
+不能仅根据：
+
+```text
+request_id + priority
+```
+
+推断。
+
+### 16.4 Request 嵌套
+
+不同 request 的事件允许交错，store 必须按 request 分开维护阶段状态。
+
+### 16.5 Memcg incarnation
+
+对于同一 `(mode,memcg_id,nid)`：
+
+```text
+css_id变化
+-> 标记 MEMCG_INCARCATION_CHANGED
+-> 旧记录失效
+-> 不跨代计算delta
+```
+
+---
+
+## 17. STRICT_COMPARE
+
+输入：
+
+```text
+kernel_lruvec_snapshot
+Shadow lruvec physical aggregate
+```
+
+输出至少包括：
+
+```text
+MATCH
+COUNT_DRIFT
+MISSING_SHADOW_LRUVEC
+MISSING_KERNEL_LRUVEC
+STALE_KERNEL_SNAPSHOT
+MEMCG_INCARCATION_CHANGED
+FIELD_NOT_COMPARABLE
+UNSUPPORTED_PAGE_LEVEL_COMPARE
+UNSUPPORTED_MGLRU
+```
+
+### 17.1 Delta
+
+方向固定：
+
+```text
+delta = kernel_count - shadow_count
+```
+
+### 17.2 四条 LRU
+
+当字段有效且 scope 匹配时逐项比较。
+
+### 17.3 Isolated
+
+MEMCG 模式：
+
+```text
+kernel isolated scope = NODE
+Shadow isolated scope = MEMCG_NODE
+```
+
+因此：
+
+- 不比较；
+- 不影响普通四链的 MATCH；
+- 单独输出 `FIELD_NOT_COMPARABLE`；
+- 展示 node 值作为上下文。
+
+GLOBAL 模式：
+
+- node scope 可比较；
+- 前提是 GLOBAL 后端真实可用。
+
+### 17.4 严格只读
+
+STRICT 不得：
+
+- 创建 domain；
+- 创建 lruvec；
+- 创建 page；
+- 修改链；
+- 执行 candidate；
+- 自动补零；
+- 根据 drift 自愈。
+
+---
+
+## 18. BOOTSTRAP_AGGREGATE
+
+BOOTSTRAP 只维护：
+
+```text
+kernel aggregate baseline
+```
+
+用途：
+
+- 验证 trace/debugfs/parser/store 链路；
+- 观察 kernel count 漂移；
+- 在 L0.3 尚未接入时提供诊断基线。
+
+禁止：
+
+- 创建 Shadow page；
+- 修改 Shadow physical 链；
+- 参与 candidate；
+- 被命名为页面级 Shadow；
+- 伪造 STRICT MATCH。
+
+STRICT 与 BOOTSTRAP 必须使用不同模式字段和输出状态。
+
+---
+
+## 19. 错误隔离
+
+### 19.1 内核 observer
+
+任何错误：
+
+```text
+resolve失败
+MGLRU enabled
+memcg dying
+nid offline
+字段不可用
+sample buffer不足
+debugfs输出截断
+```
+
+只允许：
+
+- 增加 observer counter；
+- 更新 last error；
+- 可选发 error trace；
+- 跳过本次观测。
+
+不得：
+
+- 修改 `scan_control` 的回收策略字段；
+- 改变原生返回值；
+- 中断 reclaim；
+- 等待用户态；
+- 重试到热路径超时。
+
+### 19.2 用户态
+
+parser/store/alignment 退出或崩溃，不影响内核。
+
+### 19.3 Shadow
+
+Shadow 缺失、validator 报错或 count drift 不反馈到 Linux。
+
+---
+
+## 20. 性能边界
+
+正常 reclaim 热路径禁止：
+
+- 遍历全部 memcg；
+- 遍历全部 node；
+- 遍历 folio 链；
+- 动态大内存分配；
+- 路径字符串解析；
+- debugfs 文本生成；
+- 睡眠等待；
+- 获取不必要的页锁。
+
+正常快照只处理：
+
+```text
+当前 shrink_lruvec 的 lruvec
+```
+
+性能统计至少包括：
+
+```text
+snapshot_generated
+snapshot_skipped_disabled
+snapshot_skipped_mglru
+snapshot_resolve_failed
+snapshot_collect_failed
+trace_emit_attempted
+sample_requested
+sample_completed
+sample_truncated
+runtime_reject_count
+collect_elapsed_total_ns
+collect_elapsed_max_ns
+```
+
+不提供无法准确获得的“精确 trace dropped”计数。
+
+---
+
+## 21. 测试与验收
+
+### 21.1 设计级不变量
+
+必须验证：
+
+1. observer 关闭不改变 native reclaim。
+2. MEMCG/GLOBAL 身份空间不会碰撞。
+3. `CONFIG_MEMCG=y` 下 Linux 不启用伪 global 模式。
+4. isolated scope 不会被错误解释为 per-memcg。
+5. request/priority/scan 三层不会混用。
+6. memcg reclaim 内部调用不会重新生成 DIRECT request。
+7. MGLRU enable 和运行中重新开启均能拒绝 classic 快照。
+8. trace gap 不会被无证据归因于 ring buffer。
+9. debugfs 一次 open 只触发一次采集。
+10. samples 读取不触发新遍历。
+11. STRICT 不创建或修改 Shadow。
+12. policy hint 不改变 physical alignment。
+
+### 21.2 内核构建矩阵
+
+至少：
+
+```text
+CONFIG_MEMCG=y
+CONFIG_MEMCG=n
+CONFIG_DEBUG_FS=y
+CONFIG_TRACING=y
+CONFIG_TRACEPOINTS=y
+CONFIG_LRU_GEN=n
+CONFIG_LRU_GEN=y
+```
+
+要求：
+
+- 两种 MEMCG 配置均可编译；
+- LRU_GEN=y 可编译；
+- MGLRU enabled 时运行拒绝；
+- GLOBAL 后端不泄漏 MEMCG-only 符号。
+
+### 21.3 KUnit/内核对象测试
 
 覆盖：
 
-- `MEMCG_LRUVEC`/`GLOBAL_LRU` 模式识别、身份映射、`CONFIG_MEMCG=n` 限制；
-- MGLRU 运行时拒绝，包括 `CONFIG_LRU_GEN=y` 可编译但 enabled 时拒绝；
-- 四条 LRU 统计、isolated scope/validity、全局 seq 单调递增；
-- request、source、stage、priority 和 scan-before/after 关联；
-- 关闭观测、过滤、非法配置、trace 丢失和错误隔离；
-- sample 默认关闭、`N=0`、`N=32`、超过上限、锁外输出和采样失败；
-- heartbeat 默认关闭、最小周期、过滤必需和失败不影响 reclaim。
+- mode resolver；
+- key 构造；
+- css incarnation；
+- field scope；
+- validation mask；
+- request context；
+- scan seq；
+- MGLRU guard；
+- config 原子替换；
+- output bound；
+- heartbeat filter；
+- sample limit；
+- error isolation。
 
-### 12.2 Trace/debugfs
+### 21.4 Trace 测试
 
-覆盖 tracepoint 字段、阶段顺序、request 交错、丢失和 seq gap；debugfs
-覆盖单目标、memcg/nid 过滤、有界全量、truncation、非法配置、heartbeat
-过滤和 sample 上限。检查读 debugfs status 不触发全量快照。
+覆盖：
 
-### 12.3 用户态
+- request 生命周期；
+- scan before/after 配对；
+- 多 lruvec 同 priority；
+- 多 request 交错；
+- snapshot seq；
+- provisional/confirmed gap；
+- tracefs overrun 证据；
+- filter 行为。
 
-Parser/store 覆盖正常记录、缺字段、非法整数、非法枚举、溢出、duplicate、
-stale、gap 和阶段交错。Alignment 覆盖全部状态、delta 方向、缺对象、过期、
-MGLRU、isolated 不可比、不创建对象、不修改链和 policy 不影响 physical。
-Bootstrap 覆盖不创建 page、不修改四链、不参与 candidate。
+### 21.5 debugfs 测试
 
-### 12.4 构建和 runtime smoke
+覆盖：
 
-至少准备：`CONFIG_MEMCG=y`、`CONFIG_DEBUG_FS=y`、`CONFIG_TRACING=y`、
-`CONFIG_LRU_GEN=n` 的构建验证；另验证 `CONFIG_LRU_GEN=y` 可以编译且运行时
-拒绝 observer。需要提供关闭 observer 后的行为等价检查。
+- status 不触发采集；
+- config 合法/非法；
+- 单目标；
+- memcg filter；
+- nid filter；
+- bounded 全量；
+- max entries；
+- max bytes；
+- truncation；
+- snapshot open 一次采集；
+- read 分片不重复；
+- samples cache；
+- empty sample；
+- heartbeat 无过滤拒绝。
 
-当前环境没有已重启到 L0.2 observer 的 Linux 内核，因此真实 runtime smoke
-在本设计阶段记录为 `NOT RUN / ENVIRONMENT BLOCKED`；不得用离线 parser 测试
-或静态阅读替代真实运行时结论。
+### 21.6 Parser/store 测试
 
-## 13. 后续实施边界
+覆盖：
 
-后续建议按独立可审阅提交推进：必要 L0.1 observe-only 前置、classic lruvec
-snapshot model、kswapd、direct reclaim、memcg reclaim、debugfs、bounded
-folio sample、heartbeat、parser、store、bootstrap、alignment、CLI，最后再
-做 tests/runtime review。每阶段必须 TDD、独立验证，并保持 native reclaim
-和 Shadow physical 链不变。实施阶段不得提前扩展到执行器、MGLRU 映射或完整
-policy engine；完成后需独立只读审查，不 push、不合并 main。
+- 正常记录；
+- 缺字段；
+- 溢出；
+- 非法枚举；
+- 非法 key/scope；
+- duplicate；
+- stale；
+- provisional gap；
+- confirmed gap；
+- stage order；
+- scan pairing；
+- request 交错；
+- css incarnation change。
 
-L0.3 的边界是生命周期事件、内核真实执行反馈、policy overlay 和执行器闭环。
-L0.2 可以为这些后续能力保留稳定的 snapshot/source/stage 字段，但不得在
-本阶段提前添加执行请求、页面事件或由 policy 驱动物理链迁移。
+### 21.7 Alignment 测试
 
-## 附录 A：Shadow 现有接口映射
+覆盖：
 
-| 设计概念 | 真实文件 | 真实结构/函数 | 直接复用 | L0.2 新增只读边界 |
-| --- | --- | --- | --- | --- |
-| Shadow engine | `用户态模拟器/v1/src/core/internal.h` | `struct reclaim_engine` | 仅作宿主对象 | 不向 engine 注入 kernel state |
-| domain | `用户态模拟器/v1/src/core/internal.h` | `struct shadow_domain`，`memcg_id` | 不直接暴露 | alignment 只用键查询 |
-| lruvec | `internal.h`、`shadow_lru.h` | `struct shadow_lruvec`、`shadow_lruvec_get_stats()` | 是 | 不扩展生命周期接口 |
-| physical 四链/isolated | `shadow_lru.c`、`shadow_lru.h` | `lists[]`、`isolated`、`shadow_lruvec_stats` | 是 | kernel snapshot 只读对照 |
-| candidate | `shadow_lru.h`、`shadow_lru.c` | collect/revalidate API | 否 | L0.2 明确不调用执行 |
-| validator | `shadow_lru.c`、`validator.c` | `shadow_engine_validate()` | 仅静止点诊断 | 不由 kernel trace 自动触发 |
-| policy | `include/myself_kswapd/policy.h` | 现有 v1 policy 类型 | 不作为 L0.2 overlay | 不更新 physical 链 |
+- MATCH；
+- COUNT_DRIFT；
+- missing kernel；
+- missing Shadow；
+- stale；
+- incarnation change；
+- isolated not comparable；
+- global isolated comparable；
+- delta 方向；
+- 不创建对象；
+- 不修改链；
+- policy hint 不影响 physical。
 
-## 附录 B：L0.1 候选前置提交清单
+### 21.8 Runtime Smoke
 
-以下是只读检查得到的候选边界；本轮不 cherry-pick、不复制、不导入。
+可启动新 Linux 6.17 内核时：
 
-| 原 SHA | 提交主题 | 主要修改路径 | L0.2 依赖理由 | 建议 |
-| --- | --- | --- | --- | --- |
-| `4557c010a451ca161a2b431b2f93d7294d7ac359` | add Linux 6.17 kswapd observe-only adapter | `patches/0002-linux617-myself-kswapd-l01.patch`、`tools/myself_kswapd/*`、`.gitignore`、`patches/README.md` | 提供 request context、trace 基础、parser 行为参考 | 不整提交导入；后续按文件和验证边界选择必要 observe-only 前置 |
-| `dfe5107e7207fb9f68b87a50f1cd770e600df288` | refresh Linux 6.17 adapter patch | `patches/0002-linux617-myself-kswapd-l01.patch` | 使受控 patch 与当前本地 Linux 源保持一致 | 不单独 cherry-pick；以后以审阅后的 patch 内容为准 |
-| `362611828bac62c4a820498ccc718c2b87861fef` | cover kswapd observer validation paths | patch、`tools/myself_kswapd/parse_kswapd_trace.py`、parser fixtures/tests | parser 的坏记录与 validation 证据可复用 | 仅作为测试契约参考，不导入 L0.2 实现 |
-| `f427ffca0e21e9a88513e396ca200890bbcbaf84` | preserve per-cpu trace statistics | `tools/myself_kswapd/capture_kswapd_trace.sh` | 只影响 L0.1 捕获脚本的统计保存 | 不属于 L0.2 内核前置 |
-| `bd1bb6c4d435eb0a29c23181e82ba960814ad0a5` | preserve begin snapshot order types | `patches/0002-linux617-myself-kswapd-l01.patch` | 依赖 L0.1 patch 的类型修正 | 不单独导入；随必要 patch 边界重新验证 |
+1. 关闭 MGLRU；
+2. 启用 observer；
+3. 触发 kswapd；
+4. 触发 direct reclaim；
+5. 触发 memcg reclaim；
+6. 读取 trace；
+7. 读取 debugfs；
+8. 运行 parser/store/alignment；
+9. 运行中重新开启 MGLRU，验证即时拒绝；
+10. 关闭 observer；
+11. 检查无崩溃、锁死和明显延迟退化。
 
-L0.1 的 Kconfig/Makefile 真实路径为
-`Linux6.17/mm/myself_kswapd/Kconfig` 和 `Makefile`；其 adapter、公开头文件、
-trace 唯一实例和工具测试均保持在 L0.1 worktree，未被本设计分支修改。
+环境不具备时必须写：
 
-## 附录 C：Linux 6.17 接口定位
+```text
+NOT RUN / ENVIRONMENT BLOCKED
+```
 
-| 观测项 | 结构/helper | 真实文件 | 锁/一致性 | CONFIG 依赖 |
-| --- | --- | --- | --- | --- |
-| lruvec | `struct lruvec`、`lru_lock`、`lists[]`、`pgdat` | `include/linux/mmzone.h:654` 附近 | list 变更受 lru_lock；聚合读取近似 | 基础；`pgdat` 字段随 MEMCG 条件编译 |
-| node | `struct pglist_data::node_id`、`__lruvec` | `include/linux/mmzone.h:1360` 附近 | node stats 近似 | NUMA/UMA 均有 node id |
-| memcg | `struct mem_cgroup::css`、`nodeinfo[]` | `include/linux/memcontrol.h` | 生命周期需遵循内核 memcg 规则 | `CONFIG_MEMCG` |
-| lru mapping | `enum lru_list`、`folio_lru_list()` | `mmzone.h`、`mm_inline.h` | sample 时在 lru_lock 内 | classic LRU；MGLRU 另有路径 |
-| lruvec counts | `lruvec_page_state()` | `include/linux/memcontrol.h`、`mm/memcontrol.c` | 近似 vmstat | MEMCG 版本和 disabled stub 均存在 |
-| global counts | `node_page_state()` | `include/linux/vmstat.h`、`mm/vmscan.c` | 近似 node vmstat | 基础 |
-| lruvec mapping | `mem_cgroup_lruvec()` | `include/linux/memcontrol.h` | 当前 pgdat/memcg 映射 | `CONFIG_MEMCG=n` 返回 `pgdat->__lruvec` |
-| isolated | `NR_ISOLATED_ANON/FILE`、`__mod_node_page_state()` | `include/linux/vmstat.h`、`mm/vmscan.c` | node scope；不是 memcg lruvec | 基础 |
-| runtime MGLRU | `lru_gen_enabled()` | `include/linux/mm_inline.h` | static key 读取 | `CONFIG_LRU_GEN` |
-| classic scan | `shrink_lruvec()`、`shrink_node_memcgs()` | `mm/vmscan.c` | 内部阶段会持有/释放 lru_lock | classic path |
-| isolation lock | `spin_lock_irq(&lruvec->lru_lock)`、`unlock_page_lruvec_irq()` | `mm/vmscan.c`、`mm/mmzone.c`/inline helpers | 只读 sample 短持有 | classic path |
-| context counters | `struct scan_control` | `mm/vmscan.c` | request 上下文累计 | 基础；memcg 字段随配置 |
+不能以编译、KUnit 或 parser 测试替代。
 
-### C.1 OPEN QUESTION
+---
 
-以下问题必须在实施前用 Linux 6.17 构建、符号/配置检查或受控运行证据关闭，
-不能用猜测替代：
+## 22. 实施证据要求
 
-1. 当前 Linux 6.17 只有 node 级 isolated 统计；若 L0.2 必须在
-   `MEMCG_LRUVEC` 下提供可比较的 per-memcg isolated 数量，需要确认是否能
-   在不改动原生语义的前提下获得真实来源，否则该字段必须保持不可比。
-2. direct reclaim 的一个 `try_to_free_pages()` 可能跨多个 zone/lruvec；需要
-   构建验证最终采用 `shrink_node()` 周期还是 `shrink_lruvec()` 调用作为
-   canonical request/priority 边界，并证明 request_id 不跨调用错误复用。
-3. memcg reclaim 的嵌套调用（`try_to_free_mem_cgroup_pages()`、
-   `mem_cgroup_shrink_node()` 和 `shrink_node_memcgs()`）需要用真实调用栈
-   验证 source 判定及 request 生命周期，避免重复计数。
-4. 需要在目标配置下确认 `memcg->css.cgroup` 的 `cgroup_id()` 与
-   `memcg->css.id` 的稳定性、复用时序和 debug 输出权限，最终冻结保留
-   `SHADOW_ROOT_MEMCG_ID` 的不冲突约束。
-5. 需要用 CONFIG_MEMCG=y/n 的编译矩阵确认 observer 头文件依赖、
-   `mem_cgroup_lruvec()` disabled inline 和 `lruvec_page_state()` stub 的
-   可用性，确保 GLOBAL_LRU 不引入 MEMCG-only 符号。
-6. 需要实测 tracepoint 过滤/环形缓冲区丢失时的 `snapshot_seq` gap 证据和
-   debugfs bounded 输出边界；静态接口检查不能替代该证据。
-7. 需要在真实启用/关闭 MGLRU 的内核上确认 `lru_gen_enabled()` 拒绝时机，
-   确保 observer 不会在拒绝前发出任何 classic-LRU 快照。
+以下项目不再是接口设计问题，但实施完成前必须取得证据：
 
-OPEN QUESTION 不代表本轮失败；它们是设计已明确、证据尚需补齐的边界，
-后续未关闭前不得标记实现完成。
+| 编号 | 证据项 | 关闭方式 |
+|---|---|---|
+| E1 | `cgroup_id` 与 `css.id` 的目标内核复用和权限语义 | 本地源码核对 + 受控创建/删除 memcg 测试 |
+| E2 | direct reclaim 顶层与 `shrink_lruvec()` 真实调用关系 | ftrace/函数图或受控 trace |
+| E3 | memcg reclaim 嵌套调用 source 传播 | 受控 memcg reclaim trace |
+| E4 | `CONFIG_MEMCG=y/n` 编译矩阵 | 两套内核对象构建 |
+| E5 | tracefs overrun 与 seq gap | 受控小 buffer 压力测试 |
+| E6 | debugfs max entries/max bytes/truncation | KUnit + runtime |
+| E7 | MGLRU enable/runtime re-enable 双重拒绝 | 新内核运行测试 |
+| E8 | observer 热路径开销 | 采集耗时统计与关闭/开启对照 |
+| E9 | runtime smoke | 启动新内核后执行 |
+
+这些项目允许在实施计划中拆分，但任何未完成项必须如实标记，不能写成通过。
+
+---
+
+## 23. 实施阶段建议
+
+后续实施计划按以下顺序展开：
+
+1. 选择性导入 L0.1 observe-only 前置；
+2. 定义公共 key、scope、snapshot、request context；
+3. 完成 `CONFIG_MEMCG` 双后端 resolver；
+4. 完成 MGLRU 双重 guard；
+5. 接入 kswapd request 与 lruvec scan；
+6. 接入 direct reclaim；
+7. 接入 memcg reclaim；
+8. 实现 tracepoint；
+9. 实现 debugfs status/config/snapshot；
+10. 实现 bounded sample 与 sample cache；
+11. 实现 heartbeat；
+12. 实现 parser；
+13. 实现 store；
+14. 实现 BOOTSTRAP_AGGREGATE；
+15. 实现 STRICT_COMPARE；
+16. 实现 CLI/capture；
+17. 完成 build/KUnit/runtime 验证；
+18. 独立只读审查；
+19. 不 push、不 merge main，等待人工决定。
+
+每一步必须：
+
+- TDD；
+- 小提交；
+- 目标测试先失败；
+- 实现后目标测试通过；
+- 阶段回归；
+- `git diff --check`。
+
+---
+
+## 24. L0.3 与后续执行阶段边界
+
+L0.3 才负责：
+
+```text
+PAGE_ADD
+PAGE_ACTIVATE
+PAGE_DEACTIVATE
+PAGE_MOVE
+PAGE_ISOLATE
+PAGE_PUTBACK
+PAGE_RECLAIMED
+```
+
+更后续的执行阶段才负责：
+
+```text
+DEMOTE request
+RECLAIM request
+PROTECT request
+PREWASH request
+内核重新验证
+真实执行结果
+策略反馈
+```
+
+L0.2 只能为这些阶段保留：
+
+```text
+request_id
+priority_seq
+scan_seq
+snapshot_seq
+lruvec key
+source
+stage
+field scope
+```
+
+不能提前实现执行闭环。
+
+---
+
+# 附录 A：Shadow 现有接口映射
+
+| 设计概念 | 当前真实边界 | L0.2 使用方式 |
+|---|---|---|
+| Engine | `struct reclaim_engine` | 只作为 alignment 查询宿主 |
+| Domain | `struct shadow_domain` | 只通过公开键查询，不直接暴露 |
+| lruvec | `struct shadow_lruvec` | 通过 `shadow_lruvec_get_stats()` 获取 physical aggregate |
+| Physical 链 | 四条 lists + isolated | 只读比较 |
+| Candidate | collect/revalidate | L0.2 不调用 |
+| Validator | quiescent-only | 不自动触发，不用于热路径 |
+| Policy | v1 policy 类型 | 不作为 L0.2 physical 状态 |
+
+---
+
+# 附录 B：L0.1 候选前置
+
+| 原 SHA | 内容 | L0.2 处理 |
+|---|---|---|
+| `4557c010a451ca161a2b431b2f93d7294d7ac359` | L0.1 adapter、trace、parser 基础 | 不整提交导入；选择必要 observe-only 文件和契约 |
+| `dfe5107e7207fb9f68b87a50f1cd770e600df288` | Linux patch 刷新 | 只作为受控 patch 参考 |
+| `362611828bac62c4a820498ccc718c2b87861fef` | parser validation/fixture | 复用测试风格，不直接导入实现 |
+| `f427ffca0e21e9a88513e396ca200890bbcbaf84` | per-CPU capture 统计 | 不是内核前置，按 capture 需求评估 |
+| `bd1bb6c4d435eb0a29c23181e82ba960814ad0a5` | begin snapshot 类型修正 | 不单独导入，随必要 patch 重验 |
+
+---
+
+# 附录 C：Linux 6.17 接口映射
+
+| 观测项 | 结构/helper | 作用域/锁 | 设计结论 |
+|---|---|---|---|
+| lruvec | `struct lruvec` | list 受 `lru_lock` | 聚合不遍历链 |
+| node | `pglist_data::node_id` | node | 正式 nid |
+| memcg | `mem_cgroup::css` | 生命周期受 CSS/memcg 规则约束 | ID + incarnation |
+| lru mapping | `enum lru_list`、`folio_lru_list()` | sample 时短持锁 | 仅 debug sample |
+| lruvec counts | `lruvec_page_state()` | 近似 vmstat | 四条普通 LRU 来源 |
+| global counts | `node_page_state()` | node 近似统计 | isolated 来源 |
+| mapping | `mem_cgroup_lruvec()` | 配置相关 | MEMCG resolver |
+| MGLRU | `lru_gen_enabled()` | static key 轻量读取 | enable/runtime 双重 guard |
+| classic scan | `shrink_lruvec()` | 一个明确 lruvec | canonical scan_seq |
+| request context | `scan_control` + observer ctx | request 生命周期 | source/request/priority/scan 传播 |
+| isolation lock | `lruvec->lru_lock` | 短临界区 | 仅 bounded sample 使用 |
+
+---
+
+# 附录 D：设计关闭清单
+
+以下设计问题已经关闭：
+
+- [x] isolated 在 MEMCG 模式下为 NODE scope，不参与 per-memcg 对齐；
+- [x] direct reclaim 顶层定义 request，`shrink_lruvec()` 定义 scan；
+- [x] memcg reclaim 通过显式 observer context 传播 source；
+- [x] key 使用 `(mode,memcg_id,nid)`；
+- [x] css ID 用作 incarnation guard；
+- [x] `CONFIG_MEMCG=y/n` 使用双后端 wrapper；
+- [x] Linux `CONFIG_MEMCG=y` 禁止伪 GLOBAL_LRU；
+- [x] trace producer 不宣称精确 dropped；
+- [x] gap 分 provisional/confirmed；
+- [x] debugfs snapshot open 一次触发一次采集；
+- [x] samples 只读缓存；
+- [x] MGLRU 使用启用时与运行时双重 guard；
+- [x] request event 与 lruvec snapshot event 分离；
+- [x] 增加 `priority_seq` 与 `scan_seq`；
+- [x] physical 与 policy 严格分离。
+
+因此，本规范不再包含会改变接口的 `OPEN QUESTION`，可进入详细实施计划阶段。
