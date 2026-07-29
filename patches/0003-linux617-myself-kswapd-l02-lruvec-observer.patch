@@ -1,0 +1,294 @@
+diff --git a/Linux6.17/mm/myself_kswapd/Makefile b/Linux6.17/mm/myself_kswapd/Makefile
+index 354f499..bb07355 100644
+--- a/Linux6.17/mm/myself_kswapd/Makefile
++++ b/Linux6.17/mm/myself_kswapd/Makefile
+@@ -1,5 +1,7 @@
+ # SPDX-License-Identifier: GPL-2.0
+ 
+ obj-y += adapter/kswapd_observer.o
++obj-y += adapter/lruvec_observer.o
+ obj-y += trace/trace.o
+ obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += adapter/kswapd_observer_kunit.o
++obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += tests/
+diff --git a/Linux6.17/mm/myself_kswapd/adapter/lruvec_observer.c b/Linux6.17/mm/myself_kswapd/adapter/lruvec_observer.c
+new file mode 100644
+index 0000000..7c73bc3
+--- /dev/null
++++ b/Linux6.17/mm/myself_kswapd/adapter/lruvec_observer.c
+@@ -0,0 +1,49 @@
++// SPDX-License-Identifier: GPL-2.0
++
++#include "../include/lruvec_observer.h"
++
++// #lzx: Linux L0.2 pure lruvec key and context helpers
++// #lzx--------------------------- 纯 helper ---------------------------
++bool myks_lruvec_key_equal(const struct myks_lruvec_key *a,
++				   const struct myks_lruvec_key *b)
++{
++	if (!a || !b)
++		return false;
++
++	return a->mode == b->mode && a->memcg_id == b->memcg_id &&
++	       a->nid == b->nid;
++}
++
++bool myks_lruvec_key_valid(const struct myks_lruvec_key *key)
++{
++	return key && key->mode <= MYKS_LRU_MODE_GLOBAL && key->nid >= 0;
++}
++
++void myks_reclaim_ctx_reset(struct myks_reclaim_observer_ctx *ctx)
++{
++	if (!ctx)
++		return;
++
++	*ctx = (struct myks_reclaim_observer_ctx) {
++		.source = MYKS_RECLAIM_UNKNOWN,
++	};
++}
++
++u64 myks_reclaim_ctx_next_priority(struct myks_reclaim_observer_ctx *ctx)
++{
++	if (!ctx)
++		return 0;
++	if (ctx->priority_seq != (u64)-1)
++		ctx->priority_seq++;
++	return ctx->priority_seq;
++}
++
++u64 myks_reclaim_ctx_next_scan(struct myks_reclaim_observer_ctx *ctx)
++{
++	if (!ctx)
++		return 0;
++	if (ctx->next_scan_seq != (u64)-1)
++		ctx->next_scan_seq++;
++	return ctx->next_scan_seq;
++}
++// #lzx--------------------------- 纯 helper 结束 ---------------------------
+diff --git a/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h b/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h
+index bbdc876..9b6fb86 100644
+--- a/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h
++++ b/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h
+@@ -6,6 +6,8 @@
+ #include <linux/gfp_types.h>
+ #include <linux/types.h>
+ 
++#include "lruvec_observer.h"
++
+ // #lzx: myself-kswapd L0.1 observe-only code
+ // #lzx--------------------------- 观察器公开的数据模型 ---------------------------
+ enum myks_kswapd_exit_reason {
+diff --git a/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h b/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h
+new file mode 100644
+index 0000000..0d72e86
+--- /dev/null
++++ b/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h
+@@ -0,0 +1,119 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef _MM_MYSELF_KSWAPD_LRUVEC_OBSERVER_H
++#define _MM_MYSELF_KSWAPD_LRUVEC_OBSERVER_H
++
++#include <linux/bitops.h>
++#include <linux/types.h>
++
++struct lruvec;
++struct mem_cgroup;
++struct pglist_data;
++typedef struct pglist_data pg_data_t;
++
++// #lzx: Linux L0.2 classic-LRU lruvec observer contract
++// #lzx--------------------------- lruvec 观测类型 ---------------------------
++enum myks_lru_mode {
++	MYKS_LRU_MODE_MEMCG = 0,
++	MYKS_LRU_MODE_GLOBAL,
++};
++
++enum myks_field_scope {
++	MYKS_SCOPE_INVALID = 0,
++	MYKS_SCOPE_MEMCG_NODE,
++	MYKS_SCOPE_NODE,
++};
++
++enum myks_reclaim_source {
++	MYKS_RECLAIM_KSWAPD = 0,
++	MYKS_RECLAIM_DIRECT,
++	MYKS_RECLAIM_MEMCG,
++	MYKS_RECLAIM_UNKNOWN,
++};
++
++enum myks_snapshot_stage {
++	MYKS_STAGE_SCAN_BEFORE = 0,
++	MYKS_STAGE_SCAN_AFTER,
++	MYKS_STAGE_HEARTBEAT,
++	MYKS_STAGE_DEBUGFS,
++};
++
++enum myks_snapshot_consistency {
++	MYKS_SNAPSHOT_APPROXIMATE = 0,
++	MYKS_SNAPSHOT_LOCKED_SAMPLE,
++};
++
++struct myks_lruvec_key {
++	enum myks_lru_mode mode;
++	u64 memcg_id;
++	int nid;
++};
++
++struct myks_lruvec_identity {
++	struct myks_lruvec_key key;
++	u32 memcg_css_id;
++};
++
++#define MYKS_FIELD_INACTIVE_ANON	BIT_ULL(0)
++#define MYKS_FIELD_ACTIVE_ANON		BIT_ULL(1)
++#define MYKS_FIELD_INACTIVE_FILE	BIT_ULL(2)
++#define MYKS_FIELD_ACTIVE_FILE		BIT_ULL(3)
++#define MYKS_FIELD_ISOLATED_ANON	BIT_ULL(4)
++#define MYKS_FIELD_ISOLATED_FILE	BIT_ULL(5)
++#define MYKS_FIELD_SCANNED_TOTAL	BIT_ULL(6)
++#define MYKS_FIELD_RECLAIMED_TOTAL	BIT_ULL(7)
++
++enum myks_lruvec_validation_flag {
++	MYKS_LRUVEC_VALIDATION_NONE = 0,
++	MYKS_LRUVEC_VALIDATION_INVALID_KEY = BIT_ULL(0),
++	MYKS_LRUVEC_VALIDATION_UNSUPPORTED_CONFIG = BIT_ULL(1),
++	MYKS_LRUVEC_VALIDATION_MGLRU = BIT_ULL(2),
++	MYKS_LRUVEC_VALIDATION_INVALID_SCOPE = BIT_ULL(3),
++	MYKS_LRUVEC_VALIDATION_INCARNATION_CHANGE = BIT_ULL(4),
++};
++
++struct myks_lruvec_snapshot {
++	u64 snapshot_seq;
++	u64 timestamp_ns;
++	u64 request_id;
++	u64 priority_seq;
++	u64 scan_seq;
++
++	struct myks_lruvec_key key;
++	u32 memcg_css_id;
++
++	enum myks_reclaim_source reclaim_source;
++	enum myks_snapshot_stage stage;
++	enum myks_snapshot_consistency consistency;
++	int priority;
++
++	unsigned long inactive_anon;
++	unsigned long active_anon;
++	unsigned long inactive_file;
++	unsigned long active_file;
++	unsigned long isolated_anon;
++	unsigned long isolated_file;
++
++	unsigned long scanned_total;
++	unsigned long reclaimed_total;
++
++	u64 field_valid_mask;
++	u64 validation_flags;
++};
++
++struct myks_reclaim_observer_ctx {
++	u64 request_id;
++	u64 priority_seq;
++	u64 next_scan_seq;
++	enum myks_reclaim_source source;
++	bool active;
++};
++
++bool myks_lruvec_key_equal(const struct myks_lruvec_key *a,
++				   const struct myks_lruvec_key *b);
++bool myks_lruvec_key_valid(const struct myks_lruvec_key *key);
++void myks_reclaim_ctx_reset(struct myks_reclaim_observer_ctx *ctx);
++u64 myks_reclaim_ctx_next_priority(struct myks_reclaim_observer_ctx *ctx);
++u64 myks_reclaim_ctx_next_scan(struct myks_reclaim_observer_ctx *ctx);
++// #lzx--------------------------- lruvec 观测类型结束 ---------------------------
++
++#endif /* _MM_MYSELF_KSWAPD_LRUVEC_OBSERVER_H */
+diff --git a/Linux6.17/mm/myself_kswapd/tests/Makefile b/Linux6.17/mm/myself_kswapd/tests/Makefile
+new file mode 100644
+index 0000000..244d2de
+--- /dev/null
++++ b/Linux6.17/mm/myself_kswapd/tests/Makefile
+@@ -0,0 +1,3 @@
++# SPDX-License-Identifier: GPL-2.0
++
++obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += lruvec_observer_test.o
+diff --git a/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c b/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c
+new file mode 100644
+index 0000000..010e22f
+--- /dev/null
++++ b/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c
+@@ -0,0 +1,74 @@
++// SPDX-License-Identifier: GPL-2.0
++
++#include <kunit/test.h>
++
++#include "../include/lruvec_observer.h"
++
++static void myks_lruvec_key_mode_test(struct kunit *test)
++{
++	const struct myks_lruvec_key memcg = {
++		.mode = MYKS_LRU_MODE_MEMCG,
++		.memcg_id = 0,
++		.nid = 0,
++	};
++	const struct myks_lruvec_key global = {
++		.mode = MYKS_LRU_MODE_GLOBAL,
++		.memcg_id = 0,
++		.nid = 0,
++	};
++
++	KUNIT_EXPECT_FALSE(test, myks_lruvec_key_equal(&memcg, &global));
++	KUNIT_EXPECT_TRUE(test, myks_lruvec_key_equal(&memcg, &memcg));
++}
++
++static void myks_lruvec_key_validation_test(struct kunit *test)
++{
++	struct myks_lruvec_key key = {
++		.mode = MYKS_LRU_MODE_MEMCG,
++		.memcg_id = 1,
++		.nid = 0,
++	};
++
++	KUNIT_EXPECT_TRUE(test, myks_lruvec_key_valid(&key));
++	key.nid = -1;
++	KUNIT_EXPECT_FALSE(test, myks_lruvec_key_valid(&key));
++}
++
++static void myks_lruvec_scope_test(struct kunit *test)
++{
++	KUNIT_EXPECT_NE(test, MYKS_SCOPE_NODE, MYKS_SCOPE_MEMCG_NODE);
++	KUNIT_EXPECT_NE(test, MYKS_SCOPE_INVALID, MYKS_SCOPE_NODE);
++}
++
++static void myks_reclaim_context_reset_test(struct kunit *test)
++{
++	struct myks_reclaim_observer_ctx ctx = {
++		.request_id = 42,
++		.priority_seq = 9,
++		.next_scan_seq = 10,
++		.source = MYKS_RECLAIM_DIRECT,
++		.active = true,
++	};
++
++	myks_reclaim_ctx_reset(&ctx);
++	KUNIT_EXPECT_FALSE(test, ctx.active);
++	KUNIT_EXPECT_EQ(test, ctx.request_id, 0ULL);
++	KUNIT_EXPECT_EQ(test, ctx.priority_seq, 0ULL);
++	KUNIT_EXPECT_EQ(test, ctx.next_scan_seq, 0ULL);
++	KUNIT_EXPECT_EQ(test, ctx.source, MYKS_RECLAIM_UNKNOWN);
++}
++
++static struct kunit_case myks_lruvec_observer_test_cases[] = {
++	KUNIT_CASE(myks_lruvec_key_mode_test),
++	KUNIT_CASE(myks_lruvec_key_validation_test),
++	KUNIT_CASE(myks_lruvec_scope_test),
++	KUNIT_CASE(myks_reclaim_context_reset_test),
++	{}
++};
++
++static struct kunit_suite myks_lruvec_observer_test_suite = {
++	.name = "myself-kswapd-lruvec-observer",
++	.test_cases = myks_lruvec_observer_test_cases,
++};
++
++kunit_test_suite(myks_lruvec_observer_test_suite);
