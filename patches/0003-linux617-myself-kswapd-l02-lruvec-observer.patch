@@ -23,12 +23,58 @@ index 354f499..a965743 100644
  obj-y += trace/trace.o
  obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += adapter/kswapd_observer_kunit.o
 +obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += tests/
+diff --git a/Linux6.17/mm/myself_kswapd/adapter/kswapd_observer.c b/Linux6.17/mm/myself_kswapd/adapter/kswapd_observer.c
+index d5ebb6b..44e0686 100644
+--- a/Linux6.17/mm/myself_kswapd/adapter/kswapd_observer.c
++++ b/Linux6.17/mm/myself_kswapd/adapter/kswapd_observer.c
+@@ -1,6 +1,5 @@
+ // SPDX-License-Identifier: GPL-2.0
+ 
+-#include <linux/atomic.h>
+ #include <linux/overflow.h>
+ #include <linux/timekeeping.h>
+ #include <trace/events/myself_kswapd.h>
+@@ -9,8 +8,6 @@
+ 
+ // #lzx: myself-kswapd L0.1 observe-only code
+ // #lzx--------------------------- 观察器实现 ---------------------------
+-static atomic64_t myks_request_seq = ATOMIC64_INIT(0);
+-
+ bool myks_kswapd_events_enabled(void)
+ {
+ 	return trace_myself_kswapd_request_begin_enabled() ||
+@@ -71,7 +68,8 @@ void myks_kswapd_request_begin(struct myks_kswapd_request_ctx *ctx,
+ 
+ 	*ctx = (struct myks_kswapd_request_ctx) { 0 };
+ 	ctx->enabled = true;
+-	ctx->request_id = atomic64_inc_return(&myks_request_seq);
++	myks_reclaim_ctx_begin_request(&ctx->reclaim_ctx, MYKS_RECLAIM_KSWAPD);
++	ctx->request_id = ctx->reclaim_ctx.request_id;
+ 	ctx->request_begin_ns = ktime_get_mono_fast_ns();
+ 	ctx->exit_reason = MYKS_EXIT_UNKNOWN;
+ 	trace_myself_kswapd_request_begin(ctx->request_id, snapshot->nid,
+@@ -82,6 +80,8 @@ void myks_kswapd_request_begin(struct myks_kswapd_request_ctx *ctx,
+ 
+ void myks_kswapd_round_begin(struct myks_kswapd_request_ctx *ctx)
+ {
++	if (ctx && ctx->enabled)
++		myks_reclaim_ctx_begin_priority(&ctx->reclaim_ctx);
+ 	if (ctx && ctx->enabled)
+ 		ctx->round_begin_ns = ktime_get_mono_fast_ns();
+ }
+@@ -235,5 +235,6 @@ void myks_kswapd_request_end(struct myks_kswapd_request_ctx *ctx,
+ 			ctx->total_reclaimed, ctx->boost_restart_count,
+ 			ctx->cache_trim_restart_count, snapshot->exit_reason, elapsed_ns,
+ 			ctx->validation_flags);
++	myks_reclaim_ctx_end_request(&ctx->reclaim_ctx);
+ }
+ // #lzx--------------------------- 观察器实现结束 ---------------------------
 diff --git a/Linux6.17/mm/myself_kswapd/adapter/lruvec_observer.c b/Linux6.17/mm/myself_kswapd/adapter/lruvec_observer.c
 new file mode 100644
-index 0000000..67e5338
+index 0000000..bb036dc
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/adapter/lruvec_observer.c
-@@ -0,0 +1,237 @@
+@@ -0,0 +1,276 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include "../include/lruvec_observer.h"
@@ -42,6 +88,7 @@ index 0000000..67e5338
 +#include <linux/vmstat.h>
 +
 +static atomic64_t myks_snapshot_seq = ATOMIC64_INIT(0);
++static atomic64_t myks_request_seq = ATOMIC64_INIT(0);
 +
 +// #lzx: Linux L0.2 pure lruvec key and context helpers
 +// #lzx--------------------------- 纯 helper ---------------------------
@@ -69,6 +116,44 @@ index 0000000..67e5338
 +	*ctx = (struct myks_reclaim_observer_ctx) {
 +		.source = MYKS_RECLAIM_UNKNOWN,
 +	};
++}
++
++void myks_reclaim_ctx_begin_request(struct myks_reclaim_observer_ctx *ctx,
++					enum myks_reclaim_source source)
++{
++	if (!ctx)
++		return;
++	if (ctx->active) {
++		if (ctx->source == MYKS_RECLAIM_UNKNOWN &&
++		    source != MYKS_RECLAIM_UNKNOWN)
++			ctx->source = source;
++		return;
++	}
++
++	myks_reclaim_ctx_reset(ctx);
++	ctx->request_id = atomic64_inc_return(&myks_request_seq);
++	ctx->source = source;
++	ctx->active = true;
++}
++
++u64 myks_reclaim_ctx_begin_priority(struct myks_reclaim_observer_ctx *ctx)
++{
++	if (!ctx || !ctx->active)
++		return 0;
++	return myks_reclaim_ctx_next_priority(ctx);
++}
++
++u64 myks_reclaim_ctx_begin_scan(struct myks_reclaim_observer_ctx *ctx)
++{
++	if (!ctx || !ctx->active)
++		return 0;
++	return myks_reclaim_ctx_next_scan(ctx);
++}
++
++void myks_reclaim_ctx_end_request(struct myks_reclaim_observer_ctx *ctx)
++{
++	if (ctx)
++		ctx->active = false;
 +}
 +
 +u64 myks_reclaim_ctx_next_priority(struct myks_reclaim_observer_ctx *ctx)
@@ -361,7 +446,7 @@ index 0000000..eb96db0
 +}
 +// #lzx--------------------------- 观察器状态机结束 ---------------------------
 diff --git a/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h b/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h
-index bbdc876..9b6fb86 100644
+index bbdc876..109d581 100644
 --- a/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h
 +++ b/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h
 @@ -6,6 +6,8 @@
@@ -373,12 +458,20 @@ index bbdc876..9b6fb86 100644
  // #lzx: myself-kswapd L0.1 observe-only code
  // #lzx--------------------------- 观察器公开的数据模型 ---------------------------
  enum myks_kswapd_exit_reason {
+@@ -75,6 +77,7 @@ struct myks_kswapd_end_snapshot {
+ };
+ 
+ struct myks_kswapd_request_ctx {
++	struct myks_reclaim_observer_ctx reclaim_ctx;
+ 	u64 request_id;
+ 	u64 request_begin_ns;
+ 	u64 round_begin_ns;
 diff --git a/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h b/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h
 new file mode 100644
-index 0000000..0d13154
+index 0000000..c2d9f8e
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h
-@@ -0,0 +1,192 @@
+@@ -0,0 +1,197 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +#ifndef _MM_MYSELF_KSWAPD_LRUVEC_OBSERVER_H
 +#define _MM_MYSELF_KSWAPD_LRUVEC_OBSERVER_H
@@ -540,6 +633,11 @@ index 0000000..0d13154
 +				   const struct myks_lruvec_key *b);
 +bool myks_lruvec_key_valid(const struct myks_lruvec_key *key);
 +void myks_reclaim_ctx_reset(struct myks_reclaim_observer_ctx *ctx);
++void myks_reclaim_ctx_begin_request(struct myks_reclaim_observer_ctx *ctx,
++					enum myks_reclaim_source source);
++u64 myks_reclaim_ctx_begin_priority(struct myks_reclaim_observer_ctx *ctx);
++u64 myks_reclaim_ctx_begin_scan(struct myks_reclaim_observer_ctx *ctx);
++void myks_reclaim_ctx_end_request(struct myks_reclaim_observer_ctx *ctx);
 +u64 myks_reclaim_ctx_next_priority(struct myks_reclaim_observer_ctx *ctx);
 +u64 myks_reclaim_ctx_next_scan(struct myks_reclaim_observer_ctx *ctx);
 +int myks_lruvec_resolve(enum myks_lru_mode mode, struct mem_cgroup *memcg,
@@ -582,10 +680,10 @@ index 0000000..244d2de
 +obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += lruvec_observer_test.o
 diff --git a/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c b/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c
 new file mode 100644
-index 0000000..b246164
+index 0000000..cb6fa8e
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c
-@@ -0,0 +1,291 @@
+@@ -0,0 +1,329 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include <kunit/test.h>
@@ -797,6 +895,42 @@ index 0000000..b246164
 +	KUNIT_EXPECT_EQ(test, snapshot.reclaimed_total, 12UL);
 +}
 +
++static void myks_reclaim_context_hierarchy_test(struct kunit *test)
++{
++	struct myks_reclaim_observer_ctx ctx = { 0 };
++	u64 request_id;
++
++	myks_reclaim_ctx_begin_request(&ctx, MYKS_RECLAIM_KSWAPD);
++	request_id = ctx.request_id;
++	KUNIT_EXPECT_GT(test, request_id, 0ULL);
++	KUNIT_EXPECT_TRUE(test, ctx.active);
++	KUNIT_EXPECT_EQ(test, ctx.source, MYKS_RECLAIM_KSWAPD);
++
++	myks_reclaim_ctx_begin_request(&ctx, MYKS_RECLAIM_DIRECT);
++	KUNIT_EXPECT_EQ(test, ctx.request_id, request_id);
++	KUNIT_EXPECT_EQ(test, ctx.source, MYKS_RECLAIM_KSWAPD);
++	KUNIT_EXPECT_EQ(test, myks_reclaim_ctx_begin_priority(&ctx), 1ULL);
++	KUNIT_EXPECT_EQ(test, myks_reclaim_ctx_begin_priority(&ctx), 2ULL);
++	KUNIT_EXPECT_EQ(test, myks_reclaim_ctx_begin_scan(&ctx), 1ULL);
++	KUNIT_EXPECT_EQ(test, myks_reclaim_ctx_begin_scan(&ctx), 2ULL);
++
++	myks_reclaim_ctx_end_request(&ctx);
++	KUNIT_EXPECT_FALSE(test, ctx.active);
++	myks_reclaim_ctx_begin_request(&ctx, MYKS_RECLAIM_MEMCG);
++	KUNIT_EXPECT_NE(test, ctx.request_id, request_id);
++	KUNIT_EXPECT_EQ(test, ctx.source, MYKS_RECLAIM_MEMCG);
++}
++
++static void myks_reclaim_context_unknown_source_test(struct kunit *test)
++{
++	struct myks_reclaim_observer_ctx ctx = { 0 };
++
++	myks_reclaim_ctx_begin_request(&ctx, MYKS_RECLAIM_UNKNOWN);
++	KUNIT_EXPECT_EQ(test, ctx.source, MYKS_RECLAIM_UNKNOWN);
++	myks_reclaim_ctx_begin_request(&ctx, MYKS_RECLAIM_DIRECT);
++	KUNIT_EXPECT_EQ(test, ctx.source, MYKS_RECLAIM_DIRECT);
++}
++
 +static void myks_observer_enable_rejects_mglru_test(struct kunit *test)
 +{
 +	struct myks_observer observer;
@@ -864,6 +998,8 @@ index 0000000..b246164
 +	KUNIT_CASE(myks_lruvec_resolver_mode_test),
 +	KUNIT_CASE(myks_lruvec_global_resolver_test),
 +	KUNIT_CASE(myks_lruvec_collection_scope_test),
++	KUNIT_CASE(myks_reclaim_context_hierarchy_test),
++	KUNIT_CASE(myks_reclaim_context_unknown_source_test),
 +	KUNIT_CASE(myks_observer_enable_rejects_mglru_test),
 +	KUNIT_CASE(myks_observer_enable_without_mglru_test),
 +	KUNIT_CASE(myks_observer_runtime_reject_test),
@@ -877,3 +1013,28 @@ index 0000000..b246164
 +};
 +
 +kunit_test_suite(myks_lruvec_observer_test_suite);
+diff --git a/Linux6.17/mm/vmscan.c b/Linux6.17/mm/vmscan.c
+index a9d20fa..7dc5958 100644
+--- a/Linux6.17/mm/vmscan.c
++++ b/Linux6.17/mm/vmscan.c
+@@ -75,6 +75,10 @@
+ #include <trace/events/vmscan.h>
+ 
+ struct scan_control {
++#ifdef CONFIG_MYSELF_KSWAPD
++	/* #lzx: one reclaim context is carried for this scan_control lifetime. */
++	struct myks_reclaim_observer_ctx *myks_observer_ctx;
++#endif
+ 	/* How many pages shrink_list() should reclaim */
+ 	unsigned long nr_to_reclaim;
+ 
+@@ -7009,6 +7013,9 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
+ 		.may_unmap = 1,
+ 	};
+ 	struct myks_kswapd_request_ctx myks_ctx = { 0 }; // #lzx
++#ifdef CONFIG_MYSELF_KSWAPD
++	sc.myks_observer_ctx = &myks_ctx.reclaim_ctx; // #lzx
++#endif
+ 	bool myks_final_balanced = false; // #lzx
+ 	bool myks_stop_requested = false; // #lzx
+ 	bool myks_was_frozen = false; // #lzx
