@@ -729,3 +729,19 @@ make: Leaving directory '/home/lzx/Desktop/huawei/myself-kswapd-l02/Linux6.17'
 kernel debugfs-n: PASS
 shell syntax and diff check: PASS
 validation complete
+
+## Runtime smoke
+
+- kernel: 6.17.13-mglru-dual-observe-damon-20260715
+- tracefs: /sys/kernel/tracing
+- MGLRU state: 0x0007
+
+NOT RUN / ENVIRONMENT BLOCKED
+- myself_kswapd trace events unavailable
+- MGLRU state requires explicit --allow-disable-mglru for any change
+
+## TSan
+
+- build: PASS
+- ctest: NOT RUN / ENVIRONMENT BLOCKED
+- evidence: `FATAL: ThreadSanitizer: unexpected memory mapping 0x5b08569e2000-0x5b08569e4000`
