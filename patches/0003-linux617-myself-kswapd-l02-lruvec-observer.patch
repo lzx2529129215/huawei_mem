@@ -117,14 +117,15 @@ index 81eeaaa..1b377ee 100644
  	default n
  	help
 diff --git a/Linux6.17/mm/myself_kswapd/Makefile b/Linux6.17/mm/myself_kswapd/Makefile
-index 354f499..3bcfd6b 100644
+index 354f499..4b967a6 100644
 --- a/Linux6.17/mm/myself_kswapd/Makefile
 +++ b/Linux6.17/mm/myself_kswapd/Makefile
-@@ -1,5 +1,9 @@
+@@ -1,5 +1,10 @@
  # SPDX-License-Identifier: GPL-2.0
  
  obj-y += adapter/kswapd_observer.o
 +obj-y += adapter/lruvec_observer.o
++obj-y += adapter/lruvec_sample.o
 +obj-y += adapter/observer_config.o
 +obj-y += debugfs/
  obj-y += trace/trace.o
@@ -569,6 +570,279 @@ index 0000000..b56c0ec
 +		return;
 +}
 +// #lzx--------------------------- 聚合统计结束 ---------------------------
+diff --git a/Linux6.17/mm/myself_kswapd/adapter/lruvec_sample.c b/Linux6.17/mm/myself_kswapd/adapter/lruvec_sample.c
+new file mode 100644
+index 0000000..6333045
+--- /dev/null
++++ b/Linux6.17/mm/myself_kswapd/adapter/lruvec_sample.c
+@@ -0,0 +1,267 @@
++// SPDX-License-Identifier: GPL-2.0
++
++#include "../include/lruvec_observer.h"
++
++#include <linux/cgroup.h>
++#include <linux/errno.h>
++#include <linux/gfp.h>
++#include <linux/list.h>
++#include <linux/memcontrol.h>
++#include <linux/mm.h>
++#include <linux/mmzone.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++
++#define MYKS_SAMPLE_FLAG_ACTIVE		BIT(0)
++#define MYKS_SAMPLE_FLAG_UNEVICTABLE	BIT(1)
++#define MYKS_SAMPLE_FLAG_REFERENCED	BIT(2)
++#define MYKS_SAMPLE_FLAG_DIRTY		BIT(3)
++#define MYKS_SAMPLE_FLAG_WRITEBACK	BIT(4)
++#define MYKS_SAMPLE_FLAG_LOCKED		BIT(5)
++
++static void myks_sample_cache_clear(struct myks_debugfs_sample_cache *cache)
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&cache->lock, flags);
++	cache->nr_total = 0;
++	cache->nr_emitted = 0;
++	cache->limit_per_lru = 0;
++	cache->snapshot_seq = 0;
++	cache->truncated = false;
++	cache->valid = false;
++	spin_unlock_irqrestore(&cache->lock, flags);
++}
++
++void myks_debugfs_sample_cache_init(struct myks_debugfs_sample_cache *cache)
++{
++	if (!cache)
++		return;
++
++	memset(cache, 0, sizeof(*cache));
++	spin_lock_init(&cache->lock);
++}
++
++static int myks_sample_cache_commit(struct myks_debugfs_sample_cache *cache,
++					const struct myks_lru_sample *samples,
++					u32 limit_per_lru, u32 nr_total,
++					u32 nr_emitted, bool truncated,
++					u64 snapshot_seq)
++{
++	unsigned long flags;
++	u64 generation;
++
++	if (!cache || !samples || nr_emitted > ARRAY_SIZE(cache->samples))
++		return -EINVAL;
++
++	spin_lock_irqsave(&cache->lock, flags);
++	if (cache->generation == U64_MAX) {
++		spin_unlock_irqrestore(&cache->lock, flags);
++		return -EOVERFLOW;
++	}
++	generation = cache->generation + 1;
++	memcpy(cache->samples, samples,
++	       nr_emitted * sizeof(cache->samples[0]));
++	cache->generation = generation;
++	cache->snapshot_seq = snapshot_seq;
++	cache->limit_per_lru = limit_per_lru;
++	cache->nr_total = nr_total;
++	cache->nr_emitted = nr_emitted;
++	cache->truncated = truncated;
++	cache->valid = true;
++	spin_unlock_irqrestore(&cache->lock, flags);
++	return 0;
++}
++
++int myks_lruvec_collect_samples_with_ops(
++				const struct myks_debugfs_config *config,
++				struct myks_debugfs_sample_cache *cache,
++				const struct myks_lru_sample_iter_ops *ops,
++				u64 snapshot_seq)
++{
++	struct myks_lru_sample *samples;
++	u64 total = 0;
++	u32 emitted = 0;
++	bool truncated = false;
++	unsigned int lru;
++	int ret = 0;
++
++	if (!config || !cache || !ops || !ops->count || !ops->get)
++		return -EINVAL;
++	if (!config->sample_enabled || !config->sample_limit_per_lru) {
++		myks_sample_cache_clear(cache);
++		return 0;
++	}
++	if (config->sample_limit_per_lru > MYKS_SAMPLE_MAX_PER_LRU)
++		return -EINVAL;
++
++	samples = kcalloc(ARRAY_SIZE(cache->samples), sizeof(*samples),
++				  GFP_KERNEL);
++	if (!samples)
++		return -ENOMEM;
++	for (lru = 0; lru < MYKS_SAMPLE_LRU_COUNT; lru++) {
++		unsigned int count = ops->count(lru, ops->opaque);
++		unsigned int index;
++
++		total += count;
++		if (count > config->sample_limit_per_lru)
++			truncated = true;
++		for (index = 0; index < count &&
++				emitted < ARRAY_SIZE(cache->samples) &&
++				index < config->sample_limit_per_lru; index++) {
++			struct myks_lru_sample sample;
++
++			if (!ops->get(lru, index, &sample, ops->opaque))
++				continue;
++			sample.lru = lru;
++			samples[emitted++] = sample;
++		}
++	}
++	if (total > U32_MAX)
++		total = U32_MAX;
++	ret = myks_sample_cache_commit(cache, samples,
++					config->sample_limit_per_lru, (u32)total,
++						emitted, truncated, snapshot_seq);
++	kfree(samples);
++	return ret;
++}
++
++static unsigned long myks_sample_flags(const struct folio *folio)
++{
++	unsigned long flags = 0;
++
++	if (folio_test_active(folio))
++		flags |= MYKS_SAMPLE_FLAG_ACTIVE;
++	if (folio_test_unevictable(folio))
++		flags |= MYKS_SAMPLE_FLAG_UNEVICTABLE;
++	if (folio_test_referenced(folio))
++		flags |= MYKS_SAMPLE_FLAG_REFERENCED;
++	if (folio_test_dirty(folio))
++		flags |= MYKS_SAMPLE_FLAG_DIRTY;
++	if (folio_test_writeback(folio))
++		flags |= MYKS_SAMPLE_FLAG_WRITEBACK;
++	if (folio_test_locked(folio))
++		flags |= MYKS_SAMPLE_FLAG_LOCKED;
++	return flags;
++}
++
++int myks_lruvec_collect_samples(struct lruvec *lruvec, pg_data_t *pgdat,
++				const struct myks_debugfs_config *config,
++				struct myks_debugfs_sample_cache *cache,
++				u64 snapshot_seq)
++{
++	struct myks_lru_sample *samples;
++	unsigned long irq_flags;
++	u32 total = 0;
++	u32 emitted = 0;
++	bool truncated = false;
++	unsigned int lru;
++	u64 memcg_id = MYKS_SHADOW_ROOT_MEMCG_ID;
++
++	if (!lruvec || !pgdat || !config || !cache)
++		return -EINVAL;
++	if (!config->sample_enabled || !config->sample_limit_per_lru) {
++		myks_sample_cache_clear(cache);
++		return 0;
++	}
++	if (config->sample_limit_per_lru > MYKS_SAMPLE_MAX_PER_LRU)
++		return -EINVAL;
++	samples = kcalloc(ARRAY_SIZE(cache->samples), sizeof(*samples),
++				  GFP_KERNEL);
++	if (!samples)
++		return -ENOMEM;
++
++#ifdef CONFIG_MEMCG
++	if (lruvec_memcg(lruvec) && lruvec_memcg(lruvec)->css.cgroup)
++		memcg_id = cgroup_id(lruvec_memcg(lruvec)->css.cgroup);
++#endif
++	spin_lock_irqsave(&lruvec->lru_lock, irq_flags);
++	for (lru = 0; lru < MYKS_SAMPLE_LRU_COUNT; lru++) {
++		struct folio *folio;
++		unsigned int per_lru = 0;
++
++		list_for_each_entry(folio, &lruvec->lists[lru], lru) {
++			if (total != U32_MAX)
++				total++;
++			if (per_lru == config->sample_limit_per_lru) {
++				truncated = true;
++				continue;
++			}
++			if (emitted == ARRAY_SIZE(cache->samples)) {
++				truncated = true;
++				continue;
++			}
++			samples[emitted++] = (struct myks_lru_sample) {
++				.pfn = folio_pfn(folio),
++				.memcg_id = memcg_id,
++				.nid = pgdat->node_id,
++				.lru = lru,
++				.flags = myks_sample_flags(folio),
++			};
++			per_lru++;
++		}
++	}
++	spin_unlock_irqrestore(&lruvec->lru_lock, irq_flags);
++
++	if (total == U32_MAX)
++		truncated = true;
++	/* #lzx: all folio fields are copied before releasing lru_lock. */
++	{
++		int ret = myks_sample_cache_commit(cache, samples,
++						config->sample_limit_per_lru, total,
++						emitted, truncated, snapshot_seq);
++
++		kfree(samples);
++		return ret;
++	}
++}
++
++ssize_t myks_debugfs_format_samples(
++				struct myks_debugfs_sample_cache *cache,
++				char *buffer, size_t length)
++{
++	struct myks_lru_sample *samples;
++	unsigned long flags;
++	u64 generation;
++	u64 snapshot_seq;
++	u32 limit;
++	u32 nr_total;
++	u32 nr_emitted;
++	bool truncated;
++	bool valid;
++	u32 i;
++	int used;
++
++	if (!cache || !buffer || !length)
++		return -EINVAL;
++	samples = kcalloc(ARRAY_SIZE(cache->samples), sizeof(*samples),
++				  GFP_KERNEL);
++	if (!samples)
++		return -ENOMEM;
++	spin_lock_irqsave(&cache->lock, flags);
++	generation = cache->generation;
++	snapshot_seq = cache->snapshot_seq;
++	limit = cache->limit_per_lru;
++	nr_total = cache->nr_total;
++	nr_emitted = min_t(u32, cache->nr_emitted,
++				ARRAY_SIZE(cache->samples));
++	truncated = cache->truncated;
++	valid = cache->valid;
++	memcpy(samples, cache->samples,
++	       nr_emitted * sizeof(cache->samples[0]));
++	spin_unlock_irqrestore(&cache->lock, flags);
++
++	used = scnprintf(buffer, length,
++			"valid=%d generation=%llu snapshot_seq=%llu "
++			"limit_per_lru=%u nr_total=%u nr_emitted=%u truncated=%d\n",
++			valid, generation, snapshot_seq, limit, nr_total,
++			nr_emitted, truncated);
++	for (i = 0; i < nr_emitted && used < length; i++)
++		used += scnprintf(buffer + used, length - used,
++				  "sample=%u pfn=%lu memcg_id=%llu nid=%d lru=%d "
++				  "flags=0x%lx\n", i, samples[i].pfn,
++				  samples[i].memcg_id, samples[i].nid, samples[i].lru,
++				  samples[i].flags);
++	kfree(samples);
++	return min_t(int, used, length);
++}
 diff --git a/Linux6.17/mm/myself_kswapd/adapter/observer_config.c b/Linux6.17/mm/myself_kswapd/adapter/observer_config.c
 new file mode 100644
 index 0000000..eb96db0
@@ -674,10 +948,10 @@ index 0000000..13ef1cb
 +obj-y += lruvec_debugfs.o
 diff --git a/Linux6.17/mm/myself_kswapd/debugfs/lruvec_debugfs.c b/Linux6.17/mm/myself_kswapd/debugfs/lruvec_debugfs.c
 new file mode 100644
-index 0000000..46894fd
+index 0000000..f0be92e
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/debugfs/lruvec_debugfs.c
-@@ -0,0 +1,468 @@
+@@ -0,0 +1,546 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include "../include/lruvec_observer.h"
@@ -700,6 +974,7 @@ index 0000000..46894fd
 +static DEFINE_MUTEX(myks_debugfs_config_lock);
 +static struct myks_debugfs_config myks_debugfs_config;
 +static struct myks_observer myks_debugfs_observer;
++static struct myks_debugfs_sample_cache myks_debugfs_sample_cache;
 +static struct dentry *myks_debugfs_root;
 +
 +static int myks_debugfs_parse_bool(const char *value, bool *out)
@@ -1018,8 +1293,8 @@ index 0000000..46894fd
 +	struct myks_lruvec_identity identity;
 +	struct lruvec *lruvec;
 +	struct pglist_data *pgdat;
-+	struct mem_cgroup *memcg = NULL;
 +#ifdef CONFIG_MEMCG
++	struct mem_cgroup *memcg = NULL;
 +	struct cgroup *cgroup;
 +	struct cgroup_subsys_state *css;
 +#endif
@@ -1059,8 +1334,17 @@ index 0000000..46894fd
 +		return ret;
 +	ctx.identity = identity;
 +	ctx.identity_valid = true;
-+	return myks_lruvec_collect(&ctx, 0, lruvec, pgdat,
++	ret = myks_lruvec_collect(&ctx, 0, lruvec, pgdat,
 +			MYKS_STAGE_DEBUGFS, -1, 0, 0, snapshot);
++	if (ret)
++		return ret;
++	ret = myks_lruvec_collect_samples(lruvec, pgdat, config,
++			&myks_debugfs_sample_cache, snapshot->snapshot_seq);
++	if (ret) {
++		myks_debugfs_observer.counters.collection_errors++;
++		myks_debugfs_observer.counters.last_error = ret;
++	}
++	return 0;
 +}
 +
 +static int myks_debugfs_snapshot_open(struct inode *inode, struct file *file)
@@ -1129,10 +1413,76 @@ index 0000000..46894fd
 +	.llseek = default_llseek,
 +};
 +
++struct myks_debugfs_sample_file {
++	char *buffer;
++	size_t length;
++};
++
++static int myks_debugfs_samples_open(struct inode *inode, struct file *file)
++{
++	struct myks_debugfs_sample_file *sample_file;
++	struct myks_debugfs_config config;
++	ssize_t length;
++
++	mutex_lock(&myks_debugfs_config_lock);
++	config = myks_debugfs_config;
++	mutex_unlock(&myks_debugfs_config_lock);
++	if (!config.max_output_bytes ||
++		config.max_output_bytes > MYKS_DEBUGFS_MAX_BYTES)
++		return -EINVAL;
++	sample_file = kzalloc(sizeof(*sample_file), GFP_KERNEL);
++	if (!sample_file)
++		return -ENOMEM;
++	sample_file->buffer = kzalloc(config.max_output_bytes, GFP_KERNEL);
++	if (!sample_file->buffer) {
++		kfree(sample_file);
++		return -ENOMEM;
++	}
++	length = myks_debugfs_format_samples(&myks_debugfs_sample_cache,
++				sample_file->buffer, config.max_output_bytes);
++	if (length < 0) {
++		kfree(sample_file->buffer);
++		kfree(sample_file);
++		return length;
++	}
++	sample_file->length = length;
++	file->private_data = sample_file;
++	return 0;
++}
++
++static ssize_t myks_debugfs_samples_read(struct file *file, char __user *buf,
++					 size_t count, loff_t *ppos)
++{
++	struct myks_debugfs_sample_file *sample_file = file->private_data;
++
++	return simple_read_from_buffer(buf, count, ppos, sample_file->buffer,
++				sample_file->length);
++}
++
++static int myks_debugfs_samples_release(struct inode *inode, struct file *file)
++{
++	struct myks_debugfs_sample_file *sample_file = file->private_data;
++
++	if (sample_file) {
++		kfree(sample_file->buffer);
++		kfree(sample_file);
++	}
++	return 0;
++}
++
++static const struct file_operations myks_debugfs_samples_fops = {
++	.owner = THIS_MODULE,
++	.open = myks_debugfs_samples_open,
++	.read = myks_debugfs_samples_read,
++	.release = myks_debugfs_samples_release,
++	.llseek = default_llseek,
++};
++
 +static int __init myks_debugfs_init(void)
 +{
 +	myks_debugfs_config_default(&myks_debugfs_config);
 +	myks_observer_init(&myks_debugfs_observer);
++	myks_debugfs_sample_cache_init(&myks_debugfs_sample_cache);
 +	myks_debugfs_root = debugfs_create_dir("myself_kswapd", NULL);
 +	if (IS_ERR_OR_NULL(myks_debugfs_root))
 +		return 0;
@@ -1142,6 +1492,8 @@ index 0000000..46894fd
 +				&myks_debugfs_config_fops);
 +	debugfs_create_file("snapshot", 0444, myks_debugfs_root, NULL,
 +				&myks_debugfs_snapshot_fops);
++	debugfs_create_file("samples", 0444, myks_debugfs_root, NULL,
++				&myks_debugfs_samples_fops);
 +	return 0;
 +}
 +late_initcall(myks_debugfs_init);
@@ -1170,15 +1522,16 @@ index bbdc876..bc434be 100644
  	u64 round_begin_ns;
 diff --git a/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h b/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h
 new file mode 100644
-index 0000000..dd1867e
+index 0000000..6d3fa75
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h
-@@ -0,0 +1,278 @@
+@@ -0,0 +1,322 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +#ifndef _MM_MYSELF_KSWAPD_LRUVEC_OBSERVER_H
 +#define _MM_MYSELF_KSWAPD_LRUVEC_OBSERVER_H
 +
 +#include <linux/bitops.h>
++#include <linux/spinlock.h>
 +#include <linux/types.h>
 +
 +struct lruvec;
@@ -1330,6 +1683,8 @@ index 0000000..dd1867e
 +#define MYKS_DEBUGFS_DEFAULT_MAX_BYTES	4096U
 +#define MYKS_DEBUGFS_MAX_ENTRIES		1024U
 +#define MYKS_DEBUGFS_MAX_BYTES		(1U << 20)
++#define MYKS_SAMPLE_LRU_COUNT		4U
++#define MYKS_SAMPLE_MAX_PER_LRU		32U
 +
 +struct myks_debugfs_config {
 +	bool enabled;
@@ -1360,6 +1715,34 @@ index 0000000..dd1867e
 +	u32 nr_total;
 +	u32 nr_emitted;
 +	bool truncated;
++};
++
++struct myks_lru_sample {
++	unsigned long pfn;
++	u64 memcg_id;
++	int nid;
++	int lru;
++	unsigned long flags;
++};
++
++struct myks_debugfs_sample_cache {
++	spinlock_t lock;
++	u64 generation;
++	u64 snapshot_seq;
++	u32 limit_per_lru;
++	u32 nr_total;
++	u32 nr_emitted;
++	bool truncated;
++	bool valid;
++	struct myks_lru_sample samples[MYKS_SAMPLE_LRU_COUNT *
++					MYKS_SAMPLE_MAX_PER_LRU];
++};
++
++struct myks_lru_sample_iter_ops {
++	unsigned int (*count)(int lru, void *opaque);
++	bool (*get)(int lru, unsigned int index,
++			struct myks_lru_sample *sample, void *opaque);
++	void *opaque;
 +};
 +
 +enum myks_observer_state {
@@ -1443,6 +1826,19 @@ index 0000000..dd1867e
 +int myks_debugfs_format_status(const struct myks_debugfs_config *config,
 +				const struct myks_observer *observer, char *buffer,
 +				size_t length);
++void myks_debugfs_sample_cache_init(struct myks_debugfs_sample_cache *cache);
++int myks_lruvec_collect_samples_with_ops(
++				const struct myks_debugfs_config *config,
++				struct myks_debugfs_sample_cache *cache,
++				const struct myks_lru_sample_iter_ops *ops,
++				u64 snapshot_seq);
++int myks_lruvec_collect_samples(struct lruvec *lruvec, pg_data_t *pgdat,
++				const struct myks_debugfs_config *config,
++				struct myks_debugfs_sample_cache *cache,
++				u64 snapshot_seq);
++ssize_t myks_debugfs_format_samples(
++				struct myks_debugfs_sample_cache *cache,
++				char *buffer, size_t length);
 +void myks_observer_init(struct myks_observer *observer);
 +int myks_observer_enable(struct myks_observer *observer);
 +int myks_observer_enable_with_query(struct myks_observer *observer,
@@ -1463,10 +1859,10 @@ index 0000000..244d2de
 +obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += lruvec_observer_test.o
 diff --git a/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c b/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c
 new file mode 100644
-index 0000000..de52d64
+index 0000000..24b94fb
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c
-@@ -0,0 +1,668 @@
+@@ -0,0 +1,871 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include <kunit/test.h>
@@ -2104,6 +2500,203 @@ index 0000000..de52d64
 +	KUNIT_EXPECT_EQ(test, observer.counters.snapshot_skipped_disabled, 2ULL);
 +}
 +
++struct myks_sample_test_state {
++	unsigned int counts[MYKS_SAMPLE_LRU_COUNT];
++	unsigned int get_calls;
++};
++
++static unsigned int myks_sample_test_count(int lru, void *opaque)
++{
++	struct myks_sample_test_state *state = opaque;
++
++	return state->counts[lru];
++}
++
++static bool myks_sample_test_get(int lru, unsigned int index,
++				 struct myks_lru_sample *sample, void *opaque)
++{
++	struct myks_sample_test_state *state = opaque;
++
++	state->get_calls++;
++	*sample = (struct myks_lru_sample) {
++		.pfn = (unsigned long)(lru * 1000U + index),
++		.memcg_id = 17,
++		.nid = 2,
++		.lru = lru,
++		.flags = BIT(index % BITS_PER_LONG),
++	};
++	return true;
++}
++
++static void myks_debugfs_samples_disabled_test(struct kunit *test)
++{
++	struct myks_debugfs_config config = { .sample_limit_per_lru = 1 };
++	struct myks_debugfs_sample_cache *cache;
++	struct myks_sample_test_state state = { .counts = { 1, 1, 1, 1 } };
++	const struct myks_lru_sample_iter_ops ops = {
++		.count = myks_sample_test_count,
++		.get = myks_sample_test_get,
++		.opaque = &state,
++	};
++
++	cache = kunit_kzalloc(test, sizeof(*cache), GFP_KERNEL);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cache);
++	myks_debugfs_sample_cache_init(cache);
++	KUNIT_ASSERT_EQ(test,
++			myks_lruvec_collect_samples_with_ops(&config, cache, &ops,
++					91), 0);
++	KUNIT_EXPECT_EQ(test, state.get_calls, 0U);
++	KUNIT_EXPECT_EQ(test, cache->nr_emitted, 0U);
++	KUNIT_EXPECT_FALSE(test, cache->valid);
++}
++
++static void myks_debugfs_samples_limit_zero_test(struct kunit *test)
++{
++	struct myks_debugfs_config config = {
++		.sample_enabled = true,
++		.sample_limit_per_lru = 0,
++	};
++	struct myks_debugfs_sample_cache *cache;
++	struct myks_sample_test_state state = { .counts = { 1, 1, 1, 1 } };
++	const struct myks_lru_sample_iter_ops ops = {
++		.count = myks_sample_test_count,
++		.get = myks_sample_test_get,
++		.opaque = &state,
++	};
++
++	cache = kunit_kzalloc(test, sizeof(*cache), GFP_KERNEL);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cache);
++	myks_debugfs_sample_cache_init(cache);
++	KUNIT_ASSERT_EQ(test,
++			myks_lruvec_collect_samples_with_ops(&config, cache, &ops,
++					92), 0);
++	KUNIT_EXPECT_EQ(test, state.get_calls, 0U);
++	KUNIT_EXPECT_EQ(test, cache->nr_total, 0U);
++	KUNIT_EXPECT_EQ(test, cache->nr_emitted, 0U);
++	KUNIT_EXPECT_FALSE(test, cache->valid);
++}
++
++static void myks_debugfs_samples_limit_one_and_truncated_test(struct kunit *test)
++{
++	struct myks_debugfs_config config = {
++		.sample_enabled = true,
++		.sample_limit_per_lru = 1,
++	};
++	struct myks_debugfs_sample_cache *cache;
++	struct myks_sample_test_state state = { .counts = { 40, 40, 40, 40 } };
++	const struct myks_lru_sample_iter_ops ops = {
++		.count = myks_sample_test_count,
++		.get = myks_sample_test_get,
++		.opaque = &state,
++	};
++
++	cache = kunit_kzalloc(test, sizeof(*cache), GFP_KERNEL);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cache);
++	myks_debugfs_sample_cache_init(cache);
++	KUNIT_ASSERT_EQ(test,
++			myks_lruvec_collect_samples_with_ops(&config, cache, &ops,
++					93), 0);
++	KUNIT_EXPECT_EQ(test, cache->nr_total, 160U);
++	KUNIT_EXPECT_EQ(test, cache->nr_emitted, 4U);
++	KUNIT_EXPECT_TRUE(test, cache->truncated);
++	KUNIT_EXPECT_TRUE(test, cache->valid);
++	KUNIT_EXPECT_EQ(test, cache->snapshot_seq, 93ULL);
++	KUNIT_EXPECT_EQ(test, cache->samples[0].lru, 0);
++	KUNIT_EXPECT_EQ(test, cache->samples[1].lru, 1);
++	KUNIT_EXPECT_EQ(test, cache->samples[2].lru, 2);
++	KUNIT_EXPECT_EQ(test, cache->samples[3].lru, 3);
++}
++
++static void myks_debugfs_samples_limit_32_test(struct kunit *test)
++{
++	struct myks_debugfs_config config = {
++		.sample_enabled = true,
++		.sample_limit_per_lru = 32,
++	};
++	struct myks_debugfs_sample_cache *cache;
++	struct myks_sample_test_state state = { .counts = { 40, 40, 40, 40 } };
++	const struct myks_lru_sample_iter_ops ops = {
++		.count = myks_sample_test_count,
++		.get = myks_sample_test_get,
++		.opaque = &state,
++	};
++
++	cache = kunit_kzalloc(test, sizeof(*cache), GFP_KERNEL);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cache);
++	myks_debugfs_sample_cache_init(cache);
++	KUNIT_ASSERT_EQ(test,
++			myks_lruvec_collect_samples_with_ops(&config, cache, &ops,
++					94), 0);
++	KUNIT_EXPECT_EQ(test, cache->nr_total, 160U);
++	KUNIT_EXPECT_EQ(test, cache->nr_emitted, 128U);
++	KUNIT_EXPECT_TRUE(test, cache->truncated);
++	KUNIT_EXPECT_EQ(test, cache->samples[31].lru, 0);
++	KUNIT_EXPECT_EQ(test, cache->samples[32].lru, 1);
++	KUNIT_EXPECT_EQ(test, cache->samples[127].lru, 3);
++}
++
++static void myks_debugfs_samples_read_is_cached_test(struct kunit *test)
++{
++	struct myks_debugfs_config config = {
++		.sample_enabled = true,
++		.sample_limit_per_lru = 1,
++	};
++	struct myks_debugfs_sample_cache *cache;
++	struct myks_sample_test_state state = { .counts = { 1, 0, 0, 0 } };
++	const struct myks_lru_sample_iter_ops ops = {
++		.count = myks_sample_test_count,
++		.get = myks_sample_test_get,
++		.opaque = &state,
++	};
++	char output[512];
++	ssize_t length;
++	unsigned int get_calls;
++
++	cache = kunit_kzalloc(test, sizeof(*cache), GFP_KERNEL);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cache);
++	myks_debugfs_sample_cache_init(cache);
++	KUNIT_ASSERT_EQ(test,
++			myks_lruvec_collect_samples_with_ops(&config, cache, &ops,
++					95), 0);
++	get_calls = state.get_calls;
++	length = myks_debugfs_format_samples(cache, output, sizeof(output));
++	KUNIT_EXPECT_GT(test, length, 0);
++	KUNIT_EXPECT_EQ(test, state.get_calls, get_calls);
++	KUNIT_EXPECT_NOT_ERR_OR_NULL(test, strnstr(output, "snapshot_seq=95",
++						length));
++	KUNIT_EXPECT_NOT_ERR_OR_NULL(test, strnstr(output, "lru=0",
++						length));
++}
++
++static void myks_debugfs_samples_exclude_isolated_unevictable_test(
++		struct kunit *test)
++{
++	struct myks_debugfs_config config = {
++		.sample_enabled = true,
++		.sample_limit_per_lru = 32,
++	};
++	struct myks_debugfs_sample_cache *cache;
++	struct myks_sample_test_state state = { .counts = { 1, 1, 1, 1 } };
++	const struct myks_lru_sample_iter_ops ops = {
++		.count = myks_sample_test_count,
++		.get = myks_sample_test_get,
++		.opaque = &state,
++	};
++	unsigned int i;
++
++	cache = kunit_kzalloc(test, sizeof(*cache), GFP_KERNEL);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cache);
++	myks_debugfs_sample_cache_init(cache);
++	KUNIT_ASSERT_EQ(test,
++			myks_lruvec_collect_samples_with_ops(&config, cache, &ops,
++					96), 0);
++	KUNIT_EXPECT_EQ(test, cache->nr_emitted, 4U);
++	/* The iterator surface contains only the four classic LRU lists. */
++	for (i = 0; i < cache->nr_emitted; i++)
++		KUNIT_EXPECT_TRUE(test, cache->samples[i].lru >= 0 &&
++				cache->samples[i].lru < MYKS_SAMPLE_LRU_COUNT);
++}
++
 +static struct kunit_case myks_lruvec_observer_test_cases[] = {
 +	KUNIT_CASE(myks_lruvec_key_mode_test),
 +	KUNIT_CASE(myks_lruvec_key_validation_test),
@@ -2126,6 +2719,12 @@ index 0000000..de52d64
 +	KUNIT_CASE(myks_observer_enable_without_mglru_test),
 +	KUNIT_CASE(myks_observer_runtime_reject_test),
 +	KUNIT_CASE(myks_observer_disable_preserves_counters_test),
++	KUNIT_CASE(myks_debugfs_samples_disabled_test),
++	KUNIT_CASE(myks_debugfs_samples_limit_zero_test),
++	KUNIT_CASE(myks_debugfs_samples_limit_one_and_truncated_test),
++	KUNIT_CASE(myks_debugfs_samples_limit_32_test),
++	KUNIT_CASE(myks_debugfs_samples_read_is_cached_test),
++	KUNIT_CASE(myks_debugfs_samples_exclude_isolated_unevictable_test),
 +	{}
 +};
 +
