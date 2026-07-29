@@ -11,14 +11,15 @@ index 81eeaaa..1b377ee 100644
  	default n
  	help
 diff --git a/Linux6.17/mm/myself_kswapd/Makefile b/Linux6.17/mm/myself_kswapd/Makefile
-index 354f499..bb07355 100644
+index 354f499..a965743 100644
 --- a/Linux6.17/mm/myself_kswapd/Makefile
 +++ b/Linux6.17/mm/myself_kswapd/Makefile
-@@ -1,5 +1,7 @@
+@@ -1,5 +1,8 @@
  # SPDX-License-Identifier: GPL-2.0
  
  obj-y += adapter/kswapd_observer.o
 +obj-y += adapter/lruvec_observer.o
++obj-y += adapter/observer_config.o
  obj-y += trace/trace.o
  obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += adapter/kswapd_observer_kunit.o
 +obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += tests/
@@ -265,6 +266,100 @@ index 0000000..67e5338
 +						 reclaimed_total, out, &ops);
 +}
 +// #lzx--------------------------- 聚合统计结束 ---------------------------
+diff --git a/Linux6.17/mm/myself_kswapd/adapter/observer_config.c b/Linux6.17/mm/myself_kswapd/adapter/observer_config.c
+new file mode 100644
+index 0000000..eb96db0
+--- /dev/null
++++ b/Linux6.17/mm/myself_kswapd/adapter/observer_config.c
+@@ -0,0 +1,88 @@
++// SPDX-License-Identifier: GPL-2.0
++
++#include "../include/lruvec_observer.h"
++
++#include <linux/errno.h>
++#include <linux/mm_inline.h>
++
++// #lzx: Linux L0.2 observer enable and MGLRU guard
++// #lzx--------------------------- 观察器状态机 ---------------------------
++static bool myks_default_mglru_query(void *opaque)
++{
++	(void)opaque;
++	return lru_gen_enabled();
++}
++
++void myks_observer_init(struct myks_observer *observer)
++{
++	if (!observer)
++		return;
++
++	*observer = (struct myks_observer) {
++		.state = MYKS_OBSERVER_DISABLED,
++	};
++}
++
++int myks_observer_enable_with_query(struct myks_observer *observer,
++					myks_mglru_query_fn query, void *opaque)
++{
++	if (!observer || !query)
++		return -EINVAL;
++
++	observer->mglru_query = query;
++	observer->mglru_query_opaque = opaque;
++	if (query(opaque)) {
++		observer->state = MYKS_OBSERVER_REJECTED_MGLRU;
++		observer->counters.last_error = -EOPNOTSUPP;
++		return -EOPNOTSUPP;
++	}
++
++	observer->state = MYKS_OBSERVER_ACTIVE;
++	observer->counters.last_error = 0;
++	return 0;
++}
++
++int myks_observer_enable(struct myks_observer *observer)
++{
++	return myks_observer_enable_with_query(observer,
++			myks_default_mglru_query, NULL);
++}
++
++void myks_observer_disable(struct myks_observer *observer)
++{
++	if (!observer)
++		return;
++
++	observer->state = MYKS_OBSERVER_DISABLED;
++	observer->counters.last_error = 0;
++}
++
++bool myks_observer_snapshot_allowed(struct myks_observer *observer)
++{
++	if (!observer)
++		return false;
++
++	if (observer->state == MYKS_OBSERVER_DISABLED) {
++		observer->counters.snapshot_skipped_disabled++;
++		observer->counters.last_error = -EACCES;
++		return false;
++	}
++	if (observer->state == MYKS_OBSERVER_REJECTED_MGLRU) {
++		observer->counters.snapshot_skipped_mglru++;
++		observer->counters.last_error = -EOPNOTSUPP;
++		return false;
++	}
++	if (observer->state != MYKS_OBSERVER_ACTIVE ||
++		!observer->mglru_query)
++		return false;
++	if (observer->mglru_query(observer->mglru_query_opaque)) {
++		observer->state = MYKS_OBSERVER_REJECTED_MGLRU;
++		observer->counters.snapshot_skipped_mglru++;
++		observer->counters.runtime_reject_count++;
++		observer->counters.last_error = -EOPNOTSUPP;
++		return false;
++	}
++
++	return true;
++}
++// #lzx--------------------------- 观察器状态机结束 ---------------------------
 diff --git a/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h b/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h
 index bbdc876..9b6fb86 100644
 --- a/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h
@@ -280,10 +375,10 @@ index bbdc876..9b6fb86 100644
  enum myks_kswapd_exit_reason {
 diff --git a/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h b/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h
 new file mode 100644
-index 0000000..f8665e8
+index 0000000..0d13154
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,192 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +#ifndef _MM_MYSELF_KSWAPD_LRUVEC_OBSERVER_H
 +#define _MM_MYSELF_KSWAPD_LRUVEC_OBSERVER_H
@@ -419,6 +514,28 @@ index 0000000..f8665e8
 +	u64 timestamp_ns;
 +};
 +
++enum myks_observer_state {
++	MYKS_OBSERVER_DISABLED = 0,
++	MYKS_OBSERVER_ACTIVE,
++	MYKS_OBSERVER_REJECTED_MGLRU,
++};
++
++struct myks_observer_counters {
++	u64 snapshot_skipped_disabled;
++	u64 snapshot_skipped_mglru;
++	u64 runtime_reject_count;
++	int last_error;
++};
++
++typedef bool (*myks_mglru_query_fn)(void *opaque);
++
++struct myks_observer {
++	enum myks_observer_state state;
++	myks_mglru_query_fn mglru_query;
++	void *mglru_query_opaque;
++	struct myks_observer_counters counters;
++};
++
 +bool myks_lruvec_key_equal(const struct myks_lruvec_key *a,
 +				   const struct myks_lruvec_key *b);
 +bool myks_lruvec_key_valid(const struct myks_lruvec_key *key);
@@ -445,6 +562,12 @@ index 0000000..f8665e8
 +			unsigned long scanned_total, unsigned long reclaimed_total,
 +			struct myks_lruvec_snapshot *out,
 +			const struct myks_lruvec_collect_ops *ops);
++void myks_observer_init(struct myks_observer *observer);
++int myks_observer_enable(struct myks_observer *observer);
++int myks_observer_enable_with_query(struct myks_observer *observer,
++					myks_mglru_query_fn query, void *opaque);
++void myks_observer_disable(struct myks_observer *observer);
++bool myks_observer_snapshot_allowed(struct myks_observer *observer);
 +// #lzx--------------------------- lruvec 观测类型结束 ---------------------------
 +
 +#endif /* _MM_MYSELF_KSWAPD_LRUVEC_OBSERVER_H */
@@ -459,10 +582,10 @@ index 0000000..244d2de
 +obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += lruvec_observer_test.o
 diff --git a/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c b/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c
 new file mode 100644
-index 0000000..e096240
+index 0000000..b246164
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/tests/lruvec_observer_test.c
-@@ -0,0 +1,219 @@
+@@ -0,0 +1,291 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include <kunit/test.h>
@@ -471,6 +594,15 @@ index 0000000..e096240
 +#include <linux/mmzone.h>
 +
 +#include "../include/lruvec_observer.h"
++
++static bool myks_test_mglru;
++
++static bool myks_test_mglru_query(void *opaque)
++{
++	bool *enabled = opaque;
++
++	return *enabled;
++}
 +
 +static void myks_lruvec_key_mode_test(struct kunit *test)
 +{
@@ -665,6 +797,65 @@ index 0000000..e096240
 +	KUNIT_EXPECT_EQ(test, snapshot.reclaimed_total, 12UL);
 +}
 +
++static void myks_observer_enable_rejects_mglru_test(struct kunit *test)
++{
++	struct myks_observer observer;
++
++	myks_test_mglru = true;
++	myks_observer_init(&observer);
++	KUNIT_EXPECT_EQ(test, myks_observer_enable_with_query(&observer,
++			myks_test_mglru_query, &myks_test_mglru), -EOPNOTSUPP);
++	KUNIT_EXPECT_EQ(test, observer.state, MYKS_OBSERVER_REJECTED_MGLRU);
++	KUNIT_EXPECT_EQ(test, observer.counters.last_error, -EOPNOTSUPP);
++	KUNIT_EXPECT_FALSE(test, myks_observer_snapshot_allowed(&observer));
++	KUNIT_EXPECT_EQ(test, observer.counters.snapshot_skipped_mglru, 1ULL);
++}
++
++static void myks_observer_enable_without_mglru_test(struct kunit *test)
++{
++	struct myks_observer observer;
++
++	myks_test_mglru = false;
++	myks_observer_init(&observer);
++	KUNIT_EXPECT_EQ(test, myks_observer_enable_with_query(&observer,
++			myks_test_mglru_query, &myks_test_mglru), 0);
++	KUNIT_EXPECT_EQ(test, observer.state, MYKS_OBSERVER_ACTIVE);
++	KUNIT_EXPECT_TRUE(test, myks_observer_snapshot_allowed(&observer));
++}
++
++static void myks_observer_runtime_reject_test(struct kunit *test)
++{
++	struct myks_observer observer;
++
++	myks_test_mglru = false;
++	myks_observer_init(&observer);
++	KUNIT_ASSERT_EQ(test, myks_observer_enable_with_query(&observer,
++			myks_test_mglru_query, &myks_test_mglru), 0);
++	KUNIT_ASSERT_TRUE(test, myks_observer_snapshot_allowed(&observer));
++	myks_test_mglru = true;
++	KUNIT_EXPECT_FALSE(test, myks_observer_snapshot_allowed(&observer));
++	KUNIT_EXPECT_EQ(test, observer.state, MYKS_OBSERVER_REJECTED_MGLRU);
++	KUNIT_EXPECT_EQ(test, observer.counters.runtime_reject_count, 1ULL);
++	KUNIT_EXPECT_FALSE(test, myks_observer_snapshot_allowed(&observer));
++	KUNIT_EXPECT_EQ(test, observer.counters.snapshot_skipped_mglru, 2ULL);
++}
++
++static void myks_observer_disable_preserves_counters_test(struct kunit *test)
++{
++	struct myks_observer observer;
++
++	myks_test_mglru = false;
++	myks_observer_init(&observer);
++	KUNIT_ASSERT_EQ(test, myks_observer_enable_with_query(&observer,
++			myks_test_mglru_query, &myks_test_mglru), 0);
++	myks_observer_disable(&observer);
++	KUNIT_EXPECT_EQ(test, observer.state, MYKS_OBSERVER_DISABLED);
++	KUNIT_EXPECT_FALSE(test, myks_observer_snapshot_allowed(&observer));
++	KUNIT_EXPECT_EQ(test, observer.counters.snapshot_skipped_disabled, 1ULL);
++	myks_observer_disable(&observer);
++	KUNIT_EXPECT_EQ(test, observer.counters.snapshot_skipped_disabled, 2ULL);
++}
++
 +static struct kunit_case myks_lruvec_observer_test_cases[] = {
 +	KUNIT_CASE(myks_lruvec_key_mode_test),
 +	KUNIT_CASE(myks_lruvec_key_validation_test),
@@ -673,6 +864,10 @@ index 0000000..e096240
 +	KUNIT_CASE(myks_lruvec_resolver_mode_test),
 +	KUNIT_CASE(myks_lruvec_global_resolver_test),
 +	KUNIT_CASE(myks_lruvec_collection_scope_test),
++	KUNIT_CASE(myks_observer_enable_rejects_mglru_test),
++	KUNIT_CASE(myks_observer_enable_without_mglru_test),
++	KUNIT_CASE(myks_observer_runtime_reject_test),
++	KUNIT_CASE(myks_observer_disable_preserves_counters_test),
 +	{}
 +};
 +
