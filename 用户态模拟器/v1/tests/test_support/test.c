@@ -28,6 +28,7 @@ void register_test_executor_error_puts_back_batch(void);
 void register_test_validator_detects_corruption(void);
 void register_test_event_parser_and_apply(void);
 void register_test_shadow_lru(void); // #lzx
+void register_test_lruvec_trace_parser(void);
 
 void reclaim_test_register(const char *name, reclaim_test_fn fn)
 {
@@ -62,6 +63,7 @@ int reclaim_test_run_all(void)
     register_test_validator_detects_corruption();
     register_test_event_parser_and_apply();
     register_test_shadow_lru(); // #lzx
+    register_test_lruvec_trace_parser();
     for (i = 0U; i < case_count; i++) {
         if (cases[i].fn()) {
             passed++;
