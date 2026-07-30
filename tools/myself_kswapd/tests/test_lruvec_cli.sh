@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
-CLI="$ROOT/用户态模拟器/v1/output/task18-green/bin/lruvec_observer_cli"
+CLI="${CLI:-$ROOT/用户态模拟器/v1/output/task18-green/bin/lruvec_observer_cli}"
 FIXTURE="$ROOT/tools/myself_kswapd/tests/fixtures/lruvec_snapshot.log"
 
 [[ -x "$CLI" ]]

@@ -64,7 +64,12 @@ kernel_object_build memcg-y-lru-y-debug-y --enable MEMCG --enable LRU_GEN --enab
 kernel_object_build debugfs-n --enable MEMCG --disable LRU_GEN --disable DEBUG_FS
 
 bash -n "$ROOT/tools/myself_kswapd"/*.sh "$ROOT/tools/myself_kswapd/tests"/*.sh
+CLI="$OUT/default/bin/lruvec_observer_cli" \
+    bash "$ROOT/tools/myself_kswapd/tests/test_lruvec_cli.sh"
+bash "$ROOT/tools/myself_kswapd/tests/test_bootstrap_l02_tree.sh"
+bash "$ROOT/tools/myself_kswapd/tests/test_refresh_l02_patch.sh"
+bash "$ROOT/tools/myself_kswapd/tests/test_capture_lruvec_trace.sh"
 git -C "$ROOT" diff --check
-echo "shell syntax and diff check: PASS"
+echo "shell tests, syntax and diff check: PASS"
 echo "validation complete"
 cp "$OUT/validation.log" "$REPORT"
