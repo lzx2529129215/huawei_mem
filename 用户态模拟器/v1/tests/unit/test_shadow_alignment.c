@@ -119,6 +119,12 @@ static bool test_memcg_isolated_not_comparable_and_missing_stale(void)
     snapshot.active_file = 1U;
     TEST_ASSERT(shadow_alignment_compare(engine, &snapshot, &result) ==
                 SHADOW_ALIGNMENT_FIELD_NOT_COMPARABLE);
+    snapshot.active_file = 2U;
+    TEST_ASSERT(shadow_alignment_compare(engine, &snapshot, &result) ==
+                SHADOW_ALIGNMENT_COUNT_DRIFT);
+    TEST_ASSERT(result.delta[SHADOW_LRU_ACTIVE_FILE] == 1);
+    TEST_ASSERT(result.isolated_comparable == 0);
+    snapshot.active_file = 1U;
     snapshot.snapshot_seq = 0U;
     TEST_ASSERT(shadow_alignment_compare(engine, &snapshot, &result) ==
                 SHADOW_ALIGNMENT_STALE_KERNEL_SNAPSHOT);

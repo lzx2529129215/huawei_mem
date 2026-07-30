@@ -49,10 +49,17 @@ int shadow_alignment_compare(
         result->delta[index] = (int64_t)kernel_count(snapshot, index) -
                                 (int64_t)shadow.nr_pages[index];
     }
+    // #lzx: node-scoped isolated counts do not suppress ordinary LRU drift.
     if (snapshot->key.mode == KERNEL_LRU_MODE_MEMCG &&
         snapshot->isolated_scope == KERNEL_SCOPE_NODE) {
-        result->status = SHADOW_ALIGNMENT_FIELD_NOT_COMPARABLE;
         result->isolated_comparable = 0;
+        for (index = 0; index < SHADOW_LRU_NR; index++) {
+            if (result->delta[index] != 0) {
+                result->status = SHADOW_ALIGNMENT_COUNT_DRIFT;
+                return result->status;
+            }
+        }
+        result->status = SHADOW_ALIGNMENT_FIELD_NOT_COMPARABLE;
         return result->status;
     }
     kernel_isolated = snapshot->isolated_anon + snapshot->isolated_file;
