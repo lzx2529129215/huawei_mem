@@ -1,0 +1,1032 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: 龙子翔 <2529129215@qq.com>
+Subject: [PATCH] Linux 6.17 myself-kswapd L0.1 observe-only adapter
+
+Signed-off-by: 龙子翔 <2529129215@qq.com>
+
+---
+--- a/mm/Kconfig
++++ b/mm/Kconfig
+@@ -1384,4 +1384,6 @@
+ 
+ source "mm/damon/Kconfig"
+ 
++source "mm/myself_kswapd/Kconfig"
++
+ endmenu
+--- a/mm/Makefile
++++ b/mm/Makefile
+@@ -70,6 +70,7 @@
+ obj-y += memblock.o
+ obj-y += $(memory-hotplug-y)
+ obj-y += slub.o
++obj-$(CONFIG_MYSELF_KSWAPD) += myself_kswapd/
+ 
+ ifdef CONFIG_MMU
+ 	obj-$(CONFIG_ADVISE_SYSCALLS)	+= madvise.o
+--- a/mm/vmscan.c
++++ b/mm/vmscan.c
+@@ -68,6 +68,8 @@
+ 
+ #include "internal.h"
+ #include "swap.h"
++// #lzx: 引入仅依赖标量快照的观察器接口，避免暴露 scan_control
++#include "myself_kswapd/include/kswapd_observer.h"
+ 
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/vmscan.h>
+@@ -7006,6 +7008,10 @@
+ 		.order = order,
+ 		.may_unmap = 1,
+ 	};
++	struct myks_kswapd_request_ctx myks_ctx = { 0 }; // #lzx
++	bool myks_final_balanced = false; // #lzx
++	bool myks_stop_requested = false; // #lzx
++	bool myks_was_frozen = false; // #lzx
+ 
+ 	set_task_reclaim_state(current, &sc.reclaim_state);
+ 	psi_memstall_enter(&pflags);
+@@ -7024,6 +7030,17 @@
+ 		zone_boosts[i] = zone->watermark_boost;
+ 	}
+ 	boosted = nr_boost_reclaim;
++	if (myks_kswapd_events_enabled()) { // #lzx
++		struct myks_kswapd_begin_snapshot myks_begin = { // #lzx
++			.nid = pgdat->node_id, // #lzx
++			.requested_order = order, // #lzx
++			.highest_zoneidx = highest_zoneidx, // #lzx
++			.gfp_mask = sc.gfp_mask, // #lzx
++			.initial_boost_pages = nr_boost_reclaim, // #lzx
++			.boosted = boosted, // #lzx
++		}; // #lzx
++		myks_kswapd_request_begin(&myks_ctx, &myks_begin); // #lzx
++	}
+ 
+ restart:
+ 	set_reclaim_active(pgdat, highest_zoneidx);
+@@ -7034,8 +7051,13 @@
+ 		bool balanced;
+ 		bool ret;
+ 		bool was_frozen;
++		bool myks_boost_no_progress = false; // #lzx
++		bool myks_priority_decremented = false; // #lzx
++		bool myks_boost_active = nr_boost_reclaim != 0; // #lzx
+ 
+ 		sc.reclaim_idx = highest_zoneidx;
++		if (myks_ctx.enabled) // #lzx
++			myks_kswapd_round_begin(&myks_ctx); // #lzx
+ 
+ 		/*
+ 		 * If the number of buffer_heads exceeds the maximum allowed
+@@ -7067,6 +7089,7 @@
+ 		 */
+ 		balanced = pgdat_balanced(pgdat, sc.order, highest_zoneidx);
+ 		if (!balanced && nr_boost_reclaim) {
++			myks_kswapd_note_boost_restart(&myks_ctx); // #lzx
+ 			nr_boost_reclaim = 0;
+ 			goto restart;
+ 		}
+@@ -7076,8 +7099,12 @@
+ 		 * eligible zones. Note that sc.reclaim_idx is not used as
+ 		 * buffer_heads_over_limit may have adjusted it.
+ 		 */
+-		if (!nr_boost_reclaim && balanced)
++		// #old: if (!nr_boost_reclaim && balanced) goto out;
++		if (!nr_boost_reclaim && balanced) {
++			myks_final_balanced = true; // #lzx
++			myks_kswapd_note_balanced(&myks_ctx); // #lzx
+ 			goto out;
++		}
+ 
+ 		/* Limit the priority of boosting to avoid reclaim writeback */
+ 		if (nr_boost_reclaim && sc.priority == DEF_PRIORITY - 2)
+@@ -7134,8 +7161,38 @@
+ 		__fs_reclaim_release(_THIS_IP_);
+ 		ret = kthread_freezable_should_stop(&was_frozen);
+ 		__fs_reclaim_acquire(_THIS_IP_);
+-		if (was_frozen || ret)
+-			break;
++		// #old: if (was_frozen || ret) break;
++		if (was_frozen || ret) {
++			myks_stop_requested = ret; // #lzx
++			myks_was_frozen = was_frozen; // #lzx
++			if (myks_ctx.enabled) { // #lzx
++				struct myks_kswapd_round_snapshot myks_round = { // #lzx
++					.nid = pgdat->node_id, // #lzx
++					.order = sc.order, // #lzx
++					.priority = sc.priority, // #lzx
++					.reclaim_idx = sc.reclaim_idx, // #lzx
++					.nr_to_reclaim = sc.nr_to_reclaim, // #lzx
++					.main_scanned = sc.nr_scanned, // #lzx
++					.soft_scanned = nr_soft_scanned, // #lzx
++					.reclaimed_total = sc.nr_reclaimed, // #lzx
++					.soft_reclaimed = nr_soft_reclaimed, // #lzx
++					.balanced_before = balanced, // #lzx
++					.boost_active = myks_boost_active, // #lzx
++					.raise_priority = raise_priority, // #lzx
++					.priority_decremented = false, // #lzx
++					.may_swap = sc.may_swap, // #lzx
++					.may_unmap = sc.may_unmap, // #lzx
++					.may_writepage = sc.may_writepage, // #lzx
++					.may_deactivate = sc.may_deactivate, // #lzx
++					.stop_requested = ret, // #lzx
++					.was_frozen = was_frozen, // #lzx
++					.boost_no_progress = false, // #lzx
++				}; // #lzx
++				myks_kswapd_priority_round(&myks_ctx, &myks_round); // #lzx
++			}
++			myks_kswapd_note_stop(&myks_ctx, was_frozen); // #lzx
++			break; // #lzx
++		}
+ 
+ 		/*
+ 		 * Raise priority if scanning rate is too low or there was no
+@@ -7143,17 +7200,75 @@
+ 		 */
+ 		nr_reclaimed = sc.nr_reclaimed - nr_reclaimed;
+ 		nr_boost_reclaim -= min(nr_boost_reclaim, nr_reclaimed);
++		myks_boost_no_progress = nr_boost_reclaim && !nr_reclaimed; // #lzx
+ 
+ 		/*
+ 		 * If reclaim made no progress for a boost, stop reclaim as
+ 		 * IO cannot be queued and it could be an infinite loop in
+ 		 * extreme circumstances.
+ 		 */
+-		if (nr_boost_reclaim && !nr_reclaimed)
+-			break;
++		// #old: if (nr_boost_reclaim && !nr_reclaimed) break;
++		if (nr_boost_reclaim && !nr_reclaimed) {
++			if (myks_ctx.enabled) { // #lzx
++				struct myks_kswapd_round_snapshot myks_round = { // #lzx
++					.nid = pgdat->node_id, // #lzx
++					.order = sc.order, // #lzx
++					.priority = sc.priority, // #lzx
++					.reclaim_idx = sc.reclaim_idx, // #lzx
++					.nr_to_reclaim = sc.nr_to_reclaim, // #lzx
++					.main_scanned = sc.nr_scanned, // #lzx
++					.soft_scanned = nr_soft_scanned, // #lzx
++					.reclaimed_total = sc.nr_reclaimed, // #lzx
++					.soft_reclaimed = nr_soft_reclaimed, // #lzx
++					.balanced_before = balanced, // #lzx
++					.boost_active = myks_boost_active, // #lzx
++					.raise_priority = raise_priority, // #lzx
++					.priority_decremented = false, // #lzx
++					.may_swap = sc.may_swap, // #lzx
++					.may_unmap = sc.may_unmap, // #lzx
++					.may_writepage = sc.may_writepage, // #lzx
++					.may_deactivate = sc.may_deactivate, // #lzx
++					.stop_requested = false, // #lzx
++					.was_frozen = false, // #lzx
++					.boost_no_progress = myks_boost_no_progress, // #lzx
++				}; // #lzx
++				myks_kswapd_priority_round(&myks_ctx, &myks_round); // #lzx
++			}
++			myks_kswapd_note_boost_no_progress(&myks_ctx); // #lzx
++			break; // #lzx
++		}
+ 
+-		if (raise_priority || !nr_reclaimed)
++		// #old: if (raise_priority || !nr_reclaimed)
++		// #old: sc.priority--;
++		if (raise_priority || !nr_reclaimed) {
+ 			sc.priority--;
++			myks_priority_decremented = true; // #lzx
++		}
++		if (myks_ctx.enabled) { // #lzx
++			struct myks_kswapd_round_snapshot myks_round = { // #lzx
++				.nid = pgdat->node_id, // #lzx
++				.order = sc.order, // #lzx
++				.priority = sc.priority, // #lzx
++				.reclaim_idx = sc.reclaim_idx, // #lzx
++				.nr_to_reclaim = sc.nr_to_reclaim, // #lzx
++				.main_scanned = sc.nr_scanned, // #lzx
++				.soft_scanned = nr_soft_scanned, // #lzx
++				.reclaimed_total = sc.nr_reclaimed, // #lzx
++				.soft_reclaimed = nr_soft_reclaimed, // #lzx
++				.balanced_before = balanced, // #lzx
++				.boost_active = myks_boost_active, // #lzx
++				.raise_priority = raise_priority, // #lzx
++				.priority_decremented = myks_priority_decremented, // #lzx
++				.may_swap = sc.may_swap, // #lzx
++				.may_unmap = sc.may_unmap, // #lzx
++				.may_writepage = sc.may_writepage, // #lzx
++				.may_deactivate = sc.may_deactivate, // #lzx
++				.stop_requested = false, // #lzx
++				.was_frozen = false, // #lzx
++				.boost_no_progress = myks_boost_no_progress, // #lzx
++			}; // #lzx
++			myks_kswapd_priority_round(&myks_ctx, &myks_round); // #lzx
++		}
+ 	} while (sc.priority >= 1);
+ 
+ 	/*
+@@ -7163,8 +7278,11 @@
+ 	if (!sc.nr_reclaimed && sc.priority < 1 &&
+ 	    !sc.no_cache_trim_mode && sc.cache_trim_mode_failed) {
+ 		sc.no_cache_trim_mode = 1;
++		myks_kswapd_note_cache_trim_restart(&myks_ctx); // #lzx
+ 		goto restart;
+ 	}
++	if (sc.priority < 1) // #lzx
++		myks_kswapd_note_priority_exhausted(&myks_ctx); // #lzx
+ 
+ 	if (!sc.nr_reclaimed)
+ 		pgdat->kswapd_failures++;
+@@ -7198,6 +7316,21 @@
+ 	__fs_reclaim_release(_THIS_IP_);
+ 	psi_memstall_leave(&pflags);
+ 	set_task_reclaim_state(current, NULL);
++	if (myks_ctx.enabled) { // #lzx
++		struct myks_kswapd_end_snapshot myks_end = { // #lzx
++			.nid = pgdat->node_id, // #lzx
++			.requested_order = order, // #lzx
++			.final_order = sc.order, // #lzx
++			.final_priority = sc.priority, // #lzx
++			.final_balanced = myks_final_balanced, // #lzx
++			.boost_active = nr_boost_reclaim != 0, // #lzx
++			.stop_requested = myks_stop_requested, // #lzx
++			.was_frozen = myks_was_frozen, // #lzx
++			.order_dropped = sc.order < order, // #lzx
++			.exit_reason = myks_kswapd_exit_reason(&myks_ctx), // #lzx
++		}; // #lzx
++		myks_kswapd_request_end(&myks_ctx, &myks_end); // #lzx
++	}
+ 
+ 	/*
+ 	 * Return the order kswapd stopped reclaiming at as
+--- /dev/null
++++ b/mm/myself_kswapd/Kconfig
+@@ -0,0 +1,22 @@
++# SPDX-License-Identifier: GPL-2.0
++
++config MYSELF_KSWAPD
++	bool "Myself kswapd observe-only adapter"
++	depends on MMU
++	depends on MEMCG
++	depends on TRACING
++	default n
++	help
++	  Collect read-only observations from the native kswapd balance loop.
++	  This option does not replace or alter native reclaim behavior.
++	  Tracepoints are emitted only when the corresponding event is enabled.
++	  No reclaim policy, allocation, or asynchronous work is added.
++
++config MYSELF_KSWAPD_KUNIT_TEST
++	bool "KUnit tests for myself kswapd observer"
++	depends on MYSELF_KSWAPD
++	depends on KUNIT
++	default n
++	help
++	  Build pure state and arithmetic tests for the observe-only adapter.
++	  The tests do not expose scan_control or alter native reclaim behavior.
+--- /dev/null
++++ b/mm/myself_kswapd/Makefile
+@@ -0,0 +1,5 @@
++# SPDX-License-Identifier: GPL-2.0
++
++obj-y += adapter/kswapd_observer.o
++obj-y += trace/trace.o
++obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += adapter/kswapd_observer_kunit.o
+--- /dev/null
++++ b/mm/myself_kswapd/include/kswapd_observer.h
+@@ -0,0 +1,131 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef _MM_MYSELF_KSWAPD_OBSERVER_H
++#define _MM_MYSELF_KSWAPD_OBSERVER_H
++
++#include <linux/bitops.h>
++#include <linux/gfp_types.h>
++#include <linux/types.h>
++
++// #lzx: myself-kswapd L0.1 observe-only code
++// #lzx--------------------------- 观察器公开的数据模型 ---------------------------
++enum myks_kswapd_exit_reason {
++	MYKS_EXIT_ALREADY_BALANCED,
++	MYKS_EXIT_BALANCED,
++	MYKS_EXIT_KTHREAD_STOP,
++	MYKS_EXIT_FROZEN,
++	MYKS_EXIT_BOOST_NO_PROGRESS,
++	MYKS_EXIT_PRIORITY_EXHAUSTED,
++	MYKS_EXIT_UNKNOWN,
++};
++
++enum myks_kswapd_validation_flag {
++	MYKS_VALIDATION_OK = 0,
++	MYKS_VALIDATION_COUNTER_REGRESSION = BIT(0),
++	MYKS_VALIDATION_RECLAIM_SPLIT_INVALID = BIT(1),
++	MYKS_VALIDATION_SCAN_OVERFLOW = BIT(2),
++	MYKS_VALIDATION_RECLAIM_OVERFLOW = BIT(3),
++	MYKS_VALIDATION_TIME_INVALID = BIT(4),
++	MYKS_VALIDATION_EXIT_UNKNOWN = BIT(5),
++	MYKS_VALIDATION_DOUBLE_END = BIT(6),
++};
++
++struct myks_kswapd_begin_snapshot {
++	int nid;
++	int requested_order;
++	int highest_zoneidx;
++	gfp_t gfp_mask;
++	unsigned long initial_boost_pages;
++	bool boosted;
++};
++
++struct myks_kswapd_round_snapshot {
++	int nid;
++	s8 order;
++	s8 priority;
++	s8 reclaim_idx;
++	unsigned long nr_to_reclaim;
++	unsigned long main_scanned;
++	unsigned long soft_scanned;
++	unsigned long reclaimed_total;
++	unsigned long soft_reclaimed;
++	bool balanced_before;
++	bool boost_active;
++	bool raise_priority;
++	bool priority_decremented;
++	bool may_swap;
++	bool may_unmap;
++	bool may_writepage;
++	u8 may_deactivate;
++	bool stop_requested;
++	bool was_frozen;
++	bool boost_no_progress;
++};
++
++struct myks_kswapd_end_snapshot {
++	int nid;
++	int requested_order;
++	int final_order;
++	int final_priority;
++	bool final_balanced;
++	bool boost_active;
++	bool stop_requested;
++	bool was_frozen;
++	bool order_dropped;
++	enum myks_kswapd_exit_reason exit_reason;
++};
++
++struct myks_kswapd_request_ctx {
++	u64 request_id;
++	u64 request_begin_ns;
++	u64 round_begin_ns;
++	unsigned long reclaimed_last;
++	bool enabled;
++	bool ended;
++	bool had_round;
++	unsigned int pass_seq;
++	unsigned int round_seq;
++	unsigned int round_count;
++	bool final_balanced;
++	bool stop_requested;
++	bool was_frozen;
++	u32 validation_flags;
++	unsigned long total_main_scanned;
++	unsigned long total_soft_scanned;
++	unsigned long total_scanned;
++	unsigned long total_main_reclaimed;
++	unsigned long total_soft_reclaimed;
++	unsigned long total_reclaimed;
++	unsigned int boost_restart_count;
++	unsigned int cache_trim_restart_count;
++	enum myks_kswapd_exit_reason exit_reason;
++};
++// #lzx--------------------------- 观察器公开的数据模型结束 ---------------------------
++
++// #lzx--------------------------- 观察器接口 ---------------------------
++bool myks_kswapd_events_enabled(void);
++void myks_kswapd_request_begin(struct myks_kswapd_request_ctx *ctx,
++				       const struct myks_kswapd_begin_snapshot *snapshot);
++void myks_kswapd_round_begin(struct myks_kswapd_request_ctx *ctx);
++void myks_kswapd_priority_round(struct myks_kswapd_request_ctx *ctx,
++					const struct myks_kswapd_round_snapshot *snapshot);
++void myks_kswapd_note_balanced(struct myks_kswapd_request_ctx *ctx);
++void myks_kswapd_note_boost_restart(struct myks_kswapd_request_ctx *ctx);
++void myks_kswapd_note_cache_trim_restart(struct myks_kswapd_request_ctx *ctx);
++void myks_kswapd_note_stop(struct myks_kswapd_request_ctx *ctx, bool frozen);
++void myks_kswapd_note_boost_no_progress(struct myks_kswapd_request_ctx *ctx);
++void myks_kswapd_note_priority_exhausted(struct myks_kswapd_request_ctx *ctx);
++enum myks_kswapd_exit_reason
++myks_kswapd_exit_reason(const struct myks_kswapd_request_ctx *ctx);
++void myks_kswapd_request_end(struct myks_kswapd_request_ctx *ctx,
++				  const struct myks_kswapd_end_snapshot *snapshot);
++void myks_kswapd_compute_reclaim_split(unsigned long before,
++					       unsigned long after,
++					       unsigned long soft_reclaimed,
++					       unsigned long *delta,
++					       unsigned long *main_reclaimed,
++					       u32 *validation_flags);
++bool myks_kswapd_add_sat(unsigned long left, unsigned long right,
++				 unsigned long *result, u32 flag, u32 *validation_flags);
++// #lzx--------------------------- 观察器接口结束 ---------------------------
++
++#endif /* _MM_MYSELF_KSWAPD_OBSERVER_H */
+--- /dev/null
++++ b/mm/myself_kswapd/adapter/kswapd_observer.c
+@@ -0,0 +1,239 @@
++// SPDX-License-Identifier: GPL-2.0
++
++#include <linux/atomic.h>
++#include <linux/overflow.h>
++#include <linux/timekeeping.h>
++#include <trace/events/myself_kswapd.h>
++
++#include "../include/kswapd_observer.h"
++
++// #lzx: myself-kswapd L0.1 observe-only code
++// #lzx--------------------------- 观察器实现 ---------------------------
++static atomic64_t myks_request_seq = ATOMIC64_INIT(0);
++
++bool myks_kswapd_events_enabled(void)
++{
++	return trace_myself_kswapd_request_begin_enabled() ||
++	       trace_myself_kswapd_priority_round_enabled() ||
++	       trace_myself_kswapd_request_end_enabled();
++}
++
++static u64 myks_kswapd_elapsed_ns(u64 begin_ns, u64 end_ns, u32 *validation_flags)
++{
++	if (end_ns < begin_ns) {
++		*validation_flags |= MYKS_VALIDATION_TIME_INVALID;
++		return 0;
++	}
++	return end_ns - begin_ns;
++}
++
++bool myks_kswapd_add_sat(unsigned long left, unsigned long right,
++			 unsigned long *result, u32 flag, u32 *validation_flags)
++{
++	if (check_add_overflow(left, right, result)) {
++		*result = ULONG_MAX;
++		*validation_flags |= flag;
++		return false;
++	}
++	return true;
++}
++
++void myks_kswapd_compute_reclaim_split(unsigned long before,
++					       unsigned long after,
++					       unsigned long soft_reclaimed,
++					       unsigned long *delta,
++					       unsigned long *main_reclaimed,
++					       u32 *validation_flags)
++{
++	if (after < before) {
++		*delta = 0;
++		*main_reclaimed = 0;
++		*validation_flags |= MYKS_VALIDATION_COUNTER_REGRESSION;
++		return;
++	}
++
++	*delta = after - before;
++	if (soft_reclaimed > *delta) {
++		*main_reclaimed = 0;
++		*validation_flags |= MYKS_VALIDATION_RECLAIM_SPLIT_INVALID;
++		return;
++	}
++	*main_reclaimed = *delta - soft_reclaimed;
++}
++
++bool myks_kswapd_events_enabled(void);
++
++void myks_kswapd_request_begin(struct myks_kswapd_request_ctx *ctx,
++				       const struct myks_kswapd_begin_snapshot *snapshot)
++{
++	if (!ctx || !snapshot || !myks_kswapd_events_enabled())
++		return;
++
++	*ctx = (struct myks_kswapd_request_ctx) { 0 };
++	ctx->enabled = true;
++	ctx->request_id = atomic64_inc_return(&myks_request_seq);
++	ctx->request_begin_ns = ktime_get_mono_fast_ns();
++	ctx->exit_reason = MYKS_EXIT_UNKNOWN;
++	trace_myself_kswapd_request_begin(ctx->request_id, snapshot->nid,
++			snapshot->requested_order, snapshot->highest_zoneidx,
++			snapshot->gfp_mask, snapshot->initial_boost_pages,
++			snapshot->boosted);
++}
++
++void myks_kswapd_round_begin(struct myks_kswapd_request_ctx *ctx)
++{
++	if (ctx && ctx->enabled)
++		ctx->round_begin_ns = ktime_get_mono_fast_ns();
++}
++
++void myks_kswapd_priority_round(struct myks_kswapd_request_ctx *ctx,
++					const struct myks_kswapd_round_snapshot *snapshot)
++{
++	unsigned long delta;
++	unsigned long main_reclaimed;
++	unsigned long total_scanned;
++	u32 validation_flags;
++	u64 now_ns;
++	u64 elapsed_ns;
++
++	if (!ctx || !snapshot || !ctx->enabled)
++		return;
++
++	validation_flags = 0;
++	myks_kswapd_compute_reclaim_split(ctx->reclaimed_last,
++			snapshot->reclaimed_total, snapshot->soft_reclaimed,
++			&delta, &main_reclaimed, &validation_flags);
++	if (!myks_kswapd_add_sat(snapshot->main_scanned, snapshot->soft_scanned,
++				&total_scanned, MYKS_VALIDATION_SCAN_OVERFLOW,
++				&validation_flags))
++		validation_flags |= MYKS_VALIDATION_SCAN_OVERFLOW;
++
++	now_ns = ktime_get_mono_fast_ns();
++	ctx->validation_flags |= validation_flags;
++	myks_kswapd_add_sat(ctx->total_reclaimed, delta,
++			&ctx->total_reclaimed, MYKS_VALIDATION_RECLAIM_OVERFLOW,
++			&ctx->validation_flags);
++	myks_kswapd_add_sat(ctx->total_main_reclaimed, main_reclaimed,
++			&ctx->total_main_reclaimed, MYKS_VALIDATION_RECLAIM_OVERFLOW,
++			&ctx->validation_flags);
++	myks_kswapd_add_sat(ctx->total_soft_reclaimed, snapshot->soft_reclaimed,
++			&ctx->total_soft_reclaimed, MYKS_VALIDATION_RECLAIM_OVERFLOW,
++			&ctx->validation_flags);
++	myks_kswapd_add_sat(ctx->total_main_scanned, snapshot->main_scanned,
++			&ctx->total_main_scanned, MYKS_VALIDATION_SCAN_OVERFLOW,
++			&ctx->validation_flags);
++	myks_kswapd_add_sat(ctx->total_soft_scanned, snapshot->soft_scanned,
++			&ctx->total_soft_scanned, MYKS_VALIDATION_SCAN_OVERFLOW,
++			&ctx->validation_flags);
++	myks_kswapd_add_sat(ctx->total_scanned,
++			total_scanned, &ctx->total_scanned, MYKS_VALIDATION_SCAN_OVERFLOW,
++			&ctx->validation_flags);
++	ctx->reclaimed_last = snapshot->reclaimed_total;
++	ctx->had_round = true;
++	ctx->round_count++;
++	elapsed_ns = myks_kswapd_elapsed_ns(ctx->round_begin_ns, now_ns,
++					   &ctx->validation_flags);
++	trace_myself_kswapd_priority_round(ctx->request_id, ctx->pass_seq,
++			ctx->round_seq++, snapshot->nid, snapshot->order,
++			snapshot->priority, snapshot->reclaim_idx,
++			snapshot->nr_to_reclaim, snapshot->main_scanned,
++			snapshot->soft_scanned, total_scanned, main_reclaimed,
++			snapshot->soft_reclaimed, delta, snapshot->balanced_before,
++			snapshot->boost_active, snapshot->raise_priority,
++			snapshot->priority_decremented, snapshot->may_swap,
++			snapshot->may_unmap, snapshot->may_writepage,
++			snapshot->may_deactivate, snapshot->stop_requested,
++			snapshot->was_frozen, snapshot->boost_no_progress,
++			elapsed_ns,
++			validation_flags | ctx->validation_flags);
++}
++
++void myks_kswapd_note_balanced(struct myks_kswapd_request_ctx *ctx)
++{
++	if (!ctx || !ctx->enabled)
++		return;
++	ctx->final_balanced = true;
++	if (!ctx->had_round)
++		ctx->exit_reason = MYKS_EXIT_ALREADY_BALANCED;
++	else
++		ctx->exit_reason = MYKS_EXIT_BALANCED;
++}
++
++void myks_kswapd_note_boost_restart(struct myks_kswapd_request_ctx *ctx)
++{
++	if (ctx && ctx->enabled) {
++		ctx->pass_seq++;
++		ctx->boost_restart_count++;
++	}
++}
++
++void myks_kswapd_note_cache_trim_restart(struct myks_kswapd_request_ctx *ctx)
++{
++	if (ctx && ctx->enabled) {
++		ctx->pass_seq++;
++		ctx->cache_trim_restart_count++;
++	}
++}
++
++void myks_kswapd_note_stop(struct myks_kswapd_request_ctx *ctx, bool frozen)
++{
++	if (!ctx || !ctx->enabled)
++		return;
++	ctx->stop_requested = !frozen;
++	ctx->was_frozen = frozen;
++	ctx->exit_reason = frozen ? MYKS_EXIT_FROZEN : MYKS_EXIT_KTHREAD_STOP;
++}
++
++void myks_kswapd_note_boost_no_progress(struct myks_kswapd_request_ctx *ctx)
++{
++	if (ctx && ctx->enabled)
++		ctx->exit_reason = MYKS_EXIT_BOOST_NO_PROGRESS;
++}
++
++void myks_kswapd_note_priority_exhausted(struct myks_kswapd_request_ctx *ctx)
++{
++	if (ctx && ctx->enabled && !ctx->had_round)
++		ctx->exit_reason = MYKS_EXIT_PRIORITY_EXHAUSTED;
++	else if (ctx && ctx->enabled && ctx->exit_reason == MYKS_EXIT_UNKNOWN)
++		ctx->exit_reason = MYKS_EXIT_PRIORITY_EXHAUSTED;
++}
++
++enum myks_kswapd_exit_reason
++myks_kswapd_exit_reason(const struct myks_kswapd_request_ctx *ctx)
++{
++	if (!ctx)
++		return MYKS_EXIT_UNKNOWN;
++	return ctx->exit_reason;
++}
++
++void myks_kswapd_request_end(struct myks_kswapd_request_ctx *ctx,
++				  const struct myks_kswapd_end_snapshot *snapshot)
++{
++	u64 now_ns;
++	u64 elapsed_ns;
++
++	if (!ctx || !snapshot || !ctx->enabled)
++		return;
++	if (ctx->ended) {
++		ctx->validation_flags |= MYKS_VALIDATION_DOUBLE_END;
++		return;
++	}
++	ctx->ended = true;
++	if (ctx->exit_reason == MYKS_EXIT_UNKNOWN)
++		ctx->validation_flags |= MYKS_VALIDATION_EXIT_UNKNOWN;
++	now_ns = ktime_get_mono_fast_ns();
++	elapsed_ns = myks_kswapd_elapsed_ns(ctx->request_begin_ns, now_ns,
++					    &ctx->validation_flags);
++	trace_myself_kswapd_request_end(ctx->request_id, snapshot->nid,
++			snapshot->requested_order, snapshot->final_order,
++			snapshot->final_priority, snapshot->final_balanced,
++			snapshot->boost_active, snapshot->stop_requested,
++			snapshot->was_frozen, snapshot->order_dropped, ctx->pass_seq + 1,
++			ctx->round_count, ctx->total_main_scanned,
++			ctx->total_soft_scanned, ctx->total_scanned,
++			ctx->total_main_reclaimed, ctx->total_soft_reclaimed,
++			ctx->total_reclaimed, ctx->boost_restart_count,
++			ctx->cache_trim_restart_count, snapshot->exit_reason, elapsed_ns,
++			ctx->validation_flags);
++}
++// #lzx--------------------------- 观察器实现结束 ---------------------------
+--- /dev/null
++++ b/mm/myself_kswapd/adapter/kswapd_observer_kunit.c
+@@ -0,0 +1,107 @@
++// SPDX-License-Identifier: GPL-2.0
++
++#include <kunit/test.h>
++
++#include "../include/kswapd_observer.h"
++
++// #lzx: myself-kswapd L0.1 observe-only code
++// #lzx--------------------------- 纯函数单元测试 ---------------------------
++static void myks_reclaim_split_test(struct kunit *test)
++{
++	unsigned long delta;
++	unsigned long main_reclaimed;
++	u32 flags;
++
++	flags = 0;
++	myks_kswapd_compute_reclaim_split(3, 10, 2, &delta, &main_reclaimed,
++					  &flags);
++	KUNIT_EXPECT_EQ(test, delta, 7UL);
++	KUNIT_EXPECT_EQ(test, main_reclaimed, 5UL);
++	KUNIT_EXPECT_EQ(test, flags, 0U);
++}
++
++static void myks_reclaim_split_edge_test(struct kunit *test)
++{
++	unsigned long delta;
++	unsigned long main_reclaimed;
++	u32 flags;
++
++	flags = 0;
++	myks_kswapd_compute_reclaim_split(10, 10, 0, &delta, &main_reclaimed,
++					  &flags);
++	KUNIT_EXPECT_EQ(test, delta, 0UL);
++	KUNIT_EXPECT_EQ(test, main_reclaimed, 0UL);
++	KUNIT_EXPECT_EQ(test, flags, 0U);
++
++	flags = 0;
++	myks_kswapd_compute_reclaim_split(10, 12, 3, &delta, &main_reclaimed,
++					  &flags);
++	KUNIT_EXPECT_EQ(test, delta, 2UL);
++	KUNIT_EXPECT_EQ(test, main_reclaimed, 0UL);
++	KUNIT_EXPECT_EQ(test, flags, (u32)MYKS_VALIDATION_RECLAIM_SPLIT_INVALID);
++
++	flags = 0;
++	myks_kswapd_compute_reclaim_split(12, 10, 0, &delta, &main_reclaimed,
++					  &flags);
++	KUNIT_EXPECT_EQ(test, delta, 0UL);
++	KUNIT_EXPECT_EQ(test, main_reclaimed, 0UL);
++	KUNIT_EXPECT_EQ(test, flags, (u32)MYKS_VALIDATION_COUNTER_REGRESSION);
++}
++
++static void myks_saturating_add_test(struct kunit *test)
++{
++	unsigned long result;
++	u32 flags;
++
++	flags = 0;
++	KUNIT_EXPECT_TRUE(test, myks_kswapd_add_sat(4, 5, &result,
++						   MYKS_VALIDATION_SCAN_OVERFLOW,
++						   &flags));
++	KUNIT_EXPECT_EQ(test, result, 9UL);
++	KUNIT_EXPECT_EQ(test, flags, 0U);
++
++	flags = 0;
++	KUNIT_EXPECT_FALSE(test, myks_kswapd_add_sat(ULONG_MAX, 1, &result,
++						    MYKS_VALIDATION_RECLAIM_OVERFLOW,
++						    &flags));
++	KUNIT_EXPECT_EQ(test, result, ULONG_MAX);
++	KUNIT_EXPECT_EQ(test, flags, (u32)MYKS_VALIDATION_RECLAIM_OVERFLOW);
++}
++
++static void myks_state_lifecycle_test(struct kunit *test)
++{
++	struct myks_kswapd_request_ctx ctx = { // #lzx
++		.enabled = true, // #lzx
++		.exit_reason = MYKS_EXIT_UNKNOWN, // #lzx
++	}; // #lzx
++	struct myks_kswapd_end_snapshot end = { // #lzx
++		.exit_reason = MYKS_EXIT_UNKNOWN, // #lzx
++	}; // #lzx
++
++	myks_kswapd_note_boost_restart(&ctx); // #lzx
++	myks_kswapd_note_cache_trim_restart(&ctx); // #lzx
++	KUNIT_EXPECT_EQ(test, ctx.pass_seq, 2U);
++	KUNIT_EXPECT_EQ(test, ctx.boost_restart_count, 1U);
++	KUNIT_EXPECT_EQ(test, ctx.cache_trim_restart_count, 1U);
++	myks_kswapd_request_end(&ctx, &end); // #lzx
++	KUNIT_EXPECT_TRUE(test, ctx.ended);
++	KUNIT_EXPECT_NE(test, ctx.validation_flags & MYKS_VALIDATION_EXIT_UNKNOWN, 0U);
++	myks_kswapd_request_end(&ctx, &end); // #lzx
++	KUNIT_EXPECT_NE(test, ctx.validation_flags & MYKS_VALIDATION_DOUBLE_END, 0U);
++}
++
++static struct kunit_case myks_observer_test_cases[] = {
++	KUNIT_CASE(myks_reclaim_split_test),
++	KUNIT_CASE(myks_reclaim_split_edge_test),
++	KUNIT_CASE(myks_saturating_add_test),
++	KUNIT_CASE(myks_state_lifecycle_test),
++	{}
++};
++
++static struct kunit_suite myks_observer_test_suite = {
++	.name = "myself-kswapd-observer",
++	.test_cases = myks_observer_test_cases,
++};
++
++kunit_test_suite(myks_observer_test_suite);
++// #lzx--------------------------- 纯函数单元测试结束 ---------------------------
+--- /dev/null
++++ b/mm/myself_kswapd/trace/trace.c
+@@ -0,0 +1,6 @@
++// SPDX-License-Identifier: GPL-2.0
++
++// #lzx--------------------------- tracepoint 定义唯一实例 ---------------------------
++#define CREATE_TRACE_POINTS
++#include <trace/events/myself_kswapd.h>
++// #lzx--------------------------- tracepoint 定义唯一实例结束 ---------------------------
+--- /dev/null
++++ b/include/trace/events/myself_kswapd.h
+@@ -0,0 +1,245 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#undef TRACE_SYSTEM
++#define TRACE_SYSTEM myself_kswapd
++
++// #lzx: myself-kswapd L0.1 observe-only code
++#if !defined(_TRACE_MYSELF_KSWAPD_H) || defined(TRACE_HEADER_MULTI_READ)
++#define _TRACE_MYSELF_KSWAPD_H
++
++#include <linux/tracepoint.h>
++
++// #lzx--------------------------- kswapd 观察事件 ---------------------------
++TRACE_EVENT(myself_kswapd_request_begin,
++
++	TP_PROTO(u64 request_id, int nid, int requested_order, int highest_zoneidx,
++		 unsigned long gfp_mask, unsigned long initial_boost_pages, bool boosted),
++
++	TP_ARGS(request_id, nid, requested_order, highest_zoneidx, gfp_mask,
++		initial_boost_pages, boosted),
++
++	TP_STRUCT__entry(
++		__field(u64, request_id)
++		__field(int, nid)
++		__field(int, requested_order)
++		__field(int, highest_zoneidx)
++		__field(unsigned long, gfp_mask)
++		__field(unsigned long, initial_boost_pages)
++		__field(bool, boosted)
++	),
++
++	TP_fast_assign(
++		__entry->request_id = request_id;
++		__entry->nid = nid;
++		__entry->requested_order = requested_order;
++		__entry->highest_zoneidx = highest_zoneidx;
++		__entry->gfp_mask = gfp_mask;
++		__entry->initial_boost_pages = initial_boost_pages;
++		__entry->boosted = boosted;
++	),
++
++	TP_printk("request_id=%llu nid=%d requested_order=%d highest_zoneidx=%d "
++		  "gfp_mask=0x%lx initial_boost_pages=%lu boosted=%d",
++		  __entry->request_id, __entry->nid, __entry->requested_order,
++		  __entry->highest_zoneidx, __entry->gfp_mask,
++		  __entry->initial_boost_pages, __entry->boosted)
++);
++
++TRACE_EVENT(myself_kswapd_priority_round,
++
++	TP_PROTO(u64 request_id, u32 pass_seq, u32 round_seq, int nid, s8 order,
++		 s8 priority, s8 reclaim_idx, unsigned long nr_to_reclaim,
++		 unsigned long main_scanned, unsigned long soft_scanned,
++		 unsigned long total_scanned, unsigned long main_reclaimed,
++		 unsigned long soft_reclaimed, unsigned long reclaimed_delta,
++		 bool balanced_before, bool boost_active, bool raise_priority,
++		 bool priority_decremented, bool may_swap, bool may_unmap,
++		 bool may_writepage, unsigned int may_deactivate, bool stop_requested,
++		 bool was_frozen, bool boost_no_progress, u64 elapsed_ns,
++		 u32 validation_flags),
++
++	TP_ARGS(request_id, pass_seq, round_seq, nid, order, priority, reclaim_idx,
++		nr_to_reclaim, main_scanned, soft_scanned, total_scanned,
++		main_reclaimed, soft_reclaimed, reclaimed_delta, balanced_before,
++		boost_active, raise_priority, priority_decremented, may_swap, may_unmap,
++		may_writepage, may_deactivate, stop_requested, was_frozen,
++		boost_no_progress, elapsed_ns, validation_flags),
++
++	TP_STRUCT__entry(
++		__field(u64, request_id)
++		__field(u32, pass_seq)
++		__field(u32, round_seq)
++		__field(int, nid)
++		__field(s8, order)
++		__field(s8, priority)
++		__field(s8, reclaim_idx)
++		__field(unsigned long, nr_to_reclaim)
++		__field(unsigned long, main_scanned)
++		__field(unsigned long, soft_scanned)
++		__field(unsigned long, total_scanned)
++		__field(unsigned long, main_reclaimed)
++		__field(unsigned long, soft_reclaimed)
++		__field(unsigned long, reclaimed_delta)
++		__field(bool, balanced_before)
++		__field(bool, boost_active)
++		__field(bool, raise_priority)
++		__field(bool, priority_decremented)
++		__field(bool, may_swap)
++		__field(bool, may_unmap)
++		__field(bool, may_writepage)
++		__field(unsigned int, may_deactivate)
++		__field(bool, stop_requested)
++		__field(bool, was_frozen)
++		__field(bool, boost_no_progress)
++		__field(u64, elapsed_ns)
++		__field(u32, validation_flags)
++	),
++
++	TP_fast_assign(
++		__entry->request_id = request_id;
++		__entry->pass_seq = pass_seq;
++		__entry->round_seq = round_seq;
++		__entry->nid = nid;
++		__entry->order = order;
++		__entry->priority = priority;
++		__entry->reclaim_idx = reclaim_idx;
++		__entry->nr_to_reclaim = nr_to_reclaim;
++		__entry->main_scanned = main_scanned;
++		__entry->soft_scanned = soft_scanned;
++		__entry->total_scanned = total_scanned;
++		__entry->main_reclaimed = main_reclaimed;
++		__entry->soft_reclaimed = soft_reclaimed;
++		__entry->reclaimed_delta = reclaimed_delta;
++		__entry->balanced_before = balanced_before;
++		__entry->boost_active = boost_active;
++		__entry->raise_priority = raise_priority;
++		__entry->priority_decremented = priority_decremented;
++		__entry->may_swap = may_swap;
++		__entry->may_unmap = may_unmap;
++		__entry->may_writepage = may_writepage;
++		__entry->may_deactivate = may_deactivate;
++		__entry->stop_requested = stop_requested;
++		__entry->was_frozen = was_frozen;
++		__entry->boost_no_progress = boost_no_progress;
++		__entry->elapsed_ns = elapsed_ns;
++		__entry->validation_flags = validation_flags;
++	),
++
++	TP_printk("request_id=%llu pass_seq=%u round_seq=%u nid=%d order=%d "
++		  "priority=%d reclaim_idx=%d nr_to_reclaim=%lu main_scanned=%lu "
++		  "soft_scanned=%lu total_scanned=%lu main_reclaimed=%lu "
++		  "soft_reclaimed=%lu reclaimed_delta=%lu balanced_before=%d "
++		  "boost_active=%d raise_priority=%d priority_decremented=%d "
++		  "may_swap=%d may_unmap=%d may_writepage=%d may_deactivate=%u "
++		  "stop_requested=%d was_frozen=%d boost_no_progress=%d elapsed_ns=%llu "
++		  "validation_flags=0x%x",
++		  __entry->request_id, __entry->pass_seq, __entry->round_seq,
++		  __entry->nid, __entry->order, __entry->priority,
++		  __entry->reclaim_idx, __entry->nr_to_reclaim,
++		  __entry->main_scanned, __entry->soft_scanned,
++		  __entry->total_scanned, __entry->main_reclaimed,
++		  __entry->soft_reclaimed, __entry->reclaimed_delta,
++		  __entry->balanced_before, __entry->boost_active,
++		  __entry->raise_priority, __entry->priority_decremented,
++		  __entry->may_swap, __entry->may_unmap, __entry->may_writepage,
++		  __entry->may_deactivate, __entry->stop_requested,
++		  __entry->was_frozen, __entry->boost_no_progress,
++		  __entry->elapsed_ns, __entry->validation_flags)
++);
++
++TRACE_EVENT(myself_kswapd_request_end,
++
++	TP_PROTO(u64 request_id, int nid, int requested_order, int final_order,
++		 int final_priority, bool final_balanced, bool boost_active,
++		 bool stop_requested, bool was_frozen, bool order_dropped,
++		 u32 pass_count, u32 round_count,
++		 unsigned long total_main_scanned, unsigned long total_soft_scanned,
++		 unsigned long total_scanned, unsigned long total_main_reclaimed,
++		 unsigned long total_soft_reclaimed, unsigned long total_reclaimed,
++		 u32 boost_restart_count, u32 cache_trim_restart_count,
++		 u32 exit_reason, u64 elapsed_ns, u32 validation_flags),
++
++	TP_ARGS(request_id, nid, requested_order, final_order, final_priority,
++		final_balanced, boost_active, stop_requested, was_frozen,
++		order_dropped, pass_count, round_count, total_main_scanned,
++		total_soft_scanned, total_scanned, total_main_reclaimed,
++		total_soft_reclaimed, total_reclaimed, boost_restart_count,
++		cache_trim_restart_count, exit_reason, elapsed_ns, validation_flags),
++
++	TP_STRUCT__entry(
++		__field(u64, request_id)
++		__field(int, nid)
++		__field(int, requested_order)
++		__field(int, final_order)
++		__field(int, final_priority)
++		__field(bool, final_balanced)
++		__field(bool, boost_active)
++		__field(bool, stop_requested)
++		__field(bool, was_frozen)
++		__field(bool, order_dropped)
++		__field(u32, pass_count)
++		__field(u32, round_count)
++		__field(unsigned long, total_main_scanned)
++		__field(unsigned long, total_soft_scanned)
++		__field(unsigned long, total_scanned)
++		__field(unsigned long, total_main_reclaimed)
++		__field(unsigned long, total_soft_reclaimed)
++		__field(unsigned long, total_reclaimed)
++		__field(u32, boost_restart_count)
++		__field(u32, cache_trim_restart_count)
++		__field(u32, exit_reason)
++		__field(u64, elapsed_ns)
++		__field(u32, validation_flags)
++	),
++
++	TP_fast_assign(
++		__entry->request_id = request_id;
++		__entry->nid = nid;
++		__entry->requested_order = requested_order;
++		__entry->final_order = final_order;
++		__entry->final_priority = final_priority;
++		__entry->final_balanced = final_balanced;
++		__entry->boost_active = boost_active;
++		__entry->stop_requested = stop_requested;
++		__entry->was_frozen = was_frozen;
++		__entry->order_dropped = order_dropped;
++		__entry->pass_count = pass_count;
++		__entry->round_count = round_count;
++		__entry->total_main_scanned = total_main_scanned;
++		__entry->total_soft_scanned = total_soft_scanned;
++		__entry->total_scanned = total_scanned;
++		__entry->total_main_reclaimed = total_main_reclaimed;
++		__entry->total_soft_reclaimed = total_soft_reclaimed;
++		__entry->total_reclaimed = total_reclaimed;
++		__entry->boost_restart_count = boost_restart_count;
++		__entry->cache_trim_restart_count = cache_trim_restart_count;
++		__entry->exit_reason = exit_reason;
++		__entry->elapsed_ns = elapsed_ns;
++		__entry->validation_flags = validation_flags;
++	),
++
++	TP_printk("request_id=%llu nid=%d requested_order=%d final_order=%d "
++		  "final_priority=%d final_balanced=%d boost_active=%d "
++		  "stop_requested=%d was_frozen=%d order_dropped=%d pass_count=%u "
++		  "round_count=%u total_main_scanned=%lu total_soft_scanned=%lu "
++		  "total_scanned=%lu total_main_reclaimed=%lu "
++		  "total_soft_reclaimed=%lu total_reclaimed=%lu "
++		  "boost_restart_count=%u cache_trim_restart_count=%u "
++		  "exit_reason=%u elapsed_ns=%llu "
++		  "validation_flags=0x%x",
++		  __entry->request_id, __entry->nid, __entry->requested_order,
++		  __entry->final_order, __entry->final_priority,
++		  __entry->final_balanced, __entry->boost_active,
++		  __entry->stop_requested, __entry->was_frozen,
++		  __entry->order_dropped, __entry->pass_count, __entry->round_count,
++		  __entry->total_main_scanned, __entry->total_soft_scanned,
++		  __entry->total_scanned, __entry->total_main_reclaimed,
++		  __entry->total_soft_reclaimed, __entry->total_reclaimed,
++		  __entry->boost_restart_count, __entry->cache_trim_restart_count,
++		  __entry->exit_reason,
++		  __entry->elapsed_ns, __entry->validation_flags)
++);
++// #lzx--------------------------- kswapd 观察事件结束 ---------------------------
++
++#endif /* _TRACE_MYSELF_KSWAPD_H */
++
++#include <trace/define_trace.h>

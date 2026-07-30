@@ -44,6 +44,10 @@ add_library(reclaim_core STATIC
     src/core/reclaim.c
     src/core/validator.c
     src/core/shadow_lru.c
+    src/l02/lruvec_trace_parser.c
+    src/l02/kernel_snapshot_store.c
+    src/l02/bootstrap_aggregate.c
+    src/l02/shadow_alignment.c
 )
 target_include_directories(reclaim_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(reclaim_core PUBLIC Threads::Threads)
@@ -60,6 +64,9 @@ target_include_directories(reclaim_userspace PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/
 add_executable(reclaim_simulator src/simulator/main.c)
 target_link_libraries(reclaim_simulator PRIVATE reclaim_userspace reclaim_core)
 
+add_executable(lruvec_observer_cli tools/lruvec_observer_cli.c)
+target_link_libraries(lruvec_observer_cli PRIVATE reclaim_core)
+
 if(RECLAIM_ENABLE_TESTS)
     enable_testing()
     add_executable(reclaim_tests
@@ -74,6 +81,10 @@ if(RECLAIM_ENABLE_TESTS)
         tests/integration/test_validation_corruption.c
         tests/scenarios/test_trace.c
         tests/integration/test_shadow_lru.c
+        tests/unit/test_lruvec_trace_parser.c
+        tests/unit/test_kernel_snapshot_store.c
+        tests/unit/test_bootstrap_aggregate.c
+        tests/unit/test_shadow_alignment.c
     )
     target_link_libraries(reclaim_tests PRIVATE reclaim_userspace reclaim_core)
     target_compile_definitions(reclaim_core PRIVATE SHADOW_LRU_TESTING)
