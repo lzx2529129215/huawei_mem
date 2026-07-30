@@ -169,7 +169,7 @@ static bool test_store_stage_pairing_and_request_interleaving(void)
     return true;
 }
 
-static bool test_store_rejects_css_incarnation_change(void)
+static bool test_store_resets_on_css_incarnation_change(void)
 {
     struct kernel_snapshot_store store;
     struct kernel_snapshot_ingest_result result;
@@ -186,8 +186,12 @@ static bool test_store_rejects_css_incarnation_change(void)
                 KERNEL_SNAPSHOT_ACCEPTED);
     TEST_ASSERT(kernel_snapshot_store_ingest(&store, &changed, &result) ==
                 KERNEL_SNAPSHOT_INCARCATION_CHANGED);
+    TEST_ASSERT(result.accepted);
     TEST_ASSERT(kernel_snapshot_store_get_latest(&store, &first.key, &output) == 0);
-    TEST_ASSERT_EQ_U64(23U, output.memcg_css_id);
+    TEST_ASSERT_EQ_U64(99U, output.memcg_css_id);
+    changed.snapshot_seq = 3U;
+    TEST_ASSERT(kernel_snapshot_store_ingest(&store, &changed, &result) ==
+                KERNEL_SNAPSHOT_ACCEPTED);
     kernel_snapshot_store_destroy(&store);
     return true;
 }
@@ -199,5 +203,5 @@ void register_test_kernel_snapshot_store(void)
     reclaim_test_register("snapshot store provisional gap", test_store_provisional_gap_is_accepted);
     reclaim_test_register("snapshot store formal key", test_store_formal_key_dimensions_are_independent);
     reclaim_test_register("snapshot store stage pairing", test_store_stage_pairing_and_request_interleaving);
-    reclaim_test_register("snapshot store CSS incarnation", test_store_rejects_css_incarnation_change);
+    reclaim_test_register("snapshot store CSS incarnation", test_store_resets_on_css_incarnation_change);
 }

@@ -98,6 +98,18 @@ static int append_history(struct kernel_snapshot_store_entry *entry,
     return 0;
 }
 
+static void clear_history(struct kernel_snapshot_store_entry *entry)
+{
+    struct kernel_snapshot_history *history = entry->history;
+
+    while (history != NULL) {
+        struct kernel_snapshot_history *next_history = history->next;
+        free(history);
+        history = next_history;
+    }
+    entry->history = NULL;
+}
+
 void kernel_snapshot_store_init(struct kernel_snapshot_store *store)
 {
     if (store != NULL) *store = (struct kernel_snapshot_store){0};
@@ -144,9 +156,15 @@ int kernel_snapshot_store_ingest(
     if (store == NULL || snapshot == NULL || result == NULL) return -EINVAL;
     *result = (struct kernel_snapshot_ingest_result){0};
     entry = find_entry(store, &snapshot->key);
-    if (entry != NULL && snapshot->key.mode == KERNEL_LRU_MODE_MEMCG &&
-        entry->latest.memcg_css_id != snapshot->memcg_css_id)
-        return result->status = KERNEL_SNAPSHOT_INCARCATION_CHANGED;
+    if (entry != NULL && entry->has_latest &&
+        snapshot->key.mode == KERNEL_LRU_MODE_MEMCG &&
+        entry->latest.memcg_css_id != snapshot->memcg_css_id) {
+        // #lzx: invalidate the old CSS incarnation before accepting a new baseline.
+        clear_history(entry);
+        entry->latest = (struct kernel_lruvec_snapshot){0};
+        entry->has_latest = false;
+        status = KERNEL_SNAPSHOT_INCARCATION_CHANGED;
+    }
 
     scan_stage = snapshot->stage == KERNEL_SNAPSHOT_SCAN_BEFORE ||
                  snapshot->stage == KERNEL_SNAPSHOT_SCAN_AFTER;
