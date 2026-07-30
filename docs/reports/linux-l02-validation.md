@@ -1,6 +1,6 @@
 # Linux L0.2 validation
 
-- date: 2026-07-30T09:58:04+08:00
+- date: 2026-07-30T10:03:46+08:00
 - branch: feat/linux-l02-lruvec-observer
 
 ..............
@@ -15,12 +15,14 @@ Consolidate compiler generated dependencies of target reclaim_core
 [ 41%] Built target reclaim_core
 Consolidate compiler generated dependencies of target lruvec_observer_cli
 Consolidate compiler generated dependencies of target reclaim_userspace
-[ 46%] Built target lruvec_observer_cli
-[ 58%] Built target reclaim_userspace
+[ 44%] Linking C executable bin/lruvec_observer_cli
+[ 55%] Built target reclaim_userspace
 Consolidate compiler generated dependencies of target reclaim_simulator
 Consolidate compiler generated dependencies of target reclaim_tests
-[ 62%] Built target reclaim_simulator
-[100%] Built target reclaim_tests
+[ 58%] Linking C executable bin/reclaim_simulator
+[ 95%] Built target reclaim_tests
+[ 97%] Built target lruvec_observer_cli
+[100%] Built target reclaim_simulator
 Internal ctest changing into directory: /home/lzx/Desktop/huawei/myself-kswapd-l02/用户态模拟器/v1/output/task19/default
 Test project /home/lzx/Desktop/huawei/myself-kswapd-l02/用户态模拟器/v1/output/task19/default
     Start 1: reclaim_tests
@@ -36,20 +38,22 @@ Consolidate compiler generated dependencies of target reclaim_core
 [ 41%] Built target reclaim_core
 Consolidate compiler generated dependencies of target lruvec_observer_cli
 Consolidate compiler generated dependencies of target reclaim_userspace
-[ 55%] Built target lruvec_observer_cli
-[ 58%] Built target reclaim_userspace
+[ 44%] Linking C executable bin/lruvec_observer_cli
+[ 55%] Built target reclaim_userspace
 Consolidate compiler generated dependencies of target reclaim_simulator
 Consolidate compiler generated dependencies of target reclaim_tests
-[ 62%] Built target reclaim_simulator
-[100%] Built target reclaim_tests
+[ 58%] Linking C executable bin/reclaim_simulator
+[ 95%] Built target reclaim_tests
+[ 97%] Built target lruvec_observer_cli
+[100%] Built target reclaim_simulator
 Internal ctest changing into directory: /home/lzx/Desktop/huawei/myself-kswapd-l02/用户态模拟器/v1/output/task19/asan
 Test project /home/lzx/Desktop/huawei/myself-kswapd-l02/用户态模拟器/v1/output/task19/asan
     Start 1: reclaim_tests
-1/1 Test #1: reclaim_tests ....................   Passed    0.33 sec
+1/1 Test #1: reclaim_tests ....................   Passed    0.32 sec
 
 100% tests passed, 0 tests failed out of 1
 
-Total Test time (real) =   0.33 sec
+Total Test time (real) =   0.32 sec
 42/42 tests passed
 42/42 tests passed
 42/42 tests passed
@@ -727,13 +731,13 @@ make[1]: Entering directory '/home/lzx/Desktop/huawei/myself-kswapd-l02/Linux6.1
 make[1]: Leaving directory '/home/lzx/Desktop/huawei/myself-kswapd-l02/Linux6.17/mm/myself_kswapd'
 make: Leaving directory '/home/lzx/Desktop/huawei/myself-kswapd-l02/Linux6.17'
 kernel debugfs-n: PASS
-bootstrapped /tmp/tmp.AHuEwq5RJK/dest from /tmp/tmp.AHuEwq5RJK/source
-destination must be absent or empty: /tmp/tmp.AHuEwq5RJK/unknown
-source and destination must differ: /tmp/tmp.AHuEwq5RJK/source
+bootstrapped /tmp/tmp.zobThYHeln/dest from /tmp/tmp.zobThYHeln/source
+destination must be absent or empty: /tmp/tmp.zobThYHeln/unknown
+source and destination must differ: /tmp/tmp.zobThYHeln/source
 bootstrap self-test passed
-refreshed /tmp/tmp.5R5GXV4GaT/0003.patch
+refreshed /tmp/tmp.aQzdBj9OcI/0003.patch
 no allowlisted Linux6.17 differences
-created empty /tmp/tmp.5R5GXV4GaT/empty.patch
+created empty /tmp/tmp.aQzdBj9OcI/empty.patch
 patch refresh self-test passed
 shell tests, syntax and diff check: PASS
 validation complete
@@ -752,4 +756,4 @@ NOT RUN / ENVIRONMENT BLOCKED
 
 - build: PASS
 - ctest: NOT RUN / ENVIRONMENT BLOCKED
-- evidence: `FATAL: ThreadSanitizer: unexpected memory mapping 0x5b08569e2000-0x5b08569e4000`
+- evidence: `FATAL: ThreadSanitizer: unexpected memory mapping 0x640da6d20000-0x640da6d22000`
