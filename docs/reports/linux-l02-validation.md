@@ -1,11 +1,11 @@
 # Linux L0.2 validation
 
-- date: 2026-07-29T16:22:39+08:00
+- date: 2026-07-30T09:58:04+08:00
 - branch: feat/linux-l02-lruvec-observer
 
 ..............
 ----------------------------------------------------------------------
-Ran 14 tests in 0.081s
+Ran 14 tests in 0.080s
 
 OK
 -- Configuring done
@@ -15,7 +15,7 @@ Consolidate compiler generated dependencies of target reclaim_core
 [ 41%] Built target reclaim_core
 Consolidate compiler generated dependencies of target lruvec_observer_cli
 Consolidate compiler generated dependencies of target reclaim_userspace
-[ 51%] Built target lruvec_observer_cli
+[ 46%] Built target lruvec_observer_cli
 [ 58%] Built target reclaim_userspace
 Consolidate compiler generated dependencies of target reclaim_simulator
 Consolidate compiler generated dependencies of target reclaim_tests
@@ -24,11 +24,11 @@ Consolidate compiler generated dependencies of target reclaim_tests
 Internal ctest changing into directory: /home/lzx/Desktop/huawei/myself-kswapd-l02/用户态模拟器/v1/output/task19/default
 Test project /home/lzx/Desktop/huawei/myself-kswapd-l02/用户态模拟器/v1/output/task19/default
     Start 1: reclaim_tests
-1/1 Test #1: reclaim_tests ....................   Passed    0.17 sec
+1/1 Test #1: reclaim_tests ....................   Passed    0.16 sec
 
 100% tests passed, 0 tests failed out of 1
 
-Total Test time (real) =   0.17 sec
+Total Test time (real) =   0.16 sec
 -- Configuring done
 -- Generating done
 -- Build files have been written to: /home/lzx/Desktop/huawei/myself-kswapd-l02/用户态模拟器/v1/output/task19/asan
@@ -45,11 +45,11 @@ Consolidate compiler generated dependencies of target reclaim_tests
 Internal ctest changing into directory: /home/lzx/Desktop/huawei/myself-kswapd-l02/用户态模拟器/v1/output/task19/asan
 Test project /home/lzx/Desktop/huawei/myself-kswapd-l02/用户态模拟器/v1/output/task19/asan
     Start 1: reclaim_tests
-1/1 Test #1: reclaim_tests ....................   Passed    0.34 sec
+1/1 Test #1: reclaim_tests ....................   Passed    0.33 sec
 
 100% tests passed, 0 tests failed out of 1
 
-Total Test time (real) =   0.34 sec
+Total Test time (real) =   0.33 sec
 42/42 tests passed
 42/42 tests passed
 42/42 tests passed
@@ -727,7 +727,15 @@ make[1]: Entering directory '/home/lzx/Desktop/huawei/myself-kswapd-l02/Linux6.1
 make[1]: Leaving directory '/home/lzx/Desktop/huawei/myself-kswapd-l02/Linux6.17/mm/myself_kswapd'
 make: Leaving directory '/home/lzx/Desktop/huawei/myself-kswapd-l02/Linux6.17'
 kernel debugfs-n: PASS
-shell syntax and diff check: PASS
+bootstrapped /tmp/tmp.AHuEwq5RJK/dest from /tmp/tmp.AHuEwq5RJK/source
+destination must be absent or empty: /tmp/tmp.AHuEwq5RJK/unknown
+source and destination must differ: /tmp/tmp.AHuEwq5RJK/source
+bootstrap self-test passed
+refreshed /tmp/tmp.5R5GXV4GaT/0003.patch
+no allowlisted Linux6.17 differences
+created empty /tmp/tmp.5R5GXV4GaT/empty.patch
+patch refresh self-test passed
+shell tests, syntax and diff check: PASS
 validation complete
 
 ## Runtime smoke

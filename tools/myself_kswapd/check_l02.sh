@@ -6,6 +6,17 @@ USER_ROOT="$ROOT/用户态模拟器/v1"
 OUT="$USER_ROOT/output/task19"
 REPORT="$ROOT/docs/reports/linux-l02-validation.md"
 mkdir -p "$OUT" "$ROOT/docs/reports"
+LOCK_FILE="$OUT/.check_l02.lock"
+APPENDIX=$(mktemp)
+trap 'rm -f -- "$APPENDIX"' EXIT
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    echo "another L0.2 validation run is already active" >&2
+    exit 1
+fi
+if [[ -f "$REPORT" ]]; then
+    sed -n '/^## Runtime smoke/,$p' "$REPORT" > "$APPENDIX"
+fi
 exec > >(tee "$OUT/validation.log") 2>&1
 
 echo "# Linux L0.2 validation"
@@ -34,7 +45,11 @@ echo "100-run user-space tests: PASS"
 KERNEL="$ROOT/Linux6.17"
 BASE="$ROOT/patches/0003-linux617-myself-kswapd-l02-lruvec-observer.patch"
 PATCH_CHECK=$(mktemp -d)
-trap 'rm -rf -- "$PATCH_CHECK"' EXIT
+cleanup() {
+    rm -rf -- "$PATCH_CHECK"
+    rm -f -- "$APPENDIX"
+}
+trap cleanup EXIT
 cp -a "$ROOT/../myself-kswapd-l01/Linux6.17" "$PATCH_CHECK/Linux6.17"
 (cd "$PATCH_CHECK" && git apply --check "$BASE")
 
@@ -73,3 +88,7 @@ git -C "$ROOT" diff --check
 echo "shell tests, syntax and diff check: PASS"
 echo "validation complete"
 cp "$OUT/validation.log" "$REPORT"
+if [[ -s "$APPENDIX" ]]; then
+    printf '\n' >> "$REPORT"
+    cat "$APPENDIX" >> "$REPORT"
+fi
