@@ -23,28 +23,35 @@ for n in 0002 0003; do
     expected=$(awk -v name="patches/$(basename "$p")" '$2 == name {print $1}' "$ROOT/docs/handoff/checksums/patches.sha256")
     [[ -n "$expected" ]] || die "missing checksum for $(basename "$p")"
     verify_sha256 "$p" "$expected"
-    patch_input=$p
-    if [[ "$n" == 0003 ]]; then
-        patch_input=$(mktemp)
-        trap 'rm -f -- "$patch_input"' RETURN
-        sed -e 's#^diff --git a/Linux6\.17/#diff --git a/#' \
-            -e 's# b/Linux6\.17/# b/#' \
-            -e 's#^--- a/Linux6\.17/#--- a/#' \
-            -e 's#^+++ b/Linux6\.17/#+++ b/#' "$p" > "$patch_input"
-    fi
-    if source_apply --check -p1 "$patch_input" >/dev/null 2>&1; then
-        log "applying $n"
-        source_apply -p1 "$patch_input"
-    elif source_apply --reverse --check -p1 "$patch_input" >/dev/null 2>&1; then
-        log "$n: ALREADY_APPLIED"
-    else
-        die "$n: PARTIAL/UNKNOWN; neither exact apply nor exact reverse apply succeeded"
-    fi
-    if [[ "$n" == 0003 ]]; then rm -f -- "$patch_input"; trap - RETURN; fi
 done
+patch2=$(patch_path 0002)
+patch3=$(mktemp)
+trap 'rm -f -- "$patch3"' EXIT
+sed -e 's#^diff --git a/Linux6\.17/#diff --git a/#' \
+    -e 's# b/Linux6\.17/# b/#' \
+    -e 's#^--- a/Linux6\.17/#--- a/#' \
+    -e 's#^+++ b/Linux6\.17/#+++ b/#' "$(patch_path 0003)" > "$patch3"
+
+if source_apply --check -p1 "$patch2" >/dev/null 2>&1; then
+    source_apply --check -p1 "$patch3" >/dev/null 2>&1 || die '0003 cannot follow a pristine 0002 state'
+    log 'applying 0002'; source_apply -p1 "$patch2"
+    log 'applying 0003'; source_apply -p1 "$patch3"
+elif source_apply --check -p1 "$patch3" >/dev/null 2>&1; then
+    source_apply --reverse --check -p1 "$patch2" >/dev/null 2>&1 || die '0002: PARTIAL/UNKNOWN before pending 0003'
+    log '0002: ALREADY_APPLIED'
+    log 'applying 0003'; source_apply -p1 "$patch3"
+elif source_apply --reverse --check -p1 "$patch3" >/dev/null 2>&1; then
+    log '0002: ALREADY_APPLIED (validated through final 0003 state)'
+    log '0003: ALREADY_APPLIED'
+else
+    die 'patch chain: PARTIAL/UNKNOWN; exact forward and reverse checks failed'
+fi
 for f in include/trace/events/myself_kswapd.h mm/myself_kswapd/heartbeat.c mm/myself_kswapd/adapter/observer_config.c; do
     [[ -f "$source_dir/$f" ]] || die "missing post-patch file: $f"
 done
+rg -q '^source "mm/myself_kswapd/Kconfig"$' "$source_dir/mm/Kconfig" || die '0002 Kconfig hook missing'
+rg -q '^obj-\$\(CONFIG_MYSELF_KSWAPD\) \+= myself_kswapd/$' "$source_dir/mm/Makefile" || die '0002 Makefile hook missing'
+rg -q 'myself_kswapd/include/kswapd_observer.h' "$source_dir/mm/vmscan.c" || die '0002 vmscan observer hook missing'
 rg -q '#include <linux/mm.h>' "$source_dir/mm/myself_kswapd/adapter/observer_config.c" || die 'observer_config.c missing linux/mm.h include'
 python3 "$ROOT/tools/myself_kswapd/tests/test_trace_event_arg_limits.py" "$source_dir/include/trace/events/myself_kswapd.h"
 echo 'Linux L0.2 patch chain: PASS'
