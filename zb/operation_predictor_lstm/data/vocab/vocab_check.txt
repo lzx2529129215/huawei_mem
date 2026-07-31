@@ -1,0 +1,168 @@
+app_vocab_json_structure: dict_app_to_id
+target_vocab_app_total: 20
+target_vocab_id_min: 0
+target_vocab_id_max: 19
+duplicate_app_name_total: 0
+duplicate_app_id_total: 0
+empty_app_name_total: 0
+app_vocab_final_matches_target_vocab: True
+process_to_app_mapping_valid_app_total: 103
+mapping_out_of_vocab_app_total: 0
+
+mapping_type_counts:
+alias: 39
+category_fallback: 42
+package_match: 21
+process_match: 1
+system: 89
+unresolved: 967
+
+app_process_total: 103
+system_process_total: 89
+unresolved_process_total: 967
+
+top_100_unresolved_processes:
+com.tencent.wework.hmos | 11336 | no safe mapping rule matched
+com.tencent.harmonyqq | 5358 | no safe mapping rule matched
+com.huawei.hmos.photos | 4503 | no safe mapping rule matched
+com.hos.moonshot.kimichat | 3480 | no safe mapping rule matched
+com.hm.youdao | 2525 | no safe mapping rule matched
+com.sanway.ecoengine | 2246 | no safe mapping rule matched
+com.tencent.meeting.app | 1560 | no safe mapping rule matched
+com.qihoo.hms.browser | 1425 | category browser is ambiguous or unavailable in app_vocab.json: 华为浏览器,海泰浏览器
+com.aliyun.tongyi4ohos | 1049 | no safe mapping rule matched
+com.oseasy1.ohvm | 1033 | no safe mapping rule matched
+com.droi.tong | 952 | no safe mapping rule matched
+com.baidu.netdisk.hmpc | 922 | no safe mapping rule matched
+com.tencent.qidian | 917 | no safe mapping rule matched
+com.huawei.hmos.calculator | 857 | no safe mapping rule matched
+com.quark.ohosbrowser | 854 | category browser is ambiguous or unavailable in app_vocab.json: 华为浏览器,海泰浏览器
+com.hmkuwo.cn | 832 | no safe mapping rule matched
+com.xuexitong.study | 648 | no safe mapping rule matched
+com.tencent.qqlivepchm | 641 | no safe mapping rule matched
+com.huawei.hmsapp.thememanager | 609 | no safe mapping rule matched
+com.huawei.hmos.tips | 599 | no safe mapping rule matched
+com.cscec.portal.harmonyosnext | 590 | no safe mapping rule matched
+com.huawei.hmsapp.appgallery.devicetest | 587 | no safe mapping rule matched
+com.youku.next | 542 | no safe mapping rule matched
+com.huawei.hmos.taskmanager | 541 | no safe mapping rule matched
+com.oray.sunloginclient | 512 | no safe mapping rule matched
+com.huawei.hmsapp.books | 507 | no safe mapping rule matched
+com.dragon.read.next | 484 | no safe mapping rule matched
+com.zhihu.hmos | 465 | no safe mapping rule matched
+cherrystudio.cherryai.com | 459 | no safe mapping rule matched
+com.huawei.xljsci | 458 | no safe mapping rule matched
+com.baidu.translateharmony | 452 | no safe mapping rule matched
+com.hexin.hmn.sjcg | 450 | no safe mapping rule matched
+com.haozip2345.app | 448 | no safe mapping rule matched
+cn.biandangroup.biandan | 428 | no safe mapping rule matched
+com.huawei.hmos.ailife | 422 | no safe mapping rule matched
+org.xbgroup.clashboxLTS | 387 | no safe mapping rule matched
+hos.cn.com.langeasy.bbdc | 379 | no safe mapping rule matched
+com.mgtv.phone | 376 | no safe mapping rule matched
+com.chaoxing.cxstudy | 371 | no safe mapping rule matched
+com.huawei.hmos.camera | 369 | no safe mapping rule matched
+com.mikannqaq.obsidian | 361 | no safe mapping rule matched
+com.dewu.hos | 351 | no safe mapping rule matched
+com.hottagames.yh.huawei | 350 | no safe mapping rule matched
+com.qcc.hm | 338 | no safe mapping rule matched
+com.deepseek.chat | 326 | no safe mapping rule matched
+com.huawei.hmos.clock | 313 | no safe mapping rule matched
+com.huawei.hmos.finddevice | 308 | no safe mapping rule matched
+com.baidu.netdisk.hmos | 298 | no safe mapping rule matched
+com.hdg4.ql.huawei | 298 | no safe mapping rule matched
+com.fenbi.gwy | 295 | no safe mapping rule matched
+com.salmon.doubao | 289 | no safe mapping rule matched
+com.hellocham3.app | 280 | no safe mapping rule matched
+jp.pokemon.pokemontcgp | 279 | no safe mapping rule matched
+com.phoenix.read.next | 274 | no safe mapping rule matched
+com.kot32.hongmeng.tomatodo | 272 | no safe mapping rule matched
+com.sina.weibo.stage | 264 | no safe mapping rule matched
+com.huawei.hmsapp.gamecenter | 262 | no safe mapping rule matched
+com.huawei.developer.rgm.images_openeuler22.03 | 247 | no safe mapping rule matched
+com.photosir.himirage | 243 | no safe mapping rule matched
+com.baicizhan.bcz.hm | 241 | no safe mapping rule matched
+com.plantsvszombies3.mengxinghm.huawei | 222 | no safe mapping rule matched
+com.tencent.hunyuan.app.chat | 219 | no safe mapping rule matched
+com.zhanhuo.mw.hm.huawei | 217 | no safe mapping rule matched
+cn.canva.hmos.editor | 202 | no safe mapping rule matched
+com.tencent.imahm | 201 | no safe mapping rule matched
+com.feiyu.luobo4.hm.huawei | 197 | no safe mapping rule matched
+com.yinxiang.hm | 190 | no safe mapping rule matched
+com.chuckfang.meow | 185 | no safe mapping rule matched
+com.hikvision.isecurecenter | 183 | no safe mapping rule matched
+com.salmon.web.ncm | 181 | no safe mapping rule matched
+xyz.chatboxapp.chatbox | 181 | no safe mapping rule matched
+com.huawei.codearts | 179 | no safe mapping rule matched
+com.zuler.ohospc.todesk | 179 | no safe mapping rule matched
+com.eastmoney.emapp | 171 | no safe mapping rule matched
+com.shanbay.hmsentence | 171 | no safe mapping rule matched
+com.cctv.yangshipin.app.harmonyp | 165 | no safe mapping rule matched
+com.huawei.hmos.soundrecorder | 157 | no safe mapping rule matched
+com.netease.ohmail | 153 | no safe mapping rule matched
+com.develop.opensource.ohpcd.openclaw.assistant | 150 | no safe mapping rule matched
+com.taobao.idlefish4ohos | 150 | no safe mapping rule matched
+org.xbgroup.clashbox | 148 | no safe mapping rule matched
+com.xunlei.thunder | 145 | no safe mapping rule matched
+com.huawei.hmos.maps.app | 143 | no safe mapping rule matched
+com.foxit.foxitpdfeditor | 142 | no safe mapping rule matched
+com.ykb.hm | 142 | no safe mapping rule matched
+com.coolapk.hmclient | 130 | no safe mapping rule matched
+com.example.ohdosbox | 121 | no safe mapping rule matched
+com.bsy.hxqhm | 120 | no safe mapping rule matched
+com.example.rrsp | 120 | no safe mapping rule matched
+com.huawei.hmos.vmall | 119 | no safe mapping rule matched
+com.xiaoe.client.huawei | 117 | no safe mapping rule matched
+com.strato.webprinter | 115 | no safe mapping rule matched
+com.sankuai.hmeituan | 114 | no safe mapping rule matched
+com.meitu.mtxxpro | 108 | no safe mapping rule matched
+com.baidu.baiduapp | 106 | no safe mapping rule matched
+com.huawei.hmsapp.alliance | 106 | no safe mapping rule matched
+org.xbstudio.clashnext | 105 | no safe mapping rule matched
+com.seayoo.ggd.hmos.huawei | 99 | no safe mapping rule matched
+com.fingertip.saolei.harm | 92 | no safe mapping rule matched
+com.huawei.hmsapp.litegamelauncher | 90 | no safe mapping rule matched
+
+category_fallback_processes:
+com.tencent.hm.qqmusic | 3806 | 华为音乐 | recognized music; app_vocab.json has one candidate: 华为音乐
+com.salmon.sweetmusic | 1924 | 华为音乐 | recognized music; app_vocab.json has one candidate: 华为音乐
+com.luna.hm.music | 1696 | 华为音乐 | recognized music; app_vocab.json has one candidate: 华为音乐
+com.kugou.hmmusic | 782 | 华为音乐 | recognized music; app_vocab.json has one candidate: 华为音乐
+com.qiyi.video.hmy | 714 | 华为视频 | recognized video; app_vocab.json has one candidate: 华为视频
+com.netease.cloudmusic | 712 | 华为音乐 | recognized music; app_vocab.json has one candidate: 华为音乐
+com.onyx.galaxy.hmos.note | 138 | 备忘录 | recognized notes; app_vocab.json has one candidate: 备忘录
+com.seewo.easinote5 | 119 | 备忘录 | recognized notes; app_vocab.json has one candidate: 备忘录
+com.jideos.jnotes.hm | 88 | 备忘录 | recognized notes; app_vocab.json has one candidate: 备忘录
+com.xgplayer.ttmusic.hm | 85 | 华为音乐 | recognized music; app_vocab.json has one candidate: 华为音乐
+com.tencent.docsohos | 74 | WPS | recognized office; app_vocab.json has one candidate: WPS
+com.biji.getNotesOh | 49 | 备忘录 | recognized notes; app_vocab.json has one candidate: 备忘录
+com.zhangxm.aipasswordmemo | 47 | 备忘录 | recognized notes; app_vocab.json has one candidate: 备忘录
+com.freenotes.freenotes | 39 | 备忘录 | recognized notes; app_vocab.json has one candidate: 备忘录
+com.example.sweetvideo | 28 | 华为视频 | recognized video; app_vocab.json has one candidate: 华为视频
+com.cmcc.cmvideohm | 19 | 华为视频 | recognized video; app_vocab.json has one candidate: 华为视频
+com.maimemo.huawei.momo | 11 | 备忘录 | recognized notes; app_vocab.json has one candidate: 备忘录
+com.xylink.video.conference.pc | 9 | 华为视频 | recognized video; app_vocab.json has one candidate: 华为视频
+com.softfox.imemo_pro | 8 | 备忘录 | recognized notes; app_vocab.json has one candidate: 备忘录
+com.huawei.hmos.hinote | 6 | 备忘录 | recognized notes; app_vocab.json has one candidate: 备忘录
+com.ledu.harmonydeepvideoAIgen | 6 | 华为视频 | recognized video; app_vocab.json has one candidate: 华为视频
+org.ohpg.fin.player | 6 | 华为视频 | recognized video; app_vocab.json has one candidate: 华为视频
+zone.yby.seamusic | 6 | 华为音乐 | recognized music; app_vocab.json has one candidate: 华为音乐
+cn.ieway.mobile.evplayernext | 5 | 华为视频 | recognized video; app_vocab.json has one candidate: 华为视频
+com.htwoplayers.srjjc.harm | 5 | 华为视频 | recognized video; app_vocab.json has one candidate: 华为视频
+com.memo93.anymo | 4 | 备忘录 | recognized notes; app_vocab.json has one candidate: 备忘录
+com.example.simple_note | 3 | 备忘录 | recognized notes; app_vocab.json has one candidate: 备忘录
+com.polomeetingoh.videoconference | 3 | 华为视频 | recognized video; app_vocab.json has one candidate: 华为视频
+com.banyunjuhe.pchmos.hyplayer | 2 | 华为视频 | recognized video; app_vocab.json has one candidate: 华为视频
+com.bym.hm.zhongyidoctor | 2 | WPS | recognized office; app_vocab.json has one candidate: WPS
+com.chrming.NoteMusic | 2 | 华为音乐 | recognized music; app_vocab.json has one candidate: 华为音乐
+com.just_soft.local_music.hm | 2 | 华为音乐 | recognized music; app_vocab.json has one candidate: 华为音乐
+com.maoyan.hmovie | 2 | 华为视频 | recognized video; app_vocab.json has one candidate: 华为视频
+com.taobao.movie.hongmeng | 2 | 华为视频 | recognized video; app_vocab.json has one candidate: 华为视频
+com.xiangshikeji.coffee_note | 2 | 备忘录 | recognized notes; app_vocab.json has one candidate: 备忘录
+com.hls.nasplayerplus | 1 | 华为视频 | recognized video; app_vocab.json has one candidate: 华为视频
+com.lcapps.fastplayer | 1 | 华为视频 | recognized video; app_vocab.json has one candidate: 华为视频
+com.lixiangdong.videocutter.hm | 1 | 华为视频 | recognized video; app_vocab.json has one candidate: 华为视频
+com.magicalstory.player.huawei | 1 | 华为视频 | recognized video; app_vocab.json has one candidate: 华为视频
+com.mrliang.notes | 1 | 备忘录 | recognized notes; app_vocab.json has one candidate: 备忘录
+com.singxie.notebookhw | 1 | 备忘录 | recognized notes; app_vocab.json has one candidate: 备忘录
+com.ypnet.officehm | 1 | WPS | recognized office; app_vocab.json has one candidate: WPS
