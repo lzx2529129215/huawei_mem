@@ -4,8 +4,9 @@
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-import re
 from typing import Dict, Iterable, List
+
+from ftrace_events import EVENT_ALIASES, extract_event
 
 
 class ErrorCode(Enum):
@@ -41,9 +42,10 @@ class ParseResult:
     errors: List[ParseIssue]
 
 
-EVENT_RE = re.compile(
-    r"\bmyself_kswapd:(request_begin|lruvec_snapshot):\s*(.*)$"
-)
+LRUVEC_EVENT_ALIASES = {
+    alias: canonical for alias, canonical in EVENT_ALIASES.items()
+    if canonical in {"request_begin", "lruvec_snapshot"}
+}
 
 REQUEST_FIELDS = ("request_id",)
 SNAPSHOT_FIELDS = (
@@ -180,11 +182,11 @@ def parse_trace_text(text: str) -> ParseResult:
     errors: List[ParseIssue] = []
     snapshots: List[ParsedEvent] = []
     for line_number, line in enumerate(text.splitlines(), 1):
-        match = EVENT_RE.search(line)
-        if not match:
+        extracted = extract_event(line, LRUVEC_EVENT_ALIASES)
+        if not extracted:
             continue
-        event = ParsedEvent(match.group(1), _parse_fields(match.group(2)),
-                            line_number)
+        event_name, payload = extracted
+        event = ParsedEvent(event_name, _parse_fields(payload), line_number)
         if event.event == "request_begin":
             if _validate_request(event, errors):
                 events.append(event)

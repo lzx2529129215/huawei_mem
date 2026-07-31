@@ -68,6 +68,23 @@ class ParserTest(unittest.TestCase):
                 request = self.read_rows(Path(directory) / "kswapd_requests.csv")[0]
                 self.assertEqual(request["complete"], "0")
 
+    def test_real_ftrace_event_names_are_parsed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            incomplete, events = convert(
+                FIXTURES / "real_ftrace_request_trace.txt", Path(directory))
+            self.assertEqual((incomplete, events), (0, 3))
+
+    def test_event_name_in_payload_is_not_parsed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trace = Path(directory) / "payload.trace"
+            trace.write_text(
+                "kswapd0-68 [001] ..... 754.000: other_event: "
+                "note=myself_kswapd_request_begin:\\n",
+                encoding="utf-8",
+            )
+            incomplete, events = convert(trace, Path(directory) / "output")
+            self.assertEqual((incomplete, events), (0, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

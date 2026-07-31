@@ -3,12 +3,16 @@
 
 import argparse
 import csv
-import re
 import sys
 from pathlib import Path
 
+from ftrace_events import EVENT_ALIASES, extract_event
+
 # lzx--------------------------- 解析器核心 ---------------------------
-EVENT_RE = re.compile(r"\bmyself_kswapd:(request_begin|priority_round|request_end):\s*(.*)$")
+REQUEST_EVENT_ALIASES = {
+    alias: canonical for alias, canonical in EVENT_ALIASES.items()
+    if canonical in {"request_begin", "priority_round", "request_end"}
+}
 EXIT_REASONS = {
     0: "ALREADY_BALANCED",
     1: "BALANCED",
@@ -64,11 +68,12 @@ def read_events(path):
     events = []
     with path.open(encoding="utf-8", errors="replace") as stream:
         for line_number, line in enumerate(stream, 1):
-            match = EVENT_RE.search(line)
-            if match:
-                fields = parse_fields(match.group(2))
+            event = extract_event(line, REQUEST_EVENT_ALIASES)
+            if event:
+                event_name, payload = event
+                fields = parse_fields(payload)
                 fields["_line"] = line_number
-                events.append((match.group(1), fields))
+                events.append((event_name, fields))
     return events
 
 

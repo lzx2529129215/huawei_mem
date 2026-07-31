@@ -34,6 +34,38 @@ class LruvecTraceParserTest(unittest.TestCase):
         self.assertEqual(result.events[0].event, "request_begin")
         self.assertFalse(result.errors)
 
+    def test_real_ftrace_event_names_are_parsed(self):
+        result = parse_trace(FIXTURES / "real_ftrace_lruvec_trace.txt")
+        self.assertFalse(result.errors)
+        self.assertEqual([event.event for event in result.events],
+                         ["lruvec_snapshot"])
+
+    def test_all_supported_lruvec_aliases_and_mixed_formats_are_parsed(self):
+        payload = (
+            "snapshot_seq={seq} timestamp_ns={seq} request_id=1 priority_seq=1 "
+            "scan_seq={seq} mode=0 memcg_id=1 nid=0 memcg_css_id=1 "
+            "reclaim_source=0 stage=0 consistency=0 priority=1 lru_scope=1 "
+            "isolated_scope=2 inactive_anon=1 active_anon=1 inactive_file=1 "
+            "active_file=1 isolated_anon=1 isolated_file=1 scanned_total=0 "
+            "reclaimed_total=0 field_valid_mask=0xff validation_flags=0"
+        )
+        text = "\n".join((
+            "cpu=1 ... myself_kswapd:lruvec_snapshot: " + payload.format(seq=1),
+            "worker-7 [00] .... 1.002: lruvec_snapshot: " + payload.format(seq=2),
+            "worker-7 [00] .... 1.003: myself_kswapd_lruvec_snapshot: " + payload.format(seq=3),
+        ))
+        result = parse_trace_text(text)
+        self.assertFalse(result.errors)
+        self.assertEqual(len(result.events), 3)
+
+    def test_unknown_similar_event_and_payload_text_are_not_parsed(self):
+        result = parse_trace_text(
+            "worker-7 [00] .... 1.002: lruvec_snapshot_extra: request_id=1\n"
+            "worker-7 [00] .... 1.003: other_event: note=lruvec_snapshot:\n"
+        )
+        self.assertFalse(result.events)
+        self.assertFalse(result.errors)
+
     def test_missing_field_is_reported_and_parser_continues(self):
         text = (
             "myself_kswapd:lruvec_snapshot: snapshot_seq=1 timestamp_ns=1 "

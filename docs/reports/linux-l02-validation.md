@@ -982,3 +982,14 @@ NOT RUN / ENVIRONMENT BLOCKED
 - build: PASS
 - ctest: NOT RUN / ENVIRONMENT BLOCKED
 - evidence: `FATAL: ThreadSanitizer: unexpected memory mapping 0x640da6d20000-0x640da6d22000`
+
+## 2026-07-31：真实 Linux ftrace parser 兼容性修复与运行复验
+
+- 首次失败：真实内核事件名为 `myself_kswapd_request_begin`、`myself_kswapd_priority_round`、`myself_kswapd_request_end` 和 `lruvec_snapshot`，原 parser 仅接受历史 fixture 的 `myself_kswapd:<name>` 形式，导致 10093 行项目 trace 被解析为 `events=0`。
+- 根因：仅为用户态 parser 输入语法兼容性缺陷；未修改内核 tracepoint 名、payload ABI、`mm/vmscan.c` 或 L0.2 内核实现。
+- 兼容别名：request 三事件同时接受真实下划线名和 legacy `myself_kswapd:<name>`；lruvec 同时接受 `lruvec_snapshot`、`myself_kswapd:lruvec_snapshot`、`myself_kswapd_lruvec_snapshot`。事件必须位于 ftrace 事件字段，payload 中的同名文本及相似未知事件不会匹配。
+- RED/GREEN：新增真实 ftrace fixture 后，修复前 request/lruvec 测试分别得到 0 个事件；修复后 Python parser 全套 19 项、shell 自测、Python 编译检查、默认 CTest、ASan/UBSan CTest 与 100 轮用户态测试均通过。
+- 真实离线重放：历史原始 trace 解析为 55 个 request 事件和 10038 个 lruvec 快照，不再是 `events=0`；历史环形 buffer 截取包含两处 `snapshot_seq` 缺口，保留为采集证据而未放宽序列校验。
+- 最终 runtime smoke：运行内核 `6.17.0-myks-l02-dirty`，真实 trace 含 3 个完整 request（17 个 request 事件）和 2860 个 lruvec 快照；两个 parser 均退出 0。全部快照为 `mode=MEMCG`、`nid=0`、`reclaim_source=KSWAPD`。bounded cgroup 压力 `memory.events.high=425`，无 OOM。
+- 运行安全性：MGLRU guard 正确拒绝 enable（`last_error=-95`）；临时 classic-LRU 后恢复 `0x0007`；observer 最终禁用、tracing 最终关闭、测试 cgroup 已删除；前后 dmesg 未发现匹配的 BUG/Oops/panic/lockup/hung-task。
+- Runtime 结论：`RUNTIME SMOKE PARTIAL`。kswapd、cgroup pressure 与 lruvec snapshot 已观察；direct reclaim 未观察，项目 lruvec trace 中的 `reclaim_source=MEMCG` 未观察。这两项均非 parser 兼容性失败。
