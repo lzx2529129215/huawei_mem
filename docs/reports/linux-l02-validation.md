@@ -1,80 +1,155 @@
 # Linux L0.2 validation
 
-## Tracepoint T1 buildability repair
-
-- Root cause: the three custom trace events had 27, 23, and 25 producer
-  arguments while Linux 6.17's BPF tracepoint path supports at most 12.
-  COUNT_ARGS therefore treated the sixteenth business argument as a count,
-  producing identifiers such as bpf_trace_runboost_active.
-- RED: test_trace_event_arg_limits.py failed only for
-  priority_round=27, request_end=23, and lruvec_snapshot=25;
-  request_begin=7 already passed.
-- Repair: producer parameters are now 8, 4, and 1 respectively, using only
-  existing context/snapshot objects and computed scalars. Event names, entry
-  field names/types/order, and TP_printk format/key/argument order are
-  unchanged. The independent text-ABI comparison passed.
-- Build evidence: the development-tree trace.o and the final patch-applied
-  observer_config.o, heartbeat.o, trace.o, and
-  mm/myself_kswapd/built-in.a all passed.
-- Parser evidence: 14 Python parser tests passed; existing fixtures were not
-  changed. User-space CTest passed and the aggregate test binary reported
-  42/42 passed.
-- Gate evidence: check_l02.sh passed for MEMCG=y/LRU_GEN=n,
-  MEMCG=n/LRU_GEN=n, MEMCG=y/LRU_GEN=y, and DEBUG_FS=n. It now checks the
-  producer-argument limit and explicitly builds trace.o before built-in.a
-  in the final patch-applied tree.
-- Scope: bzImage/modules, installation, and runtime smoke were not run.
-
-- date: 2026-07-30T17:37:04+08:00
-- branch: feat/linux-l02-lruvec-observer
+- date: 2026-07-31T09:37:00+08:00
+- branch: main
 
 ..............
 ----------------------------------------------------------------------
-Ran 14 tests in 0.078s
+Ran 14 tests in 0.085s
 
 OK
+-- The C compiler identification is GNU 11.4.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Looking for pthread.h
+-- Looking for pthread.h - found
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
 -- Configuring done
 -- Generating done
--- Build files have been written to: /home/lzx/Desktop/huawei/myself-kswapd-l02/用户态模拟器/v1/output/task19/default
-Consolidate compiler generated dependencies of target reclaim_core
+-- Build files have been written to: /home/lzx/Desktop/huawei/myself-kswapd/用户态模拟器/v1/output/task19/default
+[  2%] Building C object CMakeFiles/reclaim_core.dir/src/core/domain.c.o
+[  4%] Building C object CMakeFiles/reclaim_core.dir/src/core/types.c.o
+[  6%] Building C object CMakeFiles/reclaim_core.dir/src/core/engine.c.o
+[  9%] Building C object CMakeFiles/reclaim_core.dir/src/core/lru.c.o
+[ 11%] Building C object CMakeFiles/reclaim_core.dir/src/core/hash.c.o
+[ 13%] Building C object CMakeFiles/reclaim_core.dir/src/core/list.c.o
+[ 16%] Building C object CMakeFiles/reclaim_core.dir/src/core/stats.c.o
+[ 18%] Building C object CMakeFiles/reclaim_core.dir/src/core/page.c.o
+[ 20%] Building C object CMakeFiles/reclaim_core.dir/src/core/reclaim.c.o
+[ 23%] Building C object CMakeFiles/reclaim_core.dir/src/core/aging_g1.c.o
+[ 25%] Building C object CMakeFiles/reclaim_core.dir/src/core/validator.c.o
+[ 30%] Building C object CMakeFiles/reclaim_core.dir/src/core/shadow_lru.c.o
+[ 27%] Building C object CMakeFiles/reclaim_core.dir/src/core/scan_pressure.c.o
+[ 32%] Building C object CMakeFiles/reclaim_core.dir/src/l02/shadow_alignment.c.o
+[ 34%] Building C object CMakeFiles/reclaim_core.dir/src/l02/lruvec_trace_parser.c.o
+[ 39%] Building C object CMakeFiles/reclaim_core.dir/src/l02/bootstrap_aggregate.c.o
+[ 37%] Building C object CMakeFiles/reclaim_core.dir/src/l02/kernel_snapshot_store.c.o
+[ 41%] Linking C static library libreclaim_core.a
 [ 41%] Built target reclaim_core
-Consolidate compiler generated dependencies of target lruvec_observer_cli
-Consolidate compiler generated dependencies of target reclaim_userspace
-[ 51%] Built target lruvec_observer_cli
+[ 44%] Building C object CMakeFiles/lruvec_observer_cli.dir/tools/lruvec_observer_cli.c.o
+[ 46%] Building C object CMakeFiles/reclaim_userspace.dir/src/simulator/event_parser.c.o
+[ 48%] Building C object CMakeFiles/reclaim_userspace.dir/src/simulator/userspace_platform.c.o
+[ 51%] Building C object CMakeFiles/reclaim_userspace.dir/src/simulator/event_runner.c.o
+[ 53%] Building C object CMakeFiles/reclaim_userspace.dir/src/simulator/simulator_executor.c.o
+[ 55%] Linking C static library libreclaim_userspace.a
+[ 58%] Linking C executable bin/lruvec_observer_cli
 [ 58%] Built target reclaim_userspace
-Consolidate compiler generated dependencies of target reclaim_simulator
-Consolidate compiler generated dependencies of target reclaim_tests
-[ 62%] Built target reclaim_simulator
+[ 58%] Built target lruvec_observer_cli
+[ 60%] Building C object CMakeFiles/reclaim_tests.dir/tests/test_support/test.c.o
+[ 62%] Building C object CMakeFiles/reclaim_tests.dir/tests/unit/test_list.c.o
+[ 65%] Building C object CMakeFiles/reclaim_tests.dir/tests/integration/test_reclaim.c.o
+[ 67%] Building C object CMakeFiles/reclaim_simulator.dir/src/simulator/main.c.o
+[ 69%] Building C object CMakeFiles/reclaim_tests.dir/tests/unit/test_types.c.o
+[ 72%] Building C object CMakeFiles/reclaim_tests.dir/tests/integration/test_executor_outcomes.c.o
+[ 74%] Building C object CMakeFiles/reclaim_tests.dir/tests/unit/test_policy.c.o
+[ 76%] Building C object CMakeFiles/reclaim_tests.dir/tests/unit/test_engine.c.o
+[ 79%] Building C object CMakeFiles/reclaim_tests.dir/tests/scenarios/test_trace.c.o
+[ 81%] Building C object CMakeFiles/reclaim_tests.dir/tests/unit/test_lruvec_trace_parser.c.o
+[ 83%] Building C object CMakeFiles/reclaim_tests.dir/tests/integration/test_shadow_lru.c.o
+[ 86%] Building C object CMakeFiles/reclaim_tests.dir/tests/unit/test_kernel_snapshot_store.c.o
+[ 88%] Building C object CMakeFiles/reclaim_tests.dir/tests/integration/test_reclaim_failures.c.o
+[ 90%] Building C object CMakeFiles/reclaim_tests.dir/tests/integration/test_validation_corruption.c.o
+[ 93%] Building C object CMakeFiles/reclaim_tests.dir/tests/unit/test_bootstrap_aggregate.c.o
+[ 95%] Building C object CMakeFiles/reclaim_tests.dir/tests/unit/test_shadow_alignment.c.o
+[ 97%] Linking C executable bin/reclaim_simulator
+[ 97%] Built target reclaim_simulator
+[100%] Linking C executable bin/reclaim_tests
 [100%] Built target reclaim_tests
-Internal ctest changing into directory: /home/lzx/Desktop/huawei/myself-kswapd-l02/用户态模拟器/v1/output/task19/default
-Test project /home/lzx/Desktop/huawei/myself-kswapd-l02/用户态模拟器/v1/output/task19/default
+Internal ctest changing into directory: /home/lzx/Desktop/huawei/myself-kswapd/用户态模拟器/v1/output/task19/default
+Test project /home/lzx/Desktop/huawei/myself-kswapd/用户态模拟器/v1/output/task19/default
     Start 1: reclaim_tests
-1/1 Test #1: reclaim_tests ....................   Passed    0.18 sec
+1/1 Test #1: reclaim_tests ....................   Passed    0.15 sec
 
 100% tests passed, 0 tests failed out of 1
 
-Total Test time (real) =   0.18 sec
+Total Test time (real) =   0.15 sec
+-- The C compiler identification is GNU 11.4.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Looking for pthread.h
+-- Looking for pthread.h - found
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Performing Test RECLAIM_HAS_SANITIZERS
+-- Performing Test RECLAIM_HAS_SANITIZERS - Success
 -- Configuring done
 -- Generating done
--- Build files have been written to: /home/lzx/Desktop/huawei/myself-kswapd-l02/用户态模拟器/v1/output/task19/asan
-Consolidate compiler generated dependencies of target reclaim_core
+-- Build files have been written to: /home/lzx/Desktop/huawei/myself-kswapd/用户态模拟器/v1/output/task19/asan
+[  2%] Building C object CMakeFiles/reclaim_core.dir/src/core/list.c.o
+[  4%] Building C object CMakeFiles/reclaim_core.dir/src/core/lru.c.o
+[  6%] Building C object CMakeFiles/reclaim_core.dir/src/core/page.c.o
+[  9%] Building C object CMakeFiles/reclaim_core.dir/src/core/types.c.o
+[ 11%] Building C object CMakeFiles/reclaim_core.dir/src/core/engine.c.o
+[ 13%] Building C object CMakeFiles/reclaim_core.dir/src/core/domain.c.o
+[ 16%] Building C object CMakeFiles/reclaim_core.dir/src/core/hash.c.o
+[ 18%] Building C object CMakeFiles/reclaim_core.dir/src/core/aging_g1.c.o
+[ 20%] Building C object CMakeFiles/reclaim_core.dir/src/core/scan_pressure.c.o
+[ 23%] Building C object CMakeFiles/reclaim_core.dir/src/core/stats.c.o
+[ 27%] Building C object CMakeFiles/reclaim_core.dir/src/core/shadow_lru.c.o
+[ 30%] Building C object CMakeFiles/reclaim_core.dir/src/l02/kernel_snapshot_store.c.o
+[ 25%] Building C object CMakeFiles/reclaim_core.dir/src/core/validator.c.o
+[ 32%] Building C object CMakeFiles/reclaim_core.dir/src/l02/bootstrap_aggregate.c.o
+[ 34%] Building C object CMakeFiles/reclaim_core.dir/src/l02/shadow_alignment.c.o
+[ 37%] Building C object CMakeFiles/reclaim_core.dir/src/core/reclaim.c.o
+[ 39%] Building C object CMakeFiles/reclaim_core.dir/src/l02/lruvec_trace_parser.c.o
+[ 41%] Linking C static library libreclaim_core.a
 [ 41%] Built target reclaim_core
-Consolidate compiler generated dependencies of target lruvec_observer_cli
-Consolidate compiler generated dependencies of target reclaim_userspace
-[ 46%] Built target lruvec_observer_cli
+[ 44%] Building C object CMakeFiles/reclaim_userspace.dir/src/simulator/simulator_executor.c.o
+[ 46%] Building C object CMakeFiles/lruvec_observer_cli.dir/tools/lruvec_observer_cli.c.o
+[ 48%] Building C object CMakeFiles/reclaim_userspace.dir/src/simulator/userspace_platform.c.o
+[ 51%] Building C object CMakeFiles/reclaim_userspace.dir/src/simulator/event_parser.c.o
+[ 53%] Building C object CMakeFiles/reclaim_userspace.dir/src/simulator/event_runner.c.o
+[ 55%] Linking C executable bin/lruvec_observer_cli
+[ 58%] Linking C static library libreclaim_userspace.a
 [ 58%] Built target reclaim_userspace
-Consolidate compiler generated dependencies of target reclaim_simulator
-Consolidate compiler generated dependencies of target reclaim_tests
+[ 60%] Building C object CMakeFiles/reclaim_simulator.dir/src/simulator/main.c.o
+[ 60%] Built target lruvec_observer_cli
+[ 62%] Building C object CMakeFiles/reclaim_tests.dir/tests/unit/test_list.c.o
+[ 65%] Building C object CMakeFiles/reclaim_tests.dir/tests/unit/test_engine.c.o
+[ 67%] Building C object CMakeFiles/reclaim_tests.dir/tests/test_support/test.c.o
+[ 69%] Building C object CMakeFiles/reclaim_tests.dir/tests/unit/test_types.c.o
+[ 74%] Building C object CMakeFiles/reclaim_tests.dir/tests/integration/test_reclaim.c.o
+[ 72%] Building C object CMakeFiles/reclaim_tests.dir/tests/unit/test_policy.c.o
+[ 76%] Building C object CMakeFiles/reclaim_tests.dir/tests/integration/test_executor_outcomes.c.o
+[ 79%] Building C object CMakeFiles/reclaim_tests.dir/tests/integration/test_reclaim_failures.c.o
+[ 83%] Building C object CMakeFiles/reclaim_tests.dir/tests/scenarios/test_trace.c.o
+[ 83%] Building C object CMakeFiles/reclaim_tests.dir/tests/integration/test_validation_corruption.c.o
+[ 86%] Building C object CMakeFiles/reclaim_tests.dir/tests/unit/test_bootstrap_aggregate.c.o
+[ 88%] Building C object CMakeFiles/reclaim_tests.dir/tests/unit/test_kernel_snapshot_store.c.o
+[ 93%] Building C object CMakeFiles/reclaim_tests.dir/tests/unit/test_lruvec_trace_parser.c.o
+[ 90%] Building C object CMakeFiles/reclaim_tests.dir/tests/unit/test_shadow_alignment.c.o
+[ 95%] Building C object CMakeFiles/reclaim_tests.dir/tests/integration/test_shadow_lru.c.o
+[ 97%] Linking C executable bin/reclaim_simulator
+[ 97%] Built target reclaim_simulator
+[100%] Linking C executable bin/reclaim_tests
 [100%] Built target reclaim_tests
-[ 67%] Built target reclaim_simulator
-Internal ctest changing into directory: /home/lzx/Desktop/huawei/myself-kswapd-l02/用户态模拟器/v1/output/task19/asan
-Test project /home/lzx/Desktop/huawei/myself-kswapd-l02/用户态模拟器/v1/output/task19/asan
+Internal ctest changing into directory: /home/lzx/Desktop/huawei/myself-kswapd/用户态模拟器/v1/output/task19/asan
+Test project /home/lzx/Desktop/huawei/myself-kswapd/用户态模拟器/v1/output/task19/asan
     Start 1: reclaim_tests
-1/1 Test #1: reclaim_tests ....................   Passed    0.33 sec
+1/1 Test #1: reclaim_tests ....................   Passed    0.35 sec
 
 100% tests passed, 0 tests failed out of 1
 
-Total Test time (real) =   0.33 sec
+Total Test time (real) =   0.35 sec
 42/42 tests passed
 42/42 tests passed
 42/42 tests passed
@@ -181,7 +256,7 @@ myself_kswapd_priority_round: proto=8 args=8
 myself_kswapd_request_end: proto=4 args=4
 lruvec_snapshot: proto=1 args=1
 PASS: all custom trace events have <= 12 producer arguments
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y'
   GEN     Makefile
   HOSTCC  scripts/basic/fixdep
@@ -202,8 +277,8 @@ make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y'
 # configuration written to .config
 #
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y'
   GEN     Makefile
 #
@@ -273,10 +348,10 @@ make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y'
   UPD     include/generated/bounds.h
   CC      arch/x86/kernel/asm-offsets.s
   UPD     include/generated/asm-offsets.h
-  CALL    /tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/checksyscalls.sh
-  CHKSHA1 /tmp/tmp.D8K7ri0DFB/Linux6.17/include/linux/atomic/atomic-arch-fallback.h
-  CHKSHA1 /tmp/tmp.D8K7ri0DFB/Linux6.17/include/linux/atomic/atomic-instrumented.h
-  CHKSHA1 /tmp/tmp.D8K7ri0DFB/Linux6.17/include/linux/atomic/atomic-long.h
+  CALL    /tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/checksyscalls.sh
+  CHKSHA1 /tmp/tmp.UT6ygkNAYH/Linux6.17/include/linux/atomic/atomic-arch-fallback.h
+  CHKSHA1 /tmp/tmp.UT6ygkNAYH/Linux6.17/include/linux/atomic/atomic-instrumented.h
+  CHKSHA1 /tmp/tmp.UT6ygkNAYH/Linux6.17/include/linux/atomic/atomic-long.h
   DESCEND objtool
   CC      /tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y/tools/objtool/libsubcmd/exec-cmd.o
   CC      /tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y/tools/objtool/libsubcmd/help.o
@@ -315,12 +390,12 @@ make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y'
   LD      /tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y/tools/objtool/objtool-in.o
   LINK    /tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y/tools/objtool/objtool
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 kernel memcg-y-lru-n-debug-y: building observer_config.o
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y'
   GEN     Makefile
-  CALL    /tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/checksyscalls.sh
+  CALL    /tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/checksyscalls.sh
   DESCEND objtool
   INSTALL libsubcmd_headers
   CC      mm/myself_kswapd/adapter/lruvec_sample.o
@@ -329,34 +404,34 @@ make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y'
   CC      mm/myself_kswapd/tests/lruvec_observer_test.o
   CC      mm/myself_kswapd/adapter/observer_config.o
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 kernel memcg-y-lru-n-debug-y: building trace.o
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y'
   GEN     Makefile
-  CALL    /tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/checksyscalls.sh
+  CALL    /tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/checksyscalls.sh
   DESCEND objtool
   INSTALL libsubcmd_headers
   CC      mm/myself_kswapd/trace/trace.o
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 kernel memcg-y-lru-n-debug-y: building built-in.a
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y'
   GEN     Makefile
-  CALL    /tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/checksyscalls.sh
+  CALL    /tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/checksyscalls.sh
   DESCEND objtool
   INSTALL libsubcmd_headers
-/tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/Makefile.build:549: warning: overriding recipe for target 'mm/myself_kswapd/built-in.a'
-/tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/Makefile.build:458: warning: ignoring old recipe for target 'mm/myself_kswapd/built-in.a'
+/tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/Makefile.build:549: warning: overriding recipe for target 'mm/myself_kswapd/built-in.a'
+/tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/Makefile.build:458: warning: ignoring old recipe for target 'mm/myself_kswapd/built-in.a'
   AR      mm/myself_kswapd/debugfs/built-in.a
   CC      mm/myself_kswapd/adapter/kswapd_observer.o
   CC      mm/myself_kswapd/adapter/lruvec_observer.o
   AR      mm/myself_kswapd/built-in.a
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-memcg-y-lru-n-debug-y'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 kernel memcg-y-lru-n-debug-y: PASS
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y'
   GEN     Makefile
   HOSTCC  scripts/basic/fixdep
@@ -377,8 +452,8 @@ make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y'
 # configuration written to .config
 #
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y'
   GEN     Makefile
 #
@@ -448,10 +523,10 @@ make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y'
   UPD     include/generated/bounds.h
   CC      arch/x86/kernel/asm-offsets.s
   UPD     include/generated/asm-offsets.h
-  CALL    /tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/checksyscalls.sh
-  CHKSHA1 /tmp/tmp.D8K7ri0DFB/Linux6.17/include/linux/atomic/atomic-arch-fallback.h
-  CHKSHA1 /tmp/tmp.D8K7ri0DFB/Linux6.17/include/linux/atomic/atomic-instrumented.h
-  CHKSHA1 /tmp/tmp.D8K7ri0DFB/Linux6.17/include/linux/atomic/atomic-long.h
+  CALL    /tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/checksyscalls.sh
+  CHKSHA1 /tmp/tmp.UT6ygkNAYH/Linux6.17/include/linux/atomic/atomic-arch-fallback.h
+  CHKSHA1 /tmp/tmp.UT6ygkNAYH/Linux6.17/include/linux/atomic/atomic-instrumented.h
+  CHKSHA1 /tmp/tmp.UT6ygkNAYH/Linux6.17/include/linux/atomic/atomic-long.h
   DESCEND objtool
   CC      /tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y/tools/objtool/libsubcmd/exec-cmd.o
   CC      /tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y/tools/objtool/libsubcmd/help.o
@@ -490,12 +565,12 @@ make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y'
   LD      /tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y/tools/objtool/objtool-in.o
   LINK    /tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y/tools/objtool/objtool
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 kernel memcg-n-lru-n-debug-y: building observer_config.o
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y'
   GEN     Makefile
-  CALL    /tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/checksyscalls.sh
+  CALL    /tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/checksyscalls.sh
   DESCEND objtool
   INSTALL libsubcmd_headers
   CC      mm/myself_kswapd/adapter/lruvec_sample.o
@@ -504,34 +579,34 @@ make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y'
   CC      mm/myself_kswapd/tests/lruvec_observer_test.o
   CC      mm/myself_kswapd/adapter/observer_config.o
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 kernel memcg-n-lru-n-debug-y: building trace.o
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y'
   GEN     Makefile
-  CALL    /tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/checksyscalls.sh
+  CALL    /tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/checksyscalls.sh
   DESCEND objtool
   INSTALL libsubcmd_headers
   CC      mm/myself_kswapd/trace/trace.o
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 kernel memcg-n-lru-n-debug-y: building built-in.a
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y'
   GEN     Makefile
-  CALL    /tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/checksyscalls.sh
+  CALL    /tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/checksyscalls.sh
   DESCEND objtool
   INSTALL libsubcmd_headers
-/tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/Makefile.build:549: warning: overriding recipe for target 'mm/myself_kswapd/built-in.a'
-/tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/Makefile.build:458: warning: ignoring old recipe for target 'mm/myself_kswapd/built-in.a'
+/tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/Makefile.build:549: warning: overriding recipe for target 'mm/myself_kswapd/built-in.a'
+/tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/Makefile.build:458: warning: ignoring old recipe for target 'mm/myself_kswapd/built-in.a'
   AR      mm/myself_kswapd/debugfs/built-in.a
   CC      mm/myself_kswapd/adapter/kswapd_observer.o
   CC      mm/myself_kswapd/adapter/lruvec_observer.o
   AR      mm/myself_kswapd/built-in.a
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-memcg-n-lru-n-debug-y'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 kernel memcg-n-lru-n-debug-y: PASS
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y'
   GEN     Makefile
   HOSTCC  scripts/basic/fixdep
@@ -552,8 +627,8 @@ make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y'
 # configuration written to .config
 #
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y'
   GEN     Makefile
 #
@@ -623,10 +698,10 @@ make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y'
   UPD     include/generated/bounds.h
   CC      arch/x86/kernel/asm-offsets.s
   UPD     include/generated/asm-offsets.h
-  CALL    /tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/checksyscalls.sh
-  CHKSHA1 /tmp/tmp.D8K7ri0DFB/Linux6.17/include/linux/atomic/atomic-arch-fallback.h
-  CHKSHA1 /tmp/tmp.D8K7ri0DFB/Linux6.17/include/linux/atomic/atomic-instrumented.h
-  CHKSHA1 /tmp/tmp.D8K7ri0DFB/Linux6.17/include/linux/atomic/atomic-long.h
+  CALL    /tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/checksyscalls.sh
+  CHKSHA1 /tmp/tmp.UT6ygkNAYH/Linux6.17/include/linux/atomic/atomic-arch-fallback.h
+  CHKSHA1 /tmp/tmp.UT6ygkNAYH/Linux6.17/include/linux/atomic/atomic-instrumented.h
+  CHKSHA1 /tmp/tmp.UT6ygkNAYH/Linux6.17/include/linux/atomic/atomic-long.h
   DESCEND objtool
   CC      /tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y/tools/objtool/libsubcmd/exec-cmd.o
   CC      /tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y/tools/objtool/libsubcmd/help.o
@@ -665,12 +740,12 @@ make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y'
   LD      /tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y/tools/objtool/objtool-in.o
   LINK    /tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y/tools/objtool/objtool
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 kernel memcg-y-lru-y-debug-y: building observer_config.o
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y'
   GEN     Makefile
-  CALL    /tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/checksyscalls.sh
+  CALL    /tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/checksyscalls.sh
   DESCEND objtool
   INSTALL libsubcmd_headers
   CC      mm/myself_kswapd/adapter/lruvec_sample.o
@@ -679,34 +754,34 @@ make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y'
   CC      mm/myself_kswapd/tests/lruvec_observer_test.o
   CC      mm/myself_kswapd/adapter/observer_config.o
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 kernel memcg-y-lru-y-debug-y: building trace.o
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y'
   GEN     Makefile
-  CALL    /tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/checksyscalls.sh
+  CALL    /tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/checksyscalls.sh
   DESCEND objtool
   INSTALL libsubcmd_headers
   CC      mm/myself_kswapd/trace/trace.o
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 kernel memcg-y-lru-y-debug-y: building built-in.a
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y'
   GEN     Makefile
-  CALL    /tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/checksyscalls.sh
+  CALL    /tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/checksyscalls.sh
   DESCEND objtool
   INSTALL libsubcmd_headers
-/tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/Makefile.build:549: warning: overriding recipe for target 'mm/myself_kswapd/built-in.a'
-/tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/Makefile.build:458: warning: ignoring old recipe for target 'mm/myself_kswapd/built-in.a'
+/tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/Makefile.build:549: warning: overriding recipe for target 'mm/myself_kswapd/built-in.a'
+/tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/Makefile.build:458: warning: ignoring old recipe for target 'mm/myself_kswapd/built-in.a'
   AR      mm/myself_kswapd/debugfs/built-in.a
   CC      mm/myself_kswapd/adapter/kswapd_observer.o
   CC      mm/myself_kswapd/adapter/lruvec_observer.o
   AR      mm/myself_kswapd/built-in.a
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-memcg-y-lru-y-debug-y'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 kernel memcg-y-lru-y-debug-y: PASS
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-debugfs-n'
   GEN     Makefile
   HOSTCC  scripts/basic/fixdep
@@ -727,8 +802,8 @@ make[1]: Entering directory '/tmp/myself-kswapd-l02-debugfs-n'
 # configuration written to .config
 #
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-debugfs-n'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-debugfs-n'
   GEN     Makefile
 #
@@ -798,10 +873,10 @@ make[1]: Entering directory '/tmp/myself-kswapd-l02-debugfs-n'
   UPD     include/generated/bounds.h
   CC      arch/x86/kernel/asm-offsets.s
   UPD     include/generated/asm-offsets.h
-  CALL    /tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/checksyscalls.sh
-  CHKSHA1 /tmp/tmp.D8K7ri0DFB/Linux6.17/include/linux/atomic/atomic-arch-fallback.h
-  CHKSHA1 /tmp/tmp.D8K7ri0DFB/Linux6.17/include/linux/atomic/atomic-instrumented.h
-  CHKSHA1 /tmp/tmp.D8K7ri0DFB/Linux6.17/include/linux/atomic/atomic-long.h
+  CALL    /tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/checksyscalls.sh
+  CHKSHA1 /tmp/tmp.UT6ygkNAYH/Linux6.17/include/linux/atomic/atomic-arch-fallback.h
+  CHKSHA1 /tmp/tmp.UT6ygkNAYH/Linux6.17/include/linux/atomic/atomic-instrumented.h
+  CHKSHA1 /tmp/tmp.UT6ygkNAYH/Linux6.17/include/linux/atomic/atomic-long.h
   DESCEND objtool
   CC      /tmp/myself-kswapd-l02-debugfs-n/tools/objtool/libsubcmd/exec-cmd.o
   CC      /tmp/myself-kswapd-l02-debugfs-n/tools/objtool/libsubcmd/help.o
@@ -840,12 +915,12 @@ make[1]: Entering directory '/tmp/myself-kswapd-l02-debugfs-n'
   LD      /tmp/myself-kswapd-l02-debugfs-n/tools/objtool/objtool-in.o
   LINK    /tmp/myself-kswapd-l02-debugfs-n/tools/objtool/objtool
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-debugfs-n'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 kernel debugfs-n: building observer_config.o
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-debugfs-n'
   GEN     Makefile
-  CALL    /tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/checksyscalls.sh
+  CALL    /tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/checksyscalls.sh
   DESCEND objtool
   INSTALL libsubcmd_headers
   CC      mm/myself_kswapd/adapter/lruvec_sample.o
@@ -854,40 +929,40 @@ make[1]: Entering directory '/tmp/myself-kswapd-l02-debugfs-n'
   CC      mm/myself_kswapd/tests/lruvec_observer_test.o
   CC      mm/myself_kswapd/adapter/observer_config.o
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-debugfs-n'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 kernel debugfs-n: building trace.o
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-debugfs-n'
   GEN     Makefile
-  CALL    /tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/checksyscalls.sh
+  CALL    /tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/checksyscalls.sh
   DESCEND objtool
   INSTALL libsubcmd_headers
   CC      mm/myself_kswapd/trace/trace.o
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-debugfs-n'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 kernel debugfs-n: building built-in.a
-make: Entering directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Entering directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 make[1]: Entering directory '/tmp/myself-kswapd-l02-debugfs-n'
   GEN     Makefile
-  CALL    /tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/checksyscalls.sh
+  CALL    /tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/checksyscalls.sh
   DESCEND objtool
   INSTALL libsubcmd_headers
-/tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/Makefile.build:549: warning: overriding recipe for target 'mm/myself_kswapd/built-in.a'
-/tmp/tmp.D8K7ri0DFB/Linux6.17/scripts/Makefile.build:458: warning: ignoring old recipe for target 'mm/myself_kswapd/built-in.a'
+/tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/Makefile.build:549: warning: overriding recipe for target 'mm/myself_kswapd/built-in.a'
+/tmp/tmp.UT6ygkNAYH/Linux6.17/scripts/Makefile.build:458: warning: ignoring old recipe for target 'mm/myself_kswapd/built-in.a'
   AR      mm/myself_kswapd/debugfs/built-in.a
   CC      mm/myself_kswapd/adapter/kswapd_observer.o
   CC      mm/myself_kswapd/adapter/lruvec_observer.o
   AR      mm/myself_kswapd/built-in.a
 make[1]: Leaving directory '/tmp/myself-kswapd-l02-debugfs-n'
-make: Leaving directory '/tmp/tmp.D8K7ri0DFB/Linux6.17'
+make: Leaving directory '/tmp/tmp.UT6ygkNAYH/Linux6.17'
 kernel debugfs-n: PASS
-bootstrapped /tmp/tmp.ZUXYeQy2dl/dest from /tmp/tmp.ZUXYeQy2dl/source
-destination must be absent or empty: /tmp/tmp.ZUXYeQy2dl/unknown
-source and destination must differ: /tmp/tmp.ZUXYeQy2dl/source
+bootstrapped /tmp/tmp.bpDKBXT3sY/dest from /tmp/tmp.bpDKBXT3sY/source
+destination must be absent or empty: /tmp/tmp.bpDKBXT3sY/unknown
+source and destination must differ: /tmp/tmp.bpDKBXT3sY/source
 bootstrap self-test passed
-refreshed /tmp/tmp.OweI4lhzKC/0003.patch
+refreshed /tmp/tmp.CRRikpc1AY/0003.patch
 no allowlisted Linux6.17 differences
-created empty /tmp/tmp.OweI4lhzKC/empty.patch
+created empty /tmp/tmp.CRRikpc1AY/empty.patch
 patch refresh self-test passed
 shell tests, syntax and diff check: PASS
 validation complete
