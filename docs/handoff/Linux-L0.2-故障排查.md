@@ -4,7 +4,7 @@
 
 | 现象 | 诊断 | 安全处理 | 禁止做法 |
 |---|---|---|---|
-| URL 下载失败 | `curl -fIL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.17.tar.xz` | 重试或人工确认官方 URL 可达 | 改用 latest、个人镜像或不明压缩包 |
+| URL 下载失败 | `curl -fIL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.17.tar.xz` | 脚本会重试；若代理 TLS 失败，会对同一 URL 直连重试，仍失败则人工确认网络 | 改用 latest、个人镜像或不明压缩包 |
 | SHA256 不一致 | `sha256sum linux-6.17.tar.xz` | 删除损坏缓存后重新下载 | 修改清单接受近似源码 |
 | pristine 清单不一致 | `verify_source_manifest` 输出前 80 行 diff | 使用空目标重新 fetch | 在补丁后运行 pristine 校验 |
 | patch does not apply | `git apply --check -p1/-p2` | 确认源码未被修改且补丁顺序正确 | `--3way`、`--reject`、手工猜测上下文 |
