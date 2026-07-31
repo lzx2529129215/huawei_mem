@@ -1,30 +1,187 @@
 diff --git a/Linux6.17/include/trace/events/myself_kswapd.h b/Linux6.17/include/trace/events/myself_kswapd.h
-index 84c106d..d45aa86 100644
+index 84c106d..a99b6e8 100644
 --- a/Linux6.17/include/trace/events/myself_kswapd.h
 +++ b/Linux6.17/include/trace/events/myself_kswapd.h
-@@ -238,6 +238,101 @@ TRACE_EVENT(myself_kswapd_request_end,
+@@ -7,6 +7,7 @@
+ #define _TRACE_MYSELF_KSWAPD_H
+ 
+ #include <linux/tracepoint.h>
++#include "../../../mm/myself_kswapd/include/kswapd_observer.h"
+ 
+ // #lzx--------------------------- kswapd 观察事件 ---------------------------
+ TRACE_EVENT(myself_kswapd_request_begin,
+@@ -46,23 +47,14 @@ TRACE_EVENT(myself_kswapd_request_begin,
+ 
+ TRACE_EVENT(myself_kswapd_priority_round,
+ 
+-	TP_PROTO(u64 request_id, u32 pass_seq, u32 round_seq, int nid, s8 order,
+-		 s8 priority, s8 reclaim_idx, unsigned long nr_to_reclaim,
+-		 unsigned long main_scanned, unsigned long soft_scanned,
+-		 unsigned long total_scanned, unsigned long main_reclaimed,
+-		 unsigned long soft_reclaimed, unsigned long reclaimed_delta,
+-		 bool balanced_before, bool boost_active, bool raise_priority,
+-		 bool priority_decremented, bool may_swap, bool may_unmap,
+-		 bool may_writepage, unsigned int may_deactivate, bool stop_requested,
+-		 bool was_frozen, bool boost_no_progress, u64 elapsed_ns,
+-		 u32 validation_flags),
+-
+-	TP_ARGS(request_id, pass_seq, round_seq, nid, order, priority, reclaim_idx,
+-		nr_to_reclaim, main_scanned, soft_scanned, total_scanned,
+-		main_reclaimed, soft_reclaimed, reclaimed_delta, balanced_before,
+-		boost_active, raise_priority, priority_decremented, may_swap, may_unmap,
+-		may_writepage, may_deactivate, stop_requested, was_frozen,
+-		boost_no_progress, elapsed_ns, validation_flags),
++	TP_PROTO(const struct myks_kswapd_request_ctx *ctx,
++		 const struct myks_kswapd_round_snapshot *snapshot,
++		 u32 round_seq, unsigned long total_scanned,
++		 unsigned long main_reclaimed, unsigned long reclaimed_delta,
++		 u64 elapsed_ns, u32 validation_flags),
++
++	TP_ARGS(ctx, snapshot, round_seq, total_scanned, main_reclaimed,
++		reclaimed_delta, elapsed_ns, validation_flags),
+ 
+ 	TP_STRUCT__entry(
+ 		__field(u64, request_id)
+@@ -95,31 +87,31 @@ TRACE_EVENT(myself_kswapd_priority_round,
+ 	),
+ 
+ 	TP_fast_assign(
+-		__entry->request_id = request_id;
+-		__entry->pass_seq = pass_seq;
++		__entry->request_id = ctx->request_id;
++		__entry->pass_seq = ctx->pass_seq;
+ 		__entry->round_seq = round_seq;
+-		__entry->nid = nid;
+-		__entry->order = order;
+-		__entry->priority = priority;
+-		__entry->reclaim_idx = reclaim_idx;
+-		__entry->nr_to_reclaim = nr_to_reclaim;
+-		__entry->main_scanned = main_scanned;
+-		__entry->soft_scanned = soft_scanned;
++		__entry->nid = snapshot->nid;
++		__entry->order = snapshot->order;
++		__entry->priority = snapshot->priority;
++		__entry->reclaim_idx = snapshot->reclaim_idx;
++		__entry->nr_to_reclaim = snapshot->nr_to_reclaim;
++		__entry->main_scanned = snapshot->main_scanned;
++		__entry->soft_scanned = snapshot->soft_scanned;
+ 		__entry->total_scanned = total_scanned;
+ 		__entry->main_reclaimed = main_reclaimed;
+-		__entry->soft_reclaimed = soft_reclaimed;
++		__entry->soft_reclaimed = snapshot->soft_reclaimed;
+ 		__entry->reclaimed_delta = reclaimed_delta;
+-		__entry->balanced_before = balanced_before;
+-		__entry->boost_active = boost_active;
+-		__entry->raise_priority = raise_priority;
+-		__entry->priority_decremented = priority_decremented;
+-		__entry->may_swap = may_swap;
+-		__entry->may_unmap = may_unmap;
+-		__entry->may_writepage = may_writepage;
+-		__entry->may_deactivate = may_deactivate;
+-		__entry->stop_requested = stop_requested;
+-		__entry->was_frozen = was_frozen;
+-		__entry->boost_no_progress = boost_no_progress;
++		__entry->balanced_before = snapshot->balanced_before;
++		__entry->boost_active = snapshot->boost_active;
++		__entry->raise_priority = snapshot->raise_priority;
++		__entry->priority_decremented = snapshot->priority_decremented;
++		__entry->may_swap = snapshot->may_swap;
++		__entry->may_unmap = snapshot->may_unmap;
++		__entry->may_writepage = snapshot->may_writepage;
++		__entry->may_deactivate = snapshot->may_deactivate;
++		__entry->stop_requested = snapshot->stop_requested;
++		__entry->was_frozen = snapshot->was_frozen;
++		__entry->boost_no_progress = snapshot->boost_no_progress;
+ 		__entry->elapsed_ns = elapsed_ns;
+ 		__entry->validation_flags = validation_flags;
+ 	),
+@@ -148,22 +140,11 @@ TRACE_EVENT(myself_kswapd_priority_round,
+ 
+ TRACE_EVENT(myself_kswapd_request_end,
+ 
+-	TP_PROTO(u64 request_id, int nid, int requested_order, int final_order,
+-		 int final_priority, bool final_balanced, bool boost_active,
+-		 bool stop_requested, bool was_frozen, bool order_dropped,
+-		 u32 pass_count, u32 round_count,
+-		 unsigned long total_main_scanned, unsigned long total_soft_scanned,
+-		 unsigned long total_scanned, unsigned long total_main_reclaimed,
+-		 unsigned long total_soft_reclaimed, unsigned long total_reclaimed,
+-		 u32 boost_restart_count, u32 cache_trim_restart_count,
+-		 u32 exit_reason, u64 elapsed_ns, u32 validation_flags),
+-
+-	TP_ARGS(request_id, nid, requested_order, final_order, final_priority,
+-		final_balanced, boost_active, stop_requested, was_frozen,
+-		order_dropped, pass_count, round_count, total_main_scanned,
+-		total_soft_scanned, total_scanned, total_main_reclaimed,
+-		total_soft_reclaimed, total_reclaimed, boost_restart_count,
+-		cache_trim_restart_count, exit_reason, elapsed_ns, validation_flags),
++	TP_PROTO(const struct myks_kswapd_request_ctx *ctx,
++		 const struct myks_kswapd_end_snapshot *snapshot,
++		 u64 elapsed_ns, u32 validation_flags),
++
++	TP_ARGS(ctx, snapshot, elapsed_ns, validation_flags),
+ 
+ 	TP_STRUCT__entry(
+ 		__field(u64, request_id)
+@@ -192,27 +173,27 @@ TRACE_EVENT(myself_kswapd_request_end,
+ 	),
+ 
+ 	TP_fast_assign(
+-		__entry->request_id = request_id;
+-		__entry->nid = nid;
+-		__entry->requested_order = requested_order;
+-		__entry->final_order = final_order;
+-		__entry->final_priority = final_priority;
+-		__entry->final_balanced = final_balanced;
+-		__entry->boost_active = boost_active;
+-		__entry->stop_requested = stop_requested;
+-		__entry->was_frozen = was_frozen;
+-		__entry->order_dropped = order_dropped;
+-		__entry->pass_count = pass_count;
+-		__entry->round_count = round_count;
+-		__entry->total_main_scanned = total_main_scanned;
+-		__entry->total_soft_scanned = total_soft_scanned;
+-		__entry->total_scanned = total_scanned;
+-		__entry->total_main_reclaimed = total_main_reclaimed;
+-		__entry->total_soft_reclaimed = total_soft_reclaimed;
+-		__entry->total_reclaimed = total_reclaimed;
+-		__entry->boost_restart_count = boost_restart_count;
+-		__entry->cache_trim_restart_count = cache_trim_restart_count;
+-		__entry->exit_reason = exit_reason;
++		__entry->request_id = ctx->request_id;
++		__entry->nid = snapshot->nid;
++		__entry->requested_order = snapshot->requested_order;
++		__entry->final_order = snapshot->final_order;
++		__entry->final_priority = snapshot->final_priority;
++		__entry->final_balanced = snapshot->final_balanced;
++		__entry->boost_active = snapshot->boost_active;
++		__entry->stop_requested = snapshot->stop_requested;
++		__entry->was_frozen = snapshot->was_frozen;
++		__entry->order_dropped = snapshot->order_dropped;
++		__entry->pass_count = ctx->pass_seq + 1;
++		__entry->round_count = ctx->round_count;
++		__entry->total_main_scanned = ctx->total_main_scanned;
++		__entry->total_soft_scanned = ctx->total_soft_scanned;
++		__entry->total_scanned = ctx->total_scanned;
++		__entry->total_main_reclaimed = ctx->total_main_reclaimed;
++		__entry->total_soft_reclaimed = ctx->total_soft_reclaimed;
++		__entry->total_reclaimed = ctx->total_reclaimed;
++		__entry->boost_restart_count = ctx->boost_restart_count;
++		__entry->cache_trim_restart_count = ctx->cache_trim_restart_count;
++		__entry->exit_reason = snapshot->exit_reason;
+ 		__entry->elapsed_ns = elapsed_ns;
+ 		__entry->validation_flags = validation_flags;
+ 	),
+@@ -238,6 +219,88 @@ TRACE_EVENT(myself_kswapd_request_end,
  		  __entry->exit_reason,
  		  __entry->elapsed_ns, __entry->validation_flags)
  );
 +
 +TRACE_EVENT(lruvec_snapshot,
 +
-+	TP_PROTO(u64 snapshot_seq, u64 timestamp_ns, u64 request_id,
-+		 u64 priority_seq, u64 scan_seq, int mode, u64 memcg_id, int nid,
-+		 u32 memcg_css_id, int reclaim_source, int stage, int consistency,
-+		 int priority, int lru_scope, int isolated_scope,
-+		 unsigned long inactive_anon, unsigned long active_anon,
-+		 unsigned long inactive_file, unsigned long active_file,
-+		 unsigned long isolated_anon, unsigned long isolated_file,
-+		 unsigned long scanned_total, unsigned long reclaimed_total,
-+		 u64 field_valid_mask, u64 validation_flags),
++	TP_PROTO(const struct myks_lruvec_snapshot *snapshot),
 +
-+	TP_ARGS(snapshot_seq, timestamp_ns, request_id, priority_seq, scan_seq,
-+		mode, memcg_id, nid, memcg_css_id, reclaim_source, stage,
-+		consistency, priority, lru_scope, isolated_scope, inactive_anon,
-+		active_anon, inactive_file, active_file, isolated_anon,
-+		isolated_file, scanned_total, reclaimed_total, field_valid_mask,
-+		validation_flags),
++	TP_ARGS(snapshot),
 +
 +	TP_STRUCT__entry(
 +		__field(u64, snapshot_seq)
@@ -55,31 +212,31 @@ index 84c106d..d45aa86 100644
 +	),
 +
 +	TP_fast_assign(
-+		__entry->snapshot_seq = snapshot_seq;
-+		__entry->timestamp_ns = timestamp_ns;
-+		__entry->request_id = request_id;
-+		__entry->priority_seq = priority_seq;
-+		__entry->scan_seq = scan_seq;
-+		__entry->mode = mode;
-+		__entry->memcg_id = memcg_id;
-+		__entry->nid = nid;
-+		__entry->memcg_css_id = memcg_css_id;
-+		__entry->reclaim_source = reclaim_source;
-+		__entry->stage = stage;
-+		__entry->consistency = consistency;
-+		__entry->priority = priority;
-+		__entry->lru_scope = lru_scope;
-+		__entry->isolated_scope = isolated_scope;
-+		__entry->inactive_anon = inactive_anon;
-+		__entry->active_anon = active_anon;
-+		__entry->inactive_file = inactive_file;
-+		__entry->active_file = active_file;
-+		__entry->isolated_anon = isolated_anon;
-+		__entry->isolated_file = isolated_file;
-+		__entry->scanned_total = scanned_total;
-+		__entry->reclaimed_total = reclaimed_total;
-+		__entry->field_valid_mask = field_valid_mask;
-+		__entry->validation_flags = validation_flags;
++		__entry->snapshot_seq = snapshot->snapshot_seq;
++		__entry->timestamp_ns = snapshot->timestamp_ns;
++		__entry->request_id = snapshot->request_id;
++		__entry->priority_seq = snapshot->priority_seq;
++		__entry->scan_seq = snapshot->scan_seq;
++		__entry->mode = snapshot->key.mode;
++		__entry->memcg_id = snapshot->key.memcg_id;
++		__entry->nid = snapshot->key.nid;
++		__entry->memcg_css_id = snapshot->memcg_css_id;
++		__entry->reclaim_source = snapshot->reclaim_source;
++		__entry->stage = snapshot->stage;
++		__entry->consistency = snapshot->consistency;
++		__entry->priority = snapshot->priority;
++		__entry->lru_scope = snapshot->lru_scope;
++		__entry->isolated_scope = snapshot->isolated_scope;
++		__entry->inactive_anon = snapshot->inactive_anon;
++		__entry->active_anon = snapshot->active_anon;
++		__entry->inactive_file = snapshot->inactive_file;
++		__entry->active_file = snapshot->active_file;
++		__entry->isolated_anon = snapshot->isolated_anon;
++		__entry->isolated_file = snapshot->isolated_file;
++		__entry->scanned_total = snapshot->scanned_total;
++		__entry->reclaimed_total = snapshot->reclaimed_total;
++		__entry->field_valid_mask = snapshot->field_valid_mask;
++		__entry->validation_flags = snapshot->validation_flags;
 +	),
 +
 +	TP_printk("snapshot_seq=%llu timestamp_ns=%llu request_id=%llu "
@@ -133,7 +290,7 @@ index 354f499..e2627f7 100644
  obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += adapter/kswapd_observer_kunit.o
 +obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += tests/
 diff --git a/Linux6.17/mm/myself_kswapd/adapter/kswapd_observer.c b/Linux6.17/mm/myself_kswapd/adapter/kswapd_observer.c
-index d5ebb6b..abb765b 100644
+index d5ebb6b..a150a1b 100644
 --- a/Linux6.17/mm/myself_kswapd/adapter/kswapd_observer.c
 +++ b/Linux6.17/mm/myself_kswapd/adapter/kswapd_observer.c
 @@ -1,6 +1,5 @@
@@ -181,19 +338,61 @@ index d5ebb6b..abb765b 100644
  	if (ctx && ctx->enabled)
  		ctx->round_begin_ns = ktime_get_mono_fast_ns();
  }
-@@ -235,5 +239,6 @@ void myks_kswapd_request_end(struct myks_kswapd_request_ctx *ctx,
- 			ctx->total_reclaimed, ctx->boost_restart_count,
- 			ctx->cache_trim_restart_count, snapshot->exit_reason, elapsed_ns,
+@@ -93,6 +97,7 @@ void myks_kswapd_priority_round(struct myks_kswapd_request_ctx *ctx,
+ 	unsigned long main_reclaimed;
+ 	unsigned long total_scanned;
+ 	u32 validation_flags;
++	u32 round_seq;
+ 	u64 now_ns;
+ 	u64 elapsed_ns;
+ 
+@@ -133,18 +138,9 @@ void myks_kswapd_priority_round(struct myks_kswapd_request_ctx *ctx,
+ 	ctx->round_count++;
+ 	elapsed_ns = myks_kswapd_elapsed_ns(ctx->round_begin_ns, now_ns,
+ 					   &ctx->validation_flags);
+-	trace_myself_kswapd_priority_round(ctx->request_id, ctx->pass_seq,
+-			ctx->round_seq++, snapshot->nid, snapshot->order,
+-			snapshot->priority, snapshot->reclaim_idx,
+-			snapshot->nr_to_reclaim, snapshot->main_scanned,
+-			snapshot->soft_scanned, total_scanned, main_reclaimed,
+-			snapshot->soft_reclaimed, delta, snapshot->balanced_before,
+-			snapshot->boost_active, snapshot->raise_priority,
+-			snapshot->priority_decremented, snapshot->may_swap,
+-			snapshot->may_unmap, snapshot->may_writepage,
+-			snapshot->may_deactivate, snapshot->stop_requested,
+-			snapshot->was_frozen, snapshot->boost_no_progress,
+-			elapsed_ns,
++	round_seq = ctx->round_seq++;
++	trace_myself_kswapd_priority_round(ctx, snapshot, round_seq,
++			total_scanned, main_reclaimed, delta, elapsed_ns,
+ 			validation_flags | ctx->validation_flags);
+ }
+ 
+@@ -224,16 +220,8 @@ void myks_kswapd_request_end(struct myks_kswapd_request_ctx *ctx,
+ 	now_ns = ktime_get_mono_fast_ns();
+ 	elapsed_ns = myks_kswapd_elapsed_ns(ctx->request_begin_ns, now_ns,
+ 					    &ctx->validation_flags);
+-	trace_myself_kswapd_request_end(ctx->request_id, snapshot->nid,
+-			snapshot->requested_order, snapshot->final_order,
+-			snapshot->final_priority, snapshot->final_balanced,
+-			snapshot->boost_active, snapshot->stop_requested,
+-			snapshot->was_frozen, snapshot->order_dropped, ctx->pass_seq + 1,
+-			ctx->round_count, ctx->total_main_scanned,
+-			ctx->total_soft_scanned, ctx->total_scanned,
+-			ctx->total_main_reclaimed, ctx->total_soft_reclaimed,
+-			ctx->total_reclaimed, ctx->boost_restart_count,
+-			ctx->cache_trim_restart_count, snapshot->exit_reason, elapsed_ns,
++	trace_myself_kswapd_request_end(ctx, snapshot, elapsed_ns,
  			ctx->validation_flags);
 +	myks_reclaim_ctx_end_request(&ctx->reclaim_ctx);
  }
  // #lzx--------------------------- 观察器实现结束 ---------------------------
 diff --git a/Linux6.17/mm/myself_kswapd/adapter/lruvec_observer.c b/Linux6.17/mm/myself_kswapd/adapter/lruvec_observer.c
 new file mode 100644
-index 0000000..b56c0ec
+index 0000000..ea83f78
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/adapter/lruvec_observer.c
-@@ -0,0 +1,377 @@
+@@ -0,0 +1,366 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include "../include/lruvec_observer.h"
@@ -487,18 +686,7 @@ index 0000000..b56c0ec
 +		const struct myks_lruvec_snapshot *snapshot, void *opaque)
 +{
 +	(void)opaque;
-+	trace_lruvec_snapshot(snapshot->snapshot_seq, snapshot->timestamp_ns,
-+			snapshot->request_id, snapshot->priority_seq,
-+			snapshot->scan_seq, snapshot->key.mode,
-+			snapshot->key.memcg_id, snapshot->key.nid,
-+			snapshot->memcg_css_id, snapshot->reclaim_source,
-+			snapshot->stage, snapshot->consistency, snapshot->priority,
-+			snapshot->lru_scope, snapshot->isolated_scope,
-+			snapshot->inactive_anon, snapshot->active_anon,
-+			snapshot->inactive_file, snapshot->active_file,
-+			snapshot->isolated_anon, snapshot->isolated_file,
-+		snapshot->scanned_total, snapshot->reclaimed_total,
-+		snapshot->field_valid_mask, snapshot->validation_flags);
++	trace_lruvec_snapshot(snapshot);
 +}
 +
 +int myks_lruvec_emit_snapshot_with_ops(
@@ -846,15 +1034,16 @@ index 0000000..6333045
 +}
 diff --git a/Linux6.17/mm/myself_kswapd/adapter/observer_config.c b/Linux6.17/mm/myself_kswapd/adapter/observer_config.c
 new file mode 100644
-index 0000000..eb96db0
+index 0000000..c7a7276
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/adapter/observer_config.c
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,89 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include "../include/lruvec_observer.h"
 +
 +#include <linux/errno.h>
++#include <linux/mm.h>
 +#include <linux/mm_inline.h>
 +
 +// #lzx: Linux L0.2 observer enable and MGLRU guard
@@ -1533,6 +1722,137 @@ index 0000000..3c035e3
 +}
 +late_initcall(myks_debugfs_init);
 +// #lzx--------------------------- debugfs 文件适配结束 ---------------------------
+diff --git a/Linux6.17/mm/myself_kswapd/heartbeat.c b/Linux6.17/mm/myself_kswapd/heartbeat.c
+new file mode 100644
+index 0000000..dab0a90
+--- /dev/null
++++ b/Linux6.17/mm/myself_kswapd/heartbeat.c
+@@ -0,0 +1,125 @@
++// SPDX-License-Identifier: GPL-2.0
++
++#include "include/lruvec_observer.h"
++
++#include <linux/errno.h>
++#include <linux/jiffies.h>
++#include <linux/workqueue.h>
++
++// #lzx: Linux L0.2 filtered heartbeat state machine
++// #lzx--------------------------- 心跳生命周期 ---------------------------
++static unsigned long myks_heartbeat_delay(const struct myks_heartbeat *heartbeat)
++{
++	return msecs_to_jiffies(heartbeat->config.heartbeat_ms);
++}
++
++static bool myks_heartbeat_allowed_locked(struct myks_heartbeat *heartbeat)
++{
++	if (!heartbeat->observer)
++		return true;
++	if (myks_observer_snapshot_allowed(heartbeat->observer))
++		return true;
++	heartbeat->running = false;
++	return false;
++}
++
++bool myks_heartbeat_run_once(struct myks_heartbeat *heartbeat, u64 generation)
++{
++	myks_heartbeat_collect_callback collect;
++	struct myks_debugfs_config config;
++	bool keep_running;
++
++	if (!heartbeat)
++		return false;
++	mutex_lock(&heartbeat->lock);
++	if (!heartbeat->running || heartbeat->config.generation != generation ||
++	    !myks_heartbeat_allowed_locked(heartbeat)) {
++		mutex_unlock(&heartbeat->lock);
++		return false;
++	}
++	config = heartbeat->config;
++	collect = heartbeat->collect;
++	mutex_unlock(&heartbeat->lock);
++
++	if (collect)
++		collect(&config, heartbeat->opaque);
++
++	mutex_lock(&heartbeat->lock);
++	keep_running = heartbeat->running &&
++			heartbeat->config.generation == generation &&
++			myks_heartbeat_allowed_locked(heartbeat);
++	if (keep_running)
++		schedule_delayed_work(&heartbeat->work, myks_heartbeat_delay(heartbeat));
++	mutex_unlock(&heartbeat->lock);
++	return keep_running;
++}
++
++static void myks_heartbeat_workfn(struct work_struct *work)
++{
++	struct myks_heartbeat *heartbeat = container_of(to_delayed_work(work),
++							struct myks_heartbeat, work);
++	u64 generation;
++	bool running;
++
++	mutex_lock(&heartbeat->lock);
++	running = heartbeat->running;
++	generation = heartbeat->config.generation;
++	mutex_unlock(&heartbeat->lock);
++	if (running)
++		myks_heartbeat_run_once(heartbeat, generation);
++}
++
++void myks_heartbeat_init(struct myks_heartbeat *heartbeat,
++				struct myks_observer *observer,
++				myks_heartbeat_collect_callback collect, void *opaque)
++{
++	if (!heartbeat)
++		return;
++	*heartbeat = (struct myks_heartbeat) {
++		.observer = observer,
++		.collect = collect,
++		.opaque = opaque,
++	};
++	mutex_init(&heartbeat->lock);
++	INIT_DELAYED_WORK(&heartbeat->work, myks_heartbeat_workfn);
++}
++
++int myks_heartbeat_start(struct myks_heartbeat *heartbeat,
++				const struct myks_debugfs_config *config)
++{
++	if (!heartbeat || !config || !heartbeat->collect || !config->enabled ||
++		!config->heartbeat_ms || config->heartbeat_ms < 1000 ||
++		(!config->filter_memcg_id && config->filter_nid < 0))
++		return -EINVAL;
++
++	myks_heartbeat_stop(heartbeat);
++	mutex_lock(&heartbeat->lock);
++	heartbeat->config = *config;
++	heartbeat->running = true;
++	schedule_delayed_work(&heartbeat->work, myks_heartbeat_delay(heartbeat));
++	mutex_unlock(&heartbeat->lock);
++	return 0;
++}
++
++void myks_heartbeat_stop(struct myks_heartbeat *heartbeat)
++{
++	if (!heartbeat)
++		return;
++	mutex_lock(&heartbeat->lock);
++	heartbeat->running = false;
++	mutex_unlock(&heartbeat->lock);
++	cancel_delayed_work_sync(&heartbeat->work);
++}
++
++bool myks_heartbeat_is_running(struct myks_heartbeat *heartbeat)
++{
++	bool running;
++
++	if (!heartbeat)
++		return false;
++	mutex_lock(&heartbeat->lock);
++	running = heartbeat->running;
++	mutex_unlock(&heartbeat->lock);
++	return running;
++}
++// #lzx--------------------------- 心跳生命周期结束 ---------------------------
 diff --git a/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h b/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h
 index bbdc876..bc434be 100644
 --- a/Linux6.17/mm/myself_kswapd/include/kswapd_observer.h

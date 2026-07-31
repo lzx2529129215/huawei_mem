@@ -19,6 +19,7 @@ cp -a "${BASE}" "${CURRENT}"
 printf 'base\n' > "${BASE}/mm/vmscan.c"
 printf 'current\n' > "${CURRENT}/mm/vmscan.c"
 printf 'config\n' > "${CURRENT}/mm/myself_kswapd/Kconfig"
+printf 'unique heartbeat fixture\n' > "${CURRENT}/mm/myself_kswapd/heartbeat.c"
 printf 'unsafe\n' > "${CURRENT}/outside.txt"
 printf 'unsafe\n' > "${CURRENT}/mm/myself_kswapd/../outside-mm.txt"
 
@@ -31,6 +32,9 @@ fi
 
 grep -q '^diff --git a/Linux6.17/mm/vmscan.c b/Linux6.17/mm/vmscan.c$' "${PATCH_FILE}"
 grep -q '^diff --git a/Linux6.17/mm/myself_kswapd/Kconfig b/Linux6.17/mm/myself_kswapd/Kconfig$' "${PATCH_FILE}"
+grep -q '^diff --git a/Linux6.17/mm/myself_kswapd/heartbeat.c b/Linux6.17/mm/myself_kswapd/heartbeat.c$' "${PATCH_FILE}"
+grep -q '^+++ b/Linux6.17/mm/myself_kswapd/heartbeat.c$' "${PATCH_FILE}"
+grep -q '^+unique heartbeat fixture$' "${PATCH_FILE}"
 ! grep -q 'outside' "${PATCH_FILE}"
 ! grep -q '^diff --git .*[^a-zA-Z0-9_./-]' "${PATCH_FILE}"
 

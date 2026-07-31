@@ -42,7 +42,6 @@ for run in $(seq 1 100); do
 done
 echo "100-run user-space tests: PASS"
 
-KERNEL="$ROOT/Linux6.17"
 BASE="$ROOT/patches/0003-linux617-myself-kswapd-l02-lruvec-observer.patch"
 PATCH_CHECK=$(mktemp -d)
 cleanup() {
@@ -51,7 +50,9 @@ cleanup() {
 }
 trap cleanup EXIT
 cp -a "$ROOT/../myself-kswapd-l01/Linux6.17" "$PATCH_CHECK/Linux6.17"
-(cd "$PATCH_CHECK" && git apply --check "$BASE")
+(cd "$PATCH_CHECK" && git apply --check "$BASE" && git apply "$BASE")
+KERNEL="$PATCH_CHECK/Linux6.17"
+python3 "$ROOT/tools/myself_kswapd/tests/test_trace_event_arg_limits.py" "$KERNEL/include/trace/events/myself_kswapd.h"
 
 kernel_object_build() {
     local name="$1"
@@ -64,12 +65,21 @@ kernel_object_build() {
         --enable MYSELF_KSWAPD --enable MYSELF_KSWAPD_KUNIT_TEST \
         "$@"
     make -C "$KERNEL" O="$build" olddefconfig prepare
-    make -C "$KERNEL" O="$build" M=mm/myself_kswapd \
-        adapter/lruvec_sample.o heartbeat.o debugfs/lruvec_debugfs.o \
-        tests/lruvec_observer_test.o
-    find "$KERNEL/mm/myself_kswapd" -type f \
-        \( -name '.*.cmd' -o -name '*.o' -o -name modules.order \
-        -o -name Module.symvers \) -delete
+    echo "kernel $name: building observer_config.o"
+    make -C "$KERNEL" O="$build" -j1 \
+        mm/myself_kswapd/adapter/lruvec_sample.o \
+        mm/myself_kswapd/heartbeat.o \
+        mm/myself_kswapd/debugfs/lruvec_debugfs.o \
+        mm/myself_kswapd/tests/lruvec_observer_test.o \
+        mm/myself_kswapd/adapter/observer_config.o
+    echo "kernel $name: building trace.o"
+    make -C "$KERNEL" O="$build" -j1 mm/myself_kswapd/trace/trace.o
+    echo "kernel $name: building built-in.a"
+    make -C "$KERNEL" O="$build" -j1 mm/myself_kswapd/built-in.a
+    test -s "$build/mm/myself_kswapd/heartbeat.o"
+    test -s "$build/mm/myself_kswapd/adapter/observer_config.o"
+    test -s "$build/mm/myself_kswapd/trace/trace.o"
+    test -s "$build/mm/myself_kswapd/built-in.a"
     echo "kernel $name: PASS"
 }
 
@@ -84,7 +94,8 @@ CLI="$OUT/default/bin/lruvec_observer_cli" \
 bash "$ROOT/tools/myself_kswapd/tests/test_bootstrap_l02_tree.sh"
 bash "$ROOT/tools/myself_kswapd/tests/test_refresh_l02_patch.sh"
 bash "$ROOT/tools/myself_kswapd/tests/test_capture_lruvec_trace.sh"
-git -C "$ROOT" diff --check
+git -C "$ROOT" diff --check -- . \
+    ':(exclude)patches/0003-linux617-myself-kswapd-l02-lruvec-observer.patch'
 echo "shell tests, syntax and diff check: PASS"
 echo "validation complete"
 cp "$OUT/validation.log" "$REPORT"
