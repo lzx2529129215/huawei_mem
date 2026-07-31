@@ -1,0 +1,6 @@
+# Reference build evidence, generated on 2026-07-31 from v6.17 + 0002 + 0003.
+# kernelrelease=6.17.0-myks-l02; config_sha256=fcccbfcbfa7b6e4870fbdb59f2da505f01d1272c77ddc25c2fde980f72d23174
+25c14236824ac22b94108f1568f9020340c117d6ef7cabfbb7aacb01631d3a3f  arch/x86/boot/bzImage
+3d0ef2c3356c408bc17aae883a393217f1b25ceae7797839b1afefe969eafb86  vmlinux
+ccf5312f25c0e2d2ca27e7aad5e6626bbf624ea4d172783fe5a102a9f7d06f7d  System.map
+6e559ac9df621cdfa4d4f6b3741395049dc6a0f822b8804fb8e39618220deb8a  Module.symvers

@@ -1,1 +1,4 @@
 Linux6.17/
+work/
+builds/
+__pycache__/
