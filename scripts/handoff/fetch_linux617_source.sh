@@ -22,7 +22,7 @@ if [[ -f "$archive" ]]; then
     log "using cached archive: $archive"
 else
     log "downloading fixed public source: $LINUX_URL"
-    curl -fL --retry 3 --retry-delay 2 -o "$archive" "$LINUX_URL"
+    curl -fL --retry 3 --retry-all-errors --retry-delay 2 -o "$archive" "$LINUX_URL"
 fi
 verify_sha256 "$archive" "$LINUX_ARCHIVE_SHA256"
 tmp=$(mktemp -d)
