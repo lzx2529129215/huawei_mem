@@ -44,4 +44,4 @@
 - 本次续作起点本地 HEAD：`2ced4d1fd`；远端起点：`1863e2723`。
 - 已安全快进推送 handoff 与修复提交；不使用 force push。
 - `origin/main` 在写入本报告前为 `4ba84bb9d`；报告提交后应以最终外部完成报告记录的 HEAD 为准。
-- 完整历史 remote clone 路径 `/home/lzx/Desktop/huawei/linux-l02-handoff-remote-clone-20260731` 已启动但受低速 SSH pack 传输影响；其不影响上述已完成的直接 remote main shallow clone 验证。
+- 完整历史 remote clone 路径 `/home/lzx/Desktop/huawei/linux-l02-handoff-remote-clone-20260731` 因低速 SSH pack 传输在验证完成后停止，部分目录保留且未删除；其不影响上述已完成的直接 remote main shallow clone 验证。
