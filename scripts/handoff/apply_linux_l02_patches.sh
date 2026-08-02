@@ -33,8 +33,11 @@ sed -e 's#^diff --git a/Linux6\.17/#diff --git a/#' \
     -e 's#^+++ b/Linux6\.17/#+++ b/#' "$(patch_path 0003)" > "$patch3"
 
 if source_apply --check -p1 "$patch2" >/dev/null 2>&1; then
-    source_apply --check -p1 "$patch3" >/dev/null 2>&1 || die '0003 cannot follow a pristine 0002 state'
     log 'applying 0002'; source_apply -p1 "$patch2"
+    if ! source_apply --check -p1 "$patch3" >/dev/null 2>&1; then
+        source_apply --reverse -p1 "$patch2" >/dev/null 2>&1 || true
+        die '0003 cannot follow the just-applied 0002 state; pristine state restored when possible'
+    fi
     log 'applying 0003'; source_apply -p1 "$patch3"
 elif source_apply --check -p1 "$patch3" >/dev/null 2>&1; then
     source_apply --reverse --check -p1 "$patch2" >/dev/null 2>&1 || die '0002: PARTIAL/UNKNOWN before pending 0003'

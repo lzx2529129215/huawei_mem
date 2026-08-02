@@ -45,3 +45,18 @@ python3 tools/myself_kswapd/parse_kswapd_trace.py \
 这是 L0.1 Observe-Only 版本：没有预测策略、用户态回收动作、Linux 行为替换、
 异步指针、内核分配、锁、睡眠或 I/O。未重启到带此适配层的内核前，不能声称
 已完成真实运行时 trace 验证；构建和离线解析测试不等价于运行时验证。
+
+## L0.3A 页生命周期离线重放
+
+L0.3A 的页级事件使用独立 parser 和状态机 oracle，不复用内核转换代码：
+
+```bash
+python3 tools/myself_kswapd/parse_page_lifecycle_trace.py \
+    output/page-lifecycle.trace --json \
+    --csv output/page-lifecycle-transitions.csv
+```
+
+summary 区分 `LATE_DISCOVERY`、`TRACE_TRUNCATION` 和真正的
+`INVALID_TRANSITION`。CSV 按 `(page_id,lifecycle_gen)` 保留每次转换及其
+request/priority/scan 关联。parser 只精确匹配事件字段，不从 payload 内搜索
+相似文本。

@@ -1,0 +1,1916 @@
+diff --git a/Linux6.17/include/trace/events/myself_kswapd.h b/Linux6.17/include/trace/events/myself_kswapd.h
+index a99b6e8d0..fdcd6526f 100644
+--- a/Linux6.17/include/trace/events/myself_kswapd.h
++++ b/Linux6.17/include/trace/events/myself_kswapd.h
+@@ -8,6 +8,9 @@
+ 
+ #include <linux/tracepoint.h>
+ #include "../../../mm/myself_kswapd/include/kswapd_observer.h"
++#ifdef CONFIG_MYSELF_KSWAPD_PAGE_LIFECYCLE
++#include "../../../mm/myself_kswapd/include/page_lifecycle.h"
++#endif
+ 
+ // #lzx--------------------------- kswapd 观察事件 ---------------------------
+ TRACE_EVENT(myself_kswapd_request_begin,
+@@ -301,6 +304,74 @@ TRACE_EVENT(lruvec_snapshot,
+ 		  __entry->scanned_total, __entry->reclaimed_total,
+ 		  __entry->field_valid_mask, __entry->validation_flags)
+ );
++
++// #lzx--------------------------- L0.3A 页生命周期事件 ---------------------------
++#ifdef CONFIG_MYSELF_KSWAPD_PAGE_LIFECYCLE
++TRACE_EVENT(myself_kswapd_page_lifecycle,
++
++	TP_PROTO(const struct myks_page_event_record *record),
++
++	TP_ARGS(record),
++
++	TP_STRUCT__entry(
++		__field(u64, transition_seq)
++		__field(int, action)
++		__field(u64, page_id)
++		__field(u32, lifecycle_gen)
++		__field(u32, order)
++		__field(u32, nr_pages)
++		__field(int, page_type)
++		__field(int, from_state)
++		__field(int, to_state)
++		__field(int, lru_class)
++		__field(int, mode)
++		__field(u64, memcg_id)
++		__field(s32, nid)
++		__field(u64, request_id)
++		__field(u64, priority_seq)
++		__field(u64, scan_seq)
++		__field(int, reclaim_source)
++		__field(u32, reason)
++		__field(u32, flags)
++	),
++
++	TP_fast_assign(
++		__entry->transition_seq = record->transition_seq;
++		__entry->action = record->action;
++		__entry->page_id = record->token.page_id;
++		__entry->lifecycle_gen = record->token.lifecycle_gen;
++		__entry->order = record->token.order;
++		__entry->nr_pages = record->nr_pages;
++		__entry->page_type = record->page_type;
++		__entry->from_state = record->from_state;
++		__entry->to_state = record->to_state;
++		__entry->lru_class = record->lru_class;
++		__entry->mode = record->mode;
++		__entry->memcg_id = record->memcg_id;
++		__entry->nid = record->nid;
++		__entry->request_id = record->request_id;
++		__entry->priority_seq = record->priority_seq;
++		__entry->scan_seq = record->scan_seq;
++		__entry->reclaim_source = record->reclaim_source;
++		__entry->reason = record->reason;
++		__entry->flags = record->flags;
++	),
++
++	TP_printk("transition_seq=%llu action=%d page_id=%llu lifecycle_gen=%u "
++		  "order=%u nr_pages=%u page_type=%d from_state=%d to_state=%d "
++		  "lru_class=%d mode=%d memcg_id=%llu nid=%d request_id=%llu "
++		  "priority_seq=%llu scan_seq=%llu reclaim_source=%d reason=%u "
++		  "flags=0x%x",
++		  __entry->transition_seq, __entry->action, __entry->page_id,
++		  __entry->lifecycle_gen, __entry->order, __entry->nr_pages,
++		  __entry->page_type, __entry->from_state, __entry->to_state,
++		  __entry->lru_class, __entry->mode, __entry->memcg_id,
++		  __entry->nid, __entry->request_id, __entry->priority_seq,
++		  __entry->scan_seq, __entry->reclaim_source, __entry->reason,
++		  __entry->flags)
++);
++#endif
++// #lzx--------------------------- L0.3A 页生命周期事件结束 ---------------------------
+ // #lzx--------------------------- kswapd 观察事件结束 ---------------------------
+ 
+ #endif /* _TRACE_MYSELF_KSWAPD_H */
+diff --git a/Linux6.17/mm/migrate.c b/Linux6.17/mm/migrate.c
+index 9e5ef39ce..eecac6b98 100644
+--- a/Linux6.17/mm/migrate.c
++++ b/Linux6.17/mm/migrate.c
+@@ -50,6 +50,7 @@
+ 
+ #include "internal.h"
+ #include "swap.h"
++#include "myself_kswapd/include/page_lifecycle.h"
+ 
+ static const struct movable_operations *offline_movable_ops;
+ static const struct movable_operations *zsmalloc_movable_ops;
+@@ -1180,9 +1181,12 @@ static void migrate_folio_done(struct folio *src,
+ 		mod_node_page_state(folio_pgdat(src), NR_ISOLATED_ANON +
+ 				    folio_is_file_lru(src), -folio_nr_pages(src));
+ 
+-	if (reason != MR_MEMORY_FAILURE)
++	if (reason != MR_MEMORY_FAILURE) {
+ 		/* We release the page in page_handle_poison. */
++		myks_page_lifecycle_observe(src, MYKS_PAGE_MIGRATE, NULL,
++					   reason); // #lzx
+ 		folio_put(src);
++	}
+ }
+ 
+ /* Obtain the lock on page, remove all ptes. */
+diff --git a/Linux6.17/mm/swap.c b/Linux6.17/mm/swap.c
+index b74ebe865..6392e57fb 100644
+--- a/Linux6.17/mm/swap.c
++++ b/Linux6.17/mm/swap.c
+@@ -39,6 +39,7 @@
+ #include <linux/buffer_head.h>
+ 
+ #include "internal.h"
++#include "myself_kswapd/include/page_lifecycle.h"
+ 
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/pagemap.h>
+@@ -106,6 +107,7 @@ void __folio_put(struct folio *folio)
+ 		return;
+ 	}
+ 
++	myks_page_lifecycle_observe(folio, MYKS_PAGE_FREE, NULL, 0); // #lzx
+ 	page_cache_release(folio);
+ 	folio_unqueue_deferred_split(folio);
+ 	mem_cgroup_uncharge(folio);
+@@ -152,6 +154,7 @@ static void lru_add(struct lruvec *lruvec, struct folio *folio)
+ 	}
+ 
+ 	lruvec_add_folio(lruvec, folio);
++	myks_page_lifecycle_observe(folio, MYKS_PAGE_ADD_LRU, NULL, 0); // #lzx
+ 	trace_mm_lru_insertion(folio);
+ }
+ 
+@@ -311,6 +314,7 @@ static void lru_activate(struct lruvec *lruvec, struct folio *folio)
+ 	lruvec_del_folio(lruvec, folio);
+ 	folio_set_active(folio);
+ 	lruvec_add_folio(lruvec, folio);
++	myks_page_lifecycle_observe(folio, MYKS_PAGE_ACTIVATE, NULL, 0); // #lzx
+ 	trace_mm_lru_activate(folio);
+ 
+ 	__count_vm_events(PGACTIVATE, nr_pages);
+@@ -584,6 +588,7 @@ static void lru_deactivate_file(struct lruvec *lruvec, struct folio *folio)
+ 		lruvec_add_folio_tail(lruvec, folio);
+ 		__count_vm_events(PGROTATED, nr_pages);
+ 	}
++	myks_page_lifecycle_observe(folio, MYKS_PAGE_DEACTIVATE, NULL, 0); // #lzx
+ 
+ 	if (active) {
+ 		__count_vm_events(PGDEACTIVATE, nr_pages);
+@@ -603,6 +608,7 @@ static void lru_deactivate(struct lruvec *lruvec, struct folio *folio)
+ 	folio_clear_active(folio);
+ 	folio_clear_referenced(folio);
+ 	lruvec_add_folio(lruvec, folio);
++	myks_page_lifecycle_observe(folio, MYKS_PAGE_DEACTIVATE, NULL, 0); // #lzx
+ 
+ 	__count_vm_events(PGDEACTIVATE, nr_pages);
+ 	count_memcg_events(lruvec_memcg(lruvec), PGDEACTIVATE, nr_pages);
+@@ -629,6 +635,7 @@ static void lru_lazyfree(struct lruvec *lruvec, struct folio *folio)
+ 	 */
+ 	folio_clear_swapbacked(folio);
+ 	lruvec_add_folio(lruvec, folio);
++	myks_page_lifecycle_observe(folio, MYKS_PAGE_DEACTIVATE, NULL, 0); // #lzx
+ 
+ 	__count_vm_events(PGLAZYFREE, nr_pages);
+ 	count_memcg_events(lruvec_memcg(lruvec), PGLAZYFREE, nr_pages);
+@@ -980,6 +987,7 @@ void folios_put_refs(struct folio_batch *folios, unsigned int *refs)
+ 			free_huge_folio(folio);
+ 			continue;
+ 		}
++		myks_page_lifecycle_observe(folio, MYKS_PAGE_FREE, NULL, 0); // #lzx
+ 		folio_unqueue_deferred_split(folio);
+ 		__page_cache_release(folio, &lruvec, &flags);
+ 
+diff --git a/Linux6.17/mm/vmscan.c b/Linux6.17/mm/vmscan.c
+index c11c969b3..8a9a40055 100644
+--- a/Linux6.17/mm/vmscan.c
++++ b/Linux6.17/mm/vmscan.c
+@@ -70,6 +70,7 @@
+ #include "swap.h"
+ // #lzx: 引入仅依赖标量快照的观察器接口，避免暴露 scan_control
+ #include "myself_kswapd/include/kswapd_observer.h"
++#include "myself_kswapd/include/page_lifecycle.h"
+ 
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/vmscan.h>
+@@ -188,6 +189,9 @@ struct scan_control {
+ 	struct reclaim_state reclaim_state;
+ };
+ 
++static const struct myks_reclaim_observer_ctx *myks_page_ctx(
++		struct scan_control *sc);
++
+ #ifdef ARCH_HAS_PREFETCHW
+ #define prefetchw_prev_lru_folio(_folio, _base, _field)			\
+ 	do {								\
+@@ -1565,6 +1569,8 @@ static unsigned int shrink_folio_list(struct list_head *folio_list,
+ 		 * Folio may get swapped out as a whole, need to account
+ 		 * all pages in it.
+ 		 */
++		myks_page_lifecycle_observe(folio, MYKS_PAGE_RECLAIM,
++				myks_page_ctx(sc), 0); // #lzx
+ 		nr_reclaimed += nr_pages;
+ 
+ 		folio_unqueue_deferred_split(folio);
+@@ -1804,6 +1810,10 @@ static unsigned long isolate_lru_folios(unsigned long nr_to_scan,
+ 		nr_taken += nr_pages;
+ 		nr_zone_taken[folio_zonenum(folio)] += nr_pages;
+ 		move_to = dst;
++#ifdef CONFIG_MYSELF_KSWAPD_PAGE_LIFECYCLE
++		myks_page_lifecycle_observe(folio, MYKS_PAGE_ISOLATE,
++				sc->myks_observer_ctx, 0); // #lzx
++#endif
+ move:
+ 		list_move(&folio->lru, move_to);
+ 	}
+@@ -1925,8 +1935,18 @@ static bool too_many_isolated(struct pglist_data *pgdat, int file,
+  *
+  * Returns the number of pages moved to the given lruvec.
+  */
++static const struct myks_reclaim_observer_ctx *myks_page_ctx(
++		struct scan_control *sc)
++{
++#ifdef CONFIG_MYSELF_KSWAPD_PAGE_LIFECYCLE
++	return sc->myks_observer_ctx;
++#else
++	return NULL;
++#endif
++}
++
+ static unsigned int move_folios_to_lru(struct lruvec *lruvec,
+-		struct list_head *list)
++		struct list_head *list, struct scan_control *sc)
+ {
+ 	int nr_pages, nr_moved = 0;
+ 	struct folio_batch free_folios;
+@@ -1939,6 +1959,8 @@ static unsigned int move_folios_to_lru(struct lruvec *lruvec,
+ 		list_del(&folio->lru);
+ 		if (unlikely(!folio_evictable(folio))) {
+ 			spin_unlock_irq(&lruvec->lru_lock);
++			myks_page_lifecycle_observe(folio, MYKS_PAGE_PUTBACK,
++					myks_page_ctx(sc), 0); // #lzx
+ 			folio_putback_lru(folio);
+ 			spin_lock_irq(&lruvec->lru_lock);
+ 			continue;
+@@ -1959,6 +1981,8 @@ static unsigned int move_folios_to_lru(struct lruvec *lruvec,
+ 
+ 		if (unlikely(folio_put_testzero(folio))) {
+ 			__folio_clear_lru_flags(folio);
++			myks_page_lifecycle_observe(folio, MYKS_PAGE_FREE,
++					myks_page_ctx(sc), 0); // #lzx
+ 
+ 			folio_unqueue_deferred_split(folio);
+ 			if (folio_batch_add(&free_folios, folio) == 0) {
+@@ -1977,6 +2001,8 @@ static unsigned int move_folios_to_lru(struct lruvec *lruvec,
+ 		 */
+ 		VM_BUG_ON_FOLIO(!folio_matches_lruvec(folio, lruvec), folio);
+ 		lruvec_add_folio(lruvec, folio);
++		myks_page_lifecycle_observe(folio, MYKS_PAGE_PUTBACK,
++				myks_page_ctx(sc), 0); // #lzx
+ 		nr_pages = folio_nr_pages(folio);
+ 		nr_moved += nr_pages;
+ 		if (folio_test_active(folio))
+@@ -2057,7 +2083,7 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
+ 					 lruvec_memcg(lruvec));
+ 
+ 	spin_lock_irq(&lruvec->lru_lock);
+-	move_folios_to_lru(lruvec, &folio_list);
++	move_folios_to_lru(lruvec, &folio_list, sc);
+ 
+ 	__mod_lruvec_state(lruvec, PGDEMOTE_KSWAPD + reclaimer_offset(sc),
+ 					stat.nr_demoted);
+@@ -2208,8 +2234,8 @@ static void shrink_active_list(unsigned long nr_to_scan,
+ 	 */
+ 	spin_lock_irq(&lruvec->lru_lock);
+ 
+-	nr_activate = move_folios_to_lru(lruvec, &l_active);
+-	nr_deactivate = move_folios_to_lru(lruvec, &l_inactive);
++	nr_activate = move_folios_to_lru(lruvec, &l_active, sc);
++	nr_deactivate = move_folios_to_lru(lruvec, &l_inactive, sc);
+ 
+ 	__count_vm_events(PGDEACTIVATE, nr_deactivate);
+ 	count_memcg_events(lruvec_memcg(lruvec), PGDEACTIVATE, nr_deactivate);
+@@ -4777,7 +4803,7 @@ static int evict_folios(unsigned long nr_to_scan, struct lruvec *lruvec,
+ 
+ 	spin_lock_irq(&lruvec->lru_lock);
+ 
+-	move_folios_to_lru(lruvec, &list);
++	move_folios_to_lru(lruvec, &list, sc);
+ 
+ 	walk = current->reclaim_state->mm_walk;
+ 	if (walk && walk->batched) {
+diff --git a/Linux6.17/mm/myself_kswapd/Kconfig b/Linux6.17/mm/myself_kswapd/Kconfig
+index 1b377eeb3..2c10adbcf 100644
+--- a/Linux6.17/mm/myself_kswapd/Kconfig
++++ b/Linux6.17/mm/myself_kswapd/Kconfig
+@@ -11,6 +11,21 @@ config MYSELF_KSWAPD
+ 	  Tracepoints are emitted only when the corresponding event is enabled.
+ 	  No reclaim policy, allocation, or asynchronous work is added.
+ 
++config MYSELF_KSWAPD_PAGE_LIFECYCLE
++	bool "Bounded myself kswapd page lifecycle observer"
++	depends on MYSELF_KSWAPD
++	default n
++	help
++	  Observe selected classic-LRU folio lifecycle transitions in a bounded,
++	  preallocated shadow table. The observer is runtime-disabled by default
++	  and never changes native LRU or reclaim decisions. Runtime filters must
++	  select a memory cgroup, NUMA node and page type before tracking can be
++	  enabled. All hot-path storage is allocated before enable.
++
++config MYSELF_KSWAPD_PAGE_LIFECYCLE_CORE
++	bool
++	default y if MYSELF_KSWAPD_PAGE_LIFECYCLE || MYSELF_KSWAPD_KUNIT_TEST
++
+ config MYSELF_KSWAPD_KUNIT_TEST
+ 	bool "KUnit tests for myself kswapd observer"
+ 	depends on MYSELF_KSWAPD
+diff --git a/Linux6.17/mm/myself_kswapd/Makefile b/Linux6.17/mm/myself_kswapd/Makefile
+index e2627f7e2..5812ef502 100644
+--- a/Linux6.17/mm/myself_kswapd/Makefile
++++ b/Linux6.17/mm/myself_kswapd/Makefile
+@@ -4,6 +4,7 @@ obj-y += adapter/kswapd_observer.o
+ obj-y += adapter/lruvec_observer.o
+ obj-y += adapter/lruvec_sample.o
+ obj-y += adapter/observer_config.o
++obj-$(CONFIG_MYSELF_KSWAPD_PAGE_LIFECYCLE_CORE) += adapter/page_lifecycle.o
+ obj-y += debugfs/
+ obj-y += heartbeat.o
+ obj-y += trace/trace.o
+diff --git a/Linux6.17/mm/myself_kswapd/adapter/kswapd_observer.c b/Linux6.17/mm/myself_kswapd/adapter/kswapd_observer.c
+index a150a1b79..cba2dd134 100644
+--- a/Linux6.17/mm/myself_kswapd/adapter/kswapd_observer.c
++++ b/Linux6.17/mm/myself_kswapd/adapter/kswapd_observer.c
+@@ -5,15 +5,22 @@
+ #include <trace/events/myself_kswapd.h>
+ 
+ #include "../include/kswapd_observer.h"
++#include "../include/page_lifecycle.h"
+ 
+ // #lzx: myself-kswapd L0.1 observe-only code
+ // #lzx--------------------------- 观察器实现 ---------------------------
+ bool myks_kswapd_events_enabled(void)
+ {
+-	return trace_myself_kswapd_request_begin_enabled() ||
+-	       trace_myself_kswapd_priority_round_enabled() ||
+-	       trace_myself_kswapd_request_end_enabled() ||
+-	       trace_lruvec_snapshot_enabled();
++	bool enabled = myks_page_lifecycle_active() ||
++		trace_myself_kswapd_request_begin_enabled() ||
++		trace_myself_kswapd_priority_round_enabled() ||
++		trace_myself_kswapd_request_end_enabled() ||
++		trace_lruvec_snapshot_enabled();
++
++#ifdef CONFIG_MYSELF_KSWAPD_PAGE_LIFECYCLE
++	enabled |= trace_myself_kswapd_page_lifecycle_enabled();
++#endif
++	return enabled;
+ }
+ 
+ static u64 myks_kswapd_elapsed_ns(u64 begin_ns, u64 end_ns, u32 *validation_flags)
+diff --git a/Linux6.17/mm/myself_kswapd/adapter/lruvec_observer.c b/Linux6.17/mm/myself_kswapd/adapter/lruvec_observer.c
+index ea83f7834..4db7e0cdf 100644
+--- a/Linux6.17/mm/myself_kswapd/adapter/lruvec_observer.c
++++ b/Linux6.17/mm/myself_kswapd/adapter/lruvec_observer.c
+@@ -65,6 +65,7 @@ u64 myks_reclaim_ctx_begin_priority(struct myks_reclaim_observer_ctx *ctx)
+ {
+ 	if (!ctx || !ctx->active)
+ 		return 0;
++	ctx->current_scan_seq = 0;
+ 	return myks_reclaim_ctx_next_priority(ctx);
+ }
+ 
+@@ -72,7 +73,8 @@ u64 myks_reclaim_ctx_begin_scan(struct myks_reclaim_observer_ctx *ctx)
+ {
+ 	if (!ctx || !ctx->active)
+ 		return 0;
+-	return myks_reclaim_ctx_next_scan(ctx);
++	ctx->current_scan_seq = myks_reclaim_ctx_next_scan(ctx);
++	return ctx->current_scan_seq;
+ }
+ 
+ void myks_reclaim_ctx_end_request(struct myks_reclaim_observer_ctx *ctx)
+diff --git a/Linux6.17/mm/myself_kswapd/adapter/page_lifecycle.c b/Linux6.17/mm/myself_kswapd/adapter/page_lifecycle.c
+new file mode 100644
+index 000000000..efae40675
+--- /dev/null
++++ b/Linux6.17/mm/myself_kswapd/adapter/page_lifecycle.c
+@@ -0,0 +1,791 @@
++// SPDX-License-Identifier: GPL-2.0
++
++#include <linux/errno.h>
++#include <linux/cgroup.h>
++#include <linux/hash.h>
++#include <linux/log2.h>
++#include <linux/memcontrol.h>
++#include <linux/mm.h>
++#include <linux/mm_inline.h>
++#include <linux/mutex.h>
++#include <linux/kernel.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <trace/events/myself_kswapd.h>
++
++#include "../include/page_lifecycle.h"
++
++// #lzx: Linux L0.3A preallocated bounded page table
++u64 myks_page_head_key(u64 pfn, u32 order)
++{
++	u64 mask;
++
++	if (!order || order >= 63)
++		return pfn;
++	mask = (1ULL << order) - 1;
++	return pfn & ~mask;
++}
++
++void myks_page_table_init(struct myks_page_table *table)
++{
++	if (!table)
++		return;
++	memset(table, 0, sizeof(*table));
++	spin_lock_init(&table->lock);
++	INIT_LIST_HEAD(&table->free_entries);
++	table->counters.last_error = 0;
++}
++
++static bool myks_page_config_valid(const struct myks_page_config *config)
++{
++	if (!config || !config->enabled || config->target_nid < 0 ||
++	    !config->page_type_mask ||
++	    config->page_type_mask & ~(MYKS_PAGE_TYPE_MASK_ANON |
++				       MYKS_PAGE_TYPE_MASK_FILE) ||
++	    !config->max_entries || config->max_entries > MYKS_PAGE_MAX_ENTRIES)
++		return false;
++	if (config->mode == MYKS_LRU_MODE_MEMCG)
++		return config->target_memcg_id != 0 &&
++		       config->target_memcg_id != MYKS_SHADOW_ROOT_MEMCG_ID;
++	if (config->mode != MYKS_LRU_MODE_GLOBAL)
++		return false;
++#ifdef CONFIG_MEMCG
++	return false;
++#else
++	return true;
++#endif
++}
++
++int myks_page_table_enable(struct myks_page_table *table,
++		const struct myks_page_config *config, bool mglru_enabled)
++{
++	struct myks_page_tombstone *tombstones;
++	struct myks_shadow_page *entries;
++	struct hlist_head *buckets;
++	unsigned long flags;
++	u32 bucket_count;
++	u32 i;
++
++	if (!table || !myks_page_config_valid(config)) {
++		if (table) {
++			spin_lock_irqsave(&table->lock, flags);
++			table->counters.last_error = -EINVAL;
++			spin_unlock_irqrestore(&table->lock, flags);
++		}
++		return -EINVAL;
++	}
++	if (mglru_enabled) {
++		spin_lock_irqsave(&table->lock, flags);
++		table->counters.mglru_rejected++;
++		table->counters.last_error = -EOPNOTSUPP;
++		spin_unlock_irqrestore(&table->lock, flags);
++		return -EOPNOTSUPP;
++	}
++	if (READ_ONCE(table->inject_alloc_failure)) {
++		spin_lock_irqsave(&table->lock, flags);
++		table->counters.alloc_fail++;
++		table->counters.last_error = -ENOMEM;
++		spin_unlock_irqrestore(&table->lock, flags);
++		return -ENOMEM;
++	}
++
++	bucket_count = roundup_pow_of_two(config->max_entries);
++	entries = kvcalloc(config->max_entries, sizeof(*entries), GFP_KERNEL);
++	buckets = kvcalloc(bucket_count, sizeof(*buckets), GFP_KERNEL);
++	tombstones = kvcalloc(config->max_entries, sizeof(*tombstones), GFP_KERNEL);
++	if (!entries || !buckets || !tombstones) {
++		kvfree(entries);
++		kvfree(buckets);
++		kvfree(tombstones);
++		spin_lock_irqsave(&table->lock, flags);
++		table->counters.alloc_fail++;
++		table->counters.last_error = -ENOMEM;
++		spin_unlock_irqrestore(&table->lock, flags);
++		return -ENOMEM;
++	}
++	for (i = 0; i < bucket_count; i++)
++		INIT_HLIST_HEAD(&buckets[i]);
++	for (i = 0; i < config->max_entries; i++)
++		INIT_LIST_HEAD(&entries[i].free_node);
++
++	spin_lock_irqsave(&table->lock, flags);
++	if (table->enabled || table->entries) {
++		spin_unlock_irqrestore(&table->lock, flags);
++		kvfree(entries);
++		kvfree(buckets);
++		kvfree(tombstones);
++		return -EBUSY;
++	}
++	table->entries = entries;
++	table->buckets = buckets;
++	table->tombstones = tombstones;
++	table->bucket_count = bucket_count;
++	table->tombstone_next = 0;
++	table->nr_entries = 0;
++	table->config = *config;
++	INIT_LIST_HEAD(&table->free_entries);
++	for (i = 0; i < config->max_entries; i++)
++		list_add_tail(&entries[i].free_node, &table->free_entries);
++	table->enabled = true;
++	table->counters.enabled = true;
++	table->counters.max_entries = config->max_entries;
++	table->counters.last_error = 0;
++	spin_unlock_irqrestore(&table->lock, flags);
++	return 0;
++}
++
++void myks_page_table_disable(struct myks_page_table *table)
++{
++	struct myks_page_tombstone *tombstones;
++	struct myks_shadow_page *entries;
++	struct hlist_head *buckets;
++	unsigned long flags;
++
++	if (!table)
++		return;
++	spin_lock_irqsave(&table->lock, flags);
++	table->enabled = false;
++	table->counters.enabled = false;
++	table->counters.tracked_entries = 0;
++	table->nr_entries = 0;
++	entries = table->entries;
++	buckets = table->buckets;
++	tombstones = table->tombstones;
++	table->entries = NULL;
++	table->buckets = NULL;
++	table->tombstones = NULL;
++	table->bucket_count = 0;
++	table->tombstone_next = 0;
++	memset(&table->config, 0, sizeof(table->config));
++	INIT_LIST_HEAD(&table->free_entries);
++	spin_unlock_irqrestore(&table->lock, flags);
++	kvfree(entries);
++	kvfree(buckets);
++	kvfree(tombstones);
++}
++
++static bool myks_page_type_matches(const struct myks_page_config *config,
++		enum myks_page_type type)
++{
++	if (type == MYKS_PAGE_ANON)
++		return config->page_type_mask & MYKS_PAGE_TYPE_MASK_ANON;
++	if (type == MYKS_PAGE_FILE)
++		return config->page_type_mask & MYKS_PAGE_TYPE_MASK_FILE;
++	return false;
++}
++
++static bool myks_page_target_matches(const struct myks_page_config *config,
++		const struct myks_page_observation *observation)
++{
++	if (observation->nid != config->target_nid ||
++	    !myks_page_type_matches(config, observation->page_type))
++		return false;
++	if (config->mode == MYKS_LRU_MODE_MEMCG)
++		return observation->memcg_id == config->target_memcg_id;
++	return config->mode == MYKS_LRU_MODE_GLOBAL;
++}
++
++static struct myks_shadow_page *myks_page_find(struct myks_page_table *table,
++		u64 key)
++{
++	struct myks_shadow_page *entry;
++	u32 index = table->bucket_count == 1 ? 0 :
++		hash_64(key, ilog2(table->bucket_count));
++
++	hlist_for_each_entry(entry, &table->buckets[index], hash_node) {
++		if (entry->internal_key == key)
++			return entry;
++	}
++	return NULL;
++}
++
++static struct myks_page_tombstone *myks_page_find_tombstone(
++		struct myks_page_table *table, u64 key)
++{
++	u32 i;
++
++	for (i = 0; i < table->config.max_entries; i++) {
++		if (table->tombstones[i].valid &&
++		    table->tombstones[i].internal_key == key)
++			return &table->tombstones[i];
++	}
++	return NULL;
++}
++
++static enum myks_page_state myks_page_target_state(
++		const struct myks_page_observation *observation)
++{
++	switch (observation->action) {
++	case MYKS_PAGE_DISCOVER:
++	case MYKS_PAGE_ADD_LRU:
++	case MYKS_PAGE_PUTBACK:
++		return observation->lru_class == MYKS_LRU_ACTIVE_ANON ||
++		       observation->lru_class == MYKS_LRU_ACTIVE_FILE ?
++		       MYKS_PAGE_ON_LRU_ACTIVE : MYKS_PAGE_ON_LRU_INACTIVE;
++	case MYKS_PAGE_ACTIVATE:
++		return MYKS_PAGE_ON_LRU_ACTIVE;
++	case MYKS_PAGE_DEACTIVATE:
++		return MYKS_PAGE_ON_LRU_INACTIVE;
++	case MYKS_PAGE_ISOLATE:
++		return MYKS_PAGE_ISOLATED;
++	case MYKS_PAGE_RECLAIM:
++		return MYKS_PAGE_RECLAIMED;
++	case MYKS_PAGE_FREE:
++	case MYKS_PAGE_MIGRATE:
++		return MYKS_PAGE_DEAD;
++	case MYKS_PAGE_DOMAIN_CHANGE:
++	default:
++		return MYKS_PAGE_UNKNOWN;
++	}
++}
++
++static bool myks_page_transition_valid(enum myks_page_state from,
++		enum myks_page_state to, enum myks_page_action action)
++{
++	switch (action) {
++	case MYKS_PAGE_DISCOVER:
++	case MYKS_PAGE_ADD_LRU:
++		return from == MYKS_PAGE_UNKNOWN &&
++		       (to == MYKS_PAGE_ON_LRU_INACTIVE ||
++			to == MYKS_PAGE_ON_LRU_ACTIVE);
++	case MYKS_PAGE_ACTIVATE:
++		return (from == MYKS_PAGE_UNKNOWN ||
++			from == MYKS_PAGE_ON_LRU_INACTIVE) &&
++		       to == MYKS_PAGE_ON_LRU_ACTIVE;
++	case MYKS_PAGE_DEACTIVATE:
++		return (from == MYKS_PAGE_UNKNOWN ||
++			from == MYKS_PAGE_ON_LRU_ACTIVE) &&
++		       to == MYKS_PAGE_ON_LRU_INACTIVE;
++	case MYKS_PAGE_ISOLATE:
++		return (from == MYKS_PAGE_ON_LRU_INACTIVE ||
++			from == MYKS_PAGE_ON_LRU_ACTIVE ||
++			from == MYKS_PAGE_UNKNOWN) && to == MYKS_PAGE_ISOLATED;
++	case MYKS_PAGE_PUTBACK:
++		return from == MYKS_PAGE_ISOLATED &&
++		       (to == MYKS_PAGE_ON_LRU_INACTIVE ||
++			to == MYKS_PAGE_ON_LRU_ACTIVE);
++	case MYKS_PAGE_RECLAIM:
++		return from == MYKS_PAGE_ISOLATED && to == MYKS_PAGE_RECLAIMED;
++	case MYKS_PAGE_FREE:
++	case MYKS_PAGE_MIGRATE:
++		return from != MYKS_PAGE_UNKNOWN &&
++		       from != MYKS_PAGE_RECLAIMED && from != MYKS_PAGE_DEAD &&
++		       to == MYKS_PAGE_DEAD;
++	case MYKS_PAGE_DOMAIN_CHANGE:
++		return from != MYKS_PAGE_UNKNOWN && from == to;
++	default:
++		return false;
++	}
++}
++
++static void myks_page_fill_record(struct myks_page_table *table,
++		const struct myks_page_observation *observation,
++		const struct myks_shadow_page *entry, enum myks_page_action action,
++		enum myks_page_state from, enum myks_page_state to, u32 flags,
++		struct myks_page_event_record *record)
++{
++	*record = (struct myks_page_event_record) {
++		.transition_seq = ++table->next_transition_seq,
++		.action = action,
++		.token = entry->token,
++		.nr_pages = observation->nr_pages,
++		.page_type = observation->page_type,
++		.from_state = from,
++		.to_state = to,
++		.lru_class = observation->lru_class,
++		.mode = observation->context.mode,
++		.memcg_id = observation->memcg_id,
++		.nid = observation->nid,
++		.request_id = observation->context.request_id,
++		.priority_seq = observation->context.priority_seq,
++		.scan_seq = observation->context.scan_seq,
++		.reclaim_source = observation->context.reclaim_source,
++		.reason = observation->reason,
++		.flags = flags,
++	};
++	table->counters.events_total++;
++}
++
++static void myks_page_retire(struct myks_page_table *table,
++		struct myks_shadow_page *entry, enum myks_page_state terminal,
++		enum myks_page_action action)
++{
++	struct myks_page_tombstone *tombstone =
++		&table->tombstones[table->tombstone_next++ %
++				   table->config.max_entries];
++
++	*tombstone = (struct myks_page_tombstone) {
++		.internal_key = entry->internal_key,
++		.token = entry->token,
++		.terminal_state = terminal,
++		.terminal_action = action,
++		.valid = true,
++	};
++	hlist_del_init(&entry->hash_node);
++	list_add_tail(&entry->free_node, &table->free_entries);
++	table->nr_entries--;
++	table->counters.tracked_entries = table->nr_entries;
++}
++
++static struct myks_shadow_page *myks_page_create(
++		struct myks_page_table *table,
++		const struct myks_page_observation *observation, u32 *flags)
++{
++	struct myks_page_tombstone *tombstone;
++	struct myks_shadow_page *entry;
++	u32 index;
++
++	if (list_empty(&table->free_entries)) {
++		table->counters.capacity_drop++;
++		return NULL;
++	}
++	entry = list_first_entry(&table->free_entries,
++				 struct myks_shadow_page, free_node);
++	list_del_init(&entry->free_node);
++	memset(entry, 0, sizeof(*entry));
++	INIT_LIST_HEAD(&entry->free_node);
++	INIT_HLIST_NODE(&entry->hash_node);
++	entry->internal_key = observation->internal_key;
++	entry->token.page_id = ++table->next_page_id;
++	entry->token.order = observation->order;
++	entry->token.lifecycle_gen = 1;
++	tombstone = myks_page_find_tombstone(table, observation->internal_key);
++	if (tombstone) {
++		entry->token.lifecycle_gen = tombstone->token.lifecycle_gen + 1;
++		*flags |= MYKS_PAGE_FLAG_REUSE_DETECTED;
++		table->counters.reuse_detected++;
++		tombstone->valid = false;
++	}
++	entry->memcg_id = observation->memcg_id;
++	entry->nid = observation->nid;
++	entry->page_type = observation->page_type;
++	entry->lru_class = observation->lru_class;
++	entry->physical_state = MYKS_PAGE_UNKNOWN;
++	entry->created_seq = table->next_transition_seq + 1;
++	index = table->bucket_count == 1 ? 0 :
++		hash_64(entry->internal_key, ilog2(table->bucket_count));
++	hlist_add_head(&entry->hash_node, &table->buckets[index]);
++	table->nr_entries++;
++	table->counters.tracked_entries = table->nr_entries;
++	return entry;
++}
++
++bool myks_page_table_observe(struct myks_page_table *table,
++		const struct myks_page_observation *observation,
++		struct myks_page_event_batch *batch)
++{
++	struct myks_page_tombstone *tombstone;
++	struct myks_shadow_page duplicate_entry;
++	struct myks_shadow_page *entry;
++	enum myks_page_state from;
++	enum myks_page_state to;
++	enum myks_page_action action;
++	unsigned long irq_flags;
++	u32 event_flags = 0;
++	bool context_matches = true;
++	bool target_match;
++	bool valid;
++
++	if (!table || !observation || !batch || !READ_ONCE(table->enabled))
++		return false;
++	*batch = (struct myks_page_event_batch) { 0 };
++
++	spin_lock_irqsave(&table->lock, irq_flags);
++	if (!table->enabled) {
++		spin_unlock_irqrestore(&table->lock, irq_flags);
++		return false;
++	}
++	target_match = myks_page_target_matches(&table->config, observation);
++	entry = myks_page_find(table, observation->internal_key);
++	action = observation->action;
++	if (!entry && !target_match) {
++		spin_unlock_irqrestore(&table->lock, irq_flags);
++		return false;
++	}
++	if (!entry && (observation->action == MYKS_PAGE_RECLAIM ||
++		       observation->action == MYKS_PAGE_FREE ||
++		       observation->action == MYKS_PAGE_MIGRATE)) {
++		tombstone = myks_page_find_tombstone(table,
++						     observation->internal_key);
++		if (!tombstone) {
++			spin_unlock_irqrestore(&table->lock, irq_flags);
++			return false;
++		}
++		if (observation->action == MYKS_PAGE_FREE &&
++		    tombstone->terminal_action == MYKS_PAGE_MIGRATE) {
++			spin_unlock_irqrestore(&table->lock, irq_flags);
++			return false;
++		}
++		memset(&duplicate_entry, 0, sizeof(duplicate_entry));
++		duplicate_entry.token = tombstone->token;
++		event_flags |= MYKS_PAGE_FLAG_DUPLICATE_TERMINAL;
++		myks_page_fill_record(table, observation, &duplicate_entry,
++				observation->action, tombstone->terminal_state,
++				tombstone->terminal_state, event_flags,
++				&batch->events[0]);
++		batch->count = 1;
++		table->counters.duplicate_terminal++;
++		spin_unlock_irqrestore(&table->lock, irq_flags);
++		return true;
++	}
++	if (!entry) {
++		if (observation->action == MYKS_PAGE_PUTBACK ||
++		    observation->action == MYKS_PAGE_DOMAIN_CHANGE) {
++			table->counters.invalid_transition++;
++			spin_unlock_irqrestore(&table->lock, irq_flags);
++			return false;
++		}
++		entry = myks_page_create(table, observation, &event_flags);
++		if (!entry) {
++			spin_unlock_irqrestore(&table->lock, irq_flags);
++			return false;
++		}
++		if (observation->action != MYKS_PAGE_DISCOVER &&
++		    observation->action != MYKS_PAGE_ADD_LRU) {
++			event_flags |= MYKS_PAGE_FLAG_LATE_DISCOVERY |
++				       MYKS_PAGE_FLAG_UNKNOWN_PREVIOUS;
++			table->counters.late_discovery++;
++		}
++	}
++	if (action == MYKS_PAGE_ADD_LRU &&
++	    entry->physical_state == MYKS_PAGE_ISOLATED)
++		action = MYKS_PAGE_PUTBACK;
++	if (action == MYKS_PAGE_ADD_LRU &&
++	    (entry->physical_state == MYKS_PAGE_ON_LRU_INACTIVE ||
++	     entry->physical_state == MYKS_PAGE_ON_LRU_ACTIVE) &&
++	    myks_page_target_state(observation) == entry->physical_state) {
++		spin_unlock_irqrestore(&table->lock, irq_flags);
++		return false;
++	}
++
++	if (action != MYKS_PAGE_DOMAIN_CHANGE &&
++	    (entry->memcg_id != observation->memcg_id ||
++	     entry->nid != observation->nid) &&
++	    batch->count < MYKS_PAGE_EVENT_BATCH_MAX) {
++		myks_page_fill_record(table, observation, entry,
++				MYKS_PAGE_DOMAIN_CHANGE, entry->physical_state,
++				entry->physical_state, MYKS_PAGE_FLAG_DOMAIN_CHANGED,
++				&batch->events[batch->count++]);
++		entry->memcg_id = observation->memcg_id;
++		entry->nid = observation->nid;
++	}
++
++	from = entry->physical_state;
++	to = action == MYKS_PAGE_DOMAIN_CHANGE ? from :
++		myks_page_target_state(observation);
++	if ((action == MYKS_PAGE_PUTBACK || action == MYKS_PAGE_RECLAIM) &&
++	    from == MYKS_PAGE_ISOLATED)
++		context_matches = entry->last_request_id ==
++				  observation->context.request_id &&
++				  entry->last_priority_seq ==
++				  observation->context.priority_seq &&
++				  entry->last_scan_seq ==
++				  observation->context.scan_seq;
++	valid = myks_page_transition_valid(from, to, action) &&
++		context_matches;
++	if (!valid) {
++		event_flags |= MYKS_PAGE_FLAG_INVALID_TRANSITION;
++		table->counters.invalid_transition++;
++	}
++	myks_page_fill_record(table, observation, entry, action,
++			from, to, event_flags, &batch->events[batch->count++]);
++	if (valid) {
++		entry->physical_state = to;
++		entry->lru_class = observation->lru_class;
++		entry->transition_seq = table->next_transition_seq;
++		entry->last_request_id = observation->context.request_id;
++		entry->last_priority_seq = observation->context.priority_seq;
++		entry->last_scan_seq = observation->context.scan_seq;
++		if (to == MYKS_PAGE_RECLAIMED || to == MYKS_PAGE_DEAD)
++			myks_page_retire(table, entry, to, action);
++	}
++	spin_unlock_irqrestore(&table->lock, irq_flags);
++	return batch->count != 0;
++}
++
++void myks_page_table_status(struct myks_page_table *table,
++		struct myks_page_status *status)
++{
++	unsigned long flags;
++
++	if (!table || !status)
++		return;
++	spin_lock_irqsave(&table->lock, flags);
++	*status = table->counters;
++	status->enabled = table->enabled;
++	status->tracked_entries = table->nr_entries;
++	spin_unlock_irqrestore(&table->lock, flags);
++}
++
++u32 myks_page_table_entries(struct myks_page_table *table)
++{
++	struct myks_page_status status = { 0 };
++
++	myks_page_table_status(table, &status);
++	return status.tracked_entries;
++}
++
++void myks_page_table_inject_alloc_failure(struct myks_page_table *table,
++		bool fail)
++{
++	if (table)
++		WRITE_ONCE(table->inject_alloc_failure, fail);
++}
++
++void myks_page_config_default(struct myks_page_config *config)
++{
++	if (!config)
++		return;
++	*config = (struct myks_page_config) {
++		.enabled = false,
++#ifdef CONFIG_MEMCG
++		.mode = MYKS_LRU_MODE_MEMCG,
++#else
++		.mode = MYKS_LRU_MODE_GLOBAL,
++#endif
++		.target_memcg_id = 0,
++		.target_nid = -1,
++		.page_type_mask = MYKS_PAGE_TYPE_MASK_ANON |
++				      MYKS_PAGE_TYPE_MASK_FILE,
++		.max_entries = MYKS_PAGE_DEFAULT_ENTRIES,
++	};
++}
++
++static int myks_page_parse_bool(const char *value, bool *parsed)
++{
++	if (!strcmp(value, "0")) {
++		*parsed = false;
++		return 0;
++	}
++	if (!strcmp(value, "1")) {
++		*parsed = true;
++		return 0;
++	}
++	return -EINVAL;
++}
++
++int myks_page_config_parse(const struct myks_page_config *old_config,
++		char *input, struct myks_page_config *new_config)
++{
++	struct myks_page_config parsed;
++	char *token;
++	char *cursor;
++
++	if (!old_config || !input || !new_config)
++		return -EINVAL;
++	parsed = *old_config;
++	cursor = strim(input);
++	while ((token = strsep(&cursor, " \t\n")) != NULL) {
++		char *value;
++
++		if (!*token)
++			continue;
++		value = strchr(token, '=');
++		if (!value)
++			return -EINVAL;
++		*value++ = '\0';
++		if (!strcmp(token, "page_tracking_enabled")) {
++			if (myks_page_parse_bool(value, &parsed.enabled))
++				return -EINVAL;
++		} else if (!strcmp(token, "target_mode")) {
++			if (!strcmp(value, "MEMCG"))
++				parsed.mode = MYKS_LRU_MODE_MEMCG;
++			else if (!strcmp(value, "GLOBAL"))
++				parsed.mode = MYKS_LRU_MODE_GLOBAL;
++			else
++				return -EINVAL;
++		} else if (!strcmp(token, "target_memcg_id")) {
++			if (kstrtou64(value, 0, &parsed.target_memcg_id))
++				return -EINVAL;
++		} else if (!strcmp(token, "target_nid")) {
++			if (kstrtoint(value, 0, &parsed.target_nid))
++				return -EINVAL;
++		} else if (!strcmp(token, "page_type_mask")) {
++			if (kstrtou32(value, 0, &parsed.page_type_mask))
++				return -EINVAL;
++		} else if (!strcmp(token, "max_entries")) {
++			if (kstrtou32(value, 0, &parsed.max_entries))
++				return -EINVAL;
++		} else {
++			return -EINVAL;
++		}
++	}
++	if (old_config->enabled && parsed.enabled &&
++	    (old_config->mode != parsed.mode ||
++	     old_config->target_memcg_id != parsed.target_memcg_id ||
++	     old_config->target_nid != parsed.target_nid ||
++	     old_config->page_type_mask != parsed.page_type_mask ||
++	     old_config->max_entries != parsed.max_entries))
++		return -EBUSY;
++	if (parsed.enabled && !myks_page_config_valid(&parsed))
++		return -EINVAL;
++	if (!parsed.max_entries || parsed.max_entries > MYKS_PAGE_MAX_ENTRIES ||
++	    parsed.page_type_mask & ~(MYKS_PAGE_TYPE_MASK_ANON |
++				      MYKS_PAGE_TYPE_MASK_FILE))
++		return -EINVAL;
++	*new_config = parsed;
++	return 0;
++}
++
++ssize_t myks_page_format_config(const struct myks_page_config *config,
++		char *buffer, size_t length)
++{
++	if (!config || !buffer || !length)
++		return -EINVAL;
++	return scnprintf(buffer, length,
++		"page_tracking_enabled=%u target_mode=%s target_memcg_id=%llu "
++		"target_nid=%d page_type_mask=0x%x max_entries=%u\n",
++		config->enabled,
++		config->mode == MYKS_LRU_MODE_MEMCG ? "MEMCG" : "GLOBAL",
++		config->target_memcg_id, config->target_nid,
++		config->page_type_mask, config->max_entries);
++}
++
++ssize_t myks_page_format_status(const struct myks_page_status *status,
++		char *buffer, size_t length)
++{
++	if (!status || !buffer || !length)
++		return -EINVAL;
++	return scnprintf(buffer, length,
++		"page_tracking_enabled=%u tracked_entries=%u max_entries=%u "
++		"events_total=%llu alloc_fail=%llu capacity_drop=%llu "
++		"late_discovery=%llu invalid_transition=%llu "
++		"duplicate_terminal=%llu reuse_detected=%llu "
++		"mglru_rejected=%llu last_error=%d\n",
++		status->enabled, status->tracked_entries, status->max_entries,
++		status->events_total, status->alloc_fail, status->capacity_drop,
++		status->late_discovery, status->invalid_transition,
++		status->duplicate_terminal, status->reuse_detected,
++		status->mglru_rejected, status->last_error);
++}
++
++#ifdef CONFIG_MYSELF_KSWAPD_PAGE_LIFECYCLE
++static DEFINE_MUTEX(myks_page_global_lock);
++static struct myks_page_table myks_page_global_table;
++static bool myks_page_global_initialized;
++
++static void myks_page_lifecycle_runtime_reject(void)
++{
++	struct myks_page_table *table = &myks_page_global_table;
++	unsigned long flags;
++
++	spin_lock_irqsave(&table->lock, flags);
++	if (table->enabled) {
++		table->enabled = false;
++		table->counters.enabled = false;
++		table->counters.mglru_rejected++;
++		table->counters.last_error = -EOPNOTSUPP;
++	}
++	spin_unlock_irqrestore(&table->lock, flags);
++}
++
++int myks_page_lifecycle_enable(const struct myks_page_config *config)
++{
++	int ret;
++
++	mutex_lock(&myks_page_global_lock);
++	if (!myks_page_global_initialized) {
++		myks_page_table_init(&myks_page_global_table);
++		WRITE_ONCE(myks_page_global_initialized, true);
++	}
++	ret = myks_page_table_enable(&myks_page_global_table, config,
++				     lru_gen_enabled());
++	mutex_unlock(&myks_page_global_lock);
++	return ret;
++}
++
++bool myks_page_lifecycle_active(void)
++{
++	return READ_ONCE(myks_page_global_table.enabled);
++}
++
++void myks_page_lifecycle_disable(void)
++{
++	mutex_lock(&myks_page_global_lock);
++	if (myks_page_global_initialized)
++		myks_page_table_disable(&myks_page_global_table);
++	mutex_unlock(&myks_page_global_lock);
++}
++
++void myks_page_lifecycle_status(struct myks_page_status *status)
++{
++	if (!status)
++		return;
++	if (!READ_ONCE(myks_page_global_initialized)) {
++		*status = (struct myks_page_status) { 0 };
++		return;
++	}
++	myks_page_table_status(&myks_page_global_table, status);
++}
++
++static enum myks_page_lru_class myks_page_folio_lru_class(struct folio *folio)
++{
++	if (folio_is_file_lru(folio))
++		return folio_test_active(folio) ? MYKS_LRU_ACTIVE_FILE :
++						  MYKS_LRU_INACTIVE_FILE;
++	return folio_test_active(folio) ? MYKS_LRU_ACTIVE_ANON :
++					MYKS_LRU_INACTIVE_ANON;
++}
++
++static u64 myks_page_folio_memcg_id(struct folio *folio)
++{
++#ifdef CONFIG_MEMCG
++	struct mem_cgroup *memcg = folio_memcg(folio);
++
++	return memcg && memcg->css.cgroup ? cgroup_id(memcg->css.cgroup) : 0;
++#else
++	return MYKS_SHADOW_ROOT_MEMCG_ID;
++#endif
++}
++
++void myks_page_lifecycle_observe(struct folio *folio,
++		enum myks_page_action action,
++		const struct myks_reclaim_observer_ctx *reclaim_ctx, u32 reason)
++{
++	struct myks_page_event_batch batch;
++	struct myks_page_observation observation;
++	u8 i;
++
++	if (!folio || !READ_ONCE(myks_page_global_table.enabled))
++		return;
++	if (unlikely(lru_gen_enabled())) {
++		myks_page_lifecycle_runtime_reject();
++		return;
++	}
++	observation = (struct myks_page_observation) {
++		.internal_key = folio_pfn(folio),
++		.order = folio_order(folio),
++		.nr_pages = folio_nr_pages(folio),
++		.memcg_id = myks_page_folio_memcg_id(folio),
++		.nid = folio_nid(folio),
++		.page_type = folio_is_file_lru(folio) ? MYKS_PAGE_FILE :
++							MYKS_PAGE_ANON,
++		.lru_class = myks_page_folio_lru_class(folio),
++		.action = action,
++		.context = {
++#ifdef CONFIG_MEMCG
++			.mode = MYKS_LRU_MODE_MEMCG,
++#else
++			.mode = MYKS_LRU_MODE_GLOBAL,
++#endif
++			.reclaim_source = MYKS_RECLAIM_UNKNOWN,
++		},
++		.reason = reason,
++	};
++	if (reclaim_ctx && reclaim_ctx->active &&
++	    reclaim_ctx->priority_seq && reclaim_ctx->current_scan_seq) {
++		observation.context.request_id = reclaim_ctx->request_id;
++		observation.context.priority_seq = reclaim_ctx->priority_seq;
++		observation.context.scan_seq = reclaim_ctx->current_scan_seq;
++		observation.context.reclaim_source = reclaim_ctx->source;
++		if (reclaim_ctx->identity_valid)
++			observation.context.mode = reclaim_ctx->identity.key.mode;
++	}
++	if (!myks_page_table_observe(&myks_page_global_table, &observation,
++				     &batch))
++		return;
++	for (i = 0; i < batch.count; i++)
++		trace_myself_kswapd_page_lifecycle(&batch.events[i]);
++}
++#endif
++// #lzx--------------------------- Linux L0.3A 页表实现结束 ---------------------------
+diff --git a/Linux6.17/mm/myself_kswapd/debugfs/lruvec_debugfs.c b/Linux6.17/mm/myself_kswapd/debugfs/lruvec_debugfs.c
+index 3c035e38b..f28467a72 100644
+--- a/Linux6.17/mm/myself_kswapd/debugfs/lruvec_debugfs.c
++++ b/Linux6.17/mm/myself_kswapd/debugfs/lruvec_debugfs.c
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0
+ 
+ #include "../include/lruvec_observer.h"
++#include "../include/page_lifecycle.h"
+ 
+ #include <linux/cgroup.h>
+ #include <linux/debugfs.h>
+@@ -23,6 +24,9 @@ static struct myks_observer myks_debugfs_observer;
+ static struct myks_debugfs_sample_cache myks_debugfs_sample_cache;
+ static struct myks_heartbeat myks_debugfs_heartbeat;
+ static struct dentry *myks_debugfs_root;
++#ifdef CONFIG_MYSELF_KSWAPD_PAGE_LIFECYCLE
++static struct myks_page_config myks_page_debugfs_config;
++#endif
+ 
+ static int myks_debugfs_parse_bool(const char *value, bool *out)
+ {
+@@ -556,6 +560,111 @@ static const struct file_operations myks_debugfs_samples_fops = {
+ 	.llseek = default_llseek,
+ };
+ 
++#ifdef CONFIG_MYSELF_KSWAPD_PAGE_LIFECYCLE
++// #lzx--------------------------- L0.3A 有界页观测 debugfs ---------------------------
++struct myks_page_status_snapshot {
++	char buffer[1024];
++	size_t length;
++};
++
++static ssize_t myks_page_debugfs_config_read(struct file *file,
++		char __user *buf, size_t count, loff_t *ppos)
++{
++	struct myks_page_config config;
++	char output[256];
++	ssize_t length;
++
++	mutex_lock(&myks_debugfs_config_lock);
++	config = myks_page_debugfs_config;
++	mutex_unlock(&myks_debugfs_config_lock);
++	length = myks_page_format_config(&config, output, sizeof(output));
++	if (length < 0)
++		return length;
++	return simple_read_from_buffer(buf, count, ppos, output, length);
++}
++
++static ssize_t myks_page_debugfs_config_write(struct file *file,
++		const char __user *buf, size_t count, loff_t *ppos)
++{
++	struct myks_page_config parsed;
++	char *input;
++	int ret;
++
++	if (!count || count > 1023)
++		return -EINVAL;
++	input = memdup_user_nul(buf, count);
++	if (IS_ERR(input))
++		return PTR_ERR(input);
++	mutex_lock(&myks_debugfs_config_lock);
++	ret = myks_page_config_parse(&myks_page_debugfs_config, input, &parsed);
++	if (!ret && !myks_page_debugfs_config.enabled && parsed.enabled)
++		ret = myks_page_lifecycle_enable(&parsed);
++	if (!ret && myks_page_debugfs_config.enabled && !parsed.enabled)
++		myks_page_lifecycle_disable();
++	if (!ret)
++		myks_page_debugfs_config = parsed;
++	mutex_unlock(&myks_debugfs_config_lock);
++	kfree(input);
++	return ret ? ret : count;
++}
++
++static int myks_page_debugfs_status_open(struct inode *inode, struct file *file)
++{
++	struct myks_page_status_snapshot *snapshot;
++	struct myks_page_status status;
++	ssize_t length;
++
++	snapshot = kzalloc(sizeof(*snapshot), GFP_KERNEL);
++	if (!snapshot)
++		return -ENOMEM;
++	myks_page_lifecycle_status(&status);
++	length = myks_page_format_status(&status, snapshot->buffer,
++					 sizeof(snapshot->buffer));
++	if (length < 0) {
++		kfree(snapshot);
++		return length;
++	}
++	snapshot->length = length;
++	file->private_data = snapshot;
++	return 0;
++}
++
++static ssize_t myks_page_debugfs_status_read(struct file *file,
++		char __user *buf, size_t count, loff_t *ppos)
++{
++	struct myks_page_status_snapshot *snapshot = file->private_data;
++
++	return simple_read_from_buffer(buf, count, ppos, snapshot->buffer,
++				       snapshot->length);
++}
++
++static int myks_page_debugfs_status_release(struct inode *inode,
++		struct file *file)
++{
++	kfree(file->private_data);
++	file->private_data = NULL;
++	return 0;
++}
++
++static const struct file_operations myks_page_debugfs_config_fops = {
++	.owner = THIS_MODULE,
++	.open = simple_open,
++	.read = myks_page_debugfs_config_read,
++	.write = myks_page_debugfs_config_write,
++	.llseek = default_llseek,
++};
++
++static const struct file_operations myks_page_debugfs_status_fops = {
++	.owner = THIS_MODULE,
++	.open = myks_page_debugfs_status_open,
++	.read = myks_page_debugfs_status_read,
++	.release = myks_page_debugfs_status_release,
++	.llseek = default_llseek,
++};
++
++// #lzx--------------------------- L0.3A 有界页观测 debugfs 结束 ---------------------------
++#endif
++
+ static int __init myks_debugfs_init(void)
+ {
+ 	myks_debugfs_config_default(&myks_debugfs_config);
+@@ -563,6 +672,9 @@ static int __init myks_debugfs_init(void)
+ 	myks_debugfs_sample_cache_init(&myks_debugfs_sample_cache);
+ 	myks_heartbeat_init(&myks_debugfs_heartbeat, &myks_debugfs_observer,
+ 			myks_debugfs_heartbeat_collect, NULL);
++#ifdef CONFIG_MYSELF_KSWAPD_PAGE_LIFECYCLE
++	myks_page_config_default(&myks_page_debugfs_config);
++#endif
+ 	myks_debugfs_root = debugfs_create_dir("myself_kswapd", NULL);
+ 	if (IS_ERR_OR_NULL(myks_debugfs_root))
+ 		return 0;
+@@ -574,6 +686,12 @@ static int __init myks_debugfs_init(void)
+ 				&myks_debugfs_snapshot_fops);
+ 	debugfs_create_file("samples", 0444, myks_debugfs_root, NULL,
+ 				&myks_debugfs_samples_fops);
++#ifdef CONFIG_MYSELF_KSWAPD_PAGE_LIFECYCLE
++	debugfs_create_file("page_lifecycle_config", 0644, myks_debugfs_root,
++			    NULL, &myks_page_debugfs_config_fops);
++	debugfs_create_file("page_lifecycle_status", 0444, myks_debugfs_root,
++			    NULL, &myks_page_debugfs_status_fops);
++#endif
+ 	return 0;
+ }
+ late_initcall(myks_debugfs_init);
+diff --git a/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h b/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h
+index 2db24af41..644b613fe 100644
+--- a/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h
++++ b/Linux6.17/mm/myself_kswapd/include/lruvec_observer.h
+@@ -114,6 +114,7 @@ struct myks_reclaim_observer_ctx {
+ 	u64 request_id;
+ 	u64 priority_seq;
+ 	u64 next_scan_seq;
++	u64 current_scan_seq;
+ 	enum myks_reclaim_source source;
+ 	bool active;
+ 	bool identity_valid;
+diff --git a/Linux6.17/mm/myself_kswapd/include/page_lifecycle.h b/Linux6.17/mm/myself_kswapd/include/page_lifecycle.h
+new file mode 100644
+index 000000000..ddacd264d
+--- /dev/null
++++ b/Linux6.17/mm/myself_kswapd/include/page_lifecycle.h
+@@ -0,0 +1,244 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef _MM_MYSELF_KSWAPD_PAGE_LIFECYCLE_H
++#define _MM_MYSELF_KSWAPD_PAGE_LIFECYCLE_H
++
++#include <linux/errno.h>
++#include <linux/list.h>
++#include <linux/spinlock.h>
++#include <linux/types.h>
++
++#include "lruvec_observer.h"
++
++struct folio;
++
++// #lzx: Linux L0.3A bounded physical page state contract
++#define MYKS_PAGE_MAX_ENTRIES		4096U
++#define MYKS_PAGE_DEFAULT_ENTRIES	1024U
++#define MYKS_PAGE_EVENT_BATCH_MAX	2U
++
++#define MYKS_PAGE_TYPE_MASK_ANON	BIT(0)
++#define MYKS_PAGE_TYPE_MASK_FILE	BIT(1)
++
++#define MYKS_PAGE_FLAG_LATE_DISCOVERY	BIT(0)
++#define MYKS_PAGE_FLAG_UNKNOWN_PREVIOUS	BIT(1)
++#define MYKS_PAGE_FLAG_DUPLICATE_TERMINAL BIT(2)
++#define MYKS_PAGE_FLAG_INVALID_TRANSITION BIT(3)
++#define MYKS_PAGE_FLAG_REUSE_DETECTED	BIT(4)
++#define MYKS_PAGE_FLAG_DOMAIN_CHANGED	BIT(5)
++
++enum myks_page_type {
++	MYKS_PAGE_ANON = 0,
++	MYKS_PAGE_FILE,
++	MYKS_PAGE_TYPE_UNKNOWN,
++};
++
++enum myks_page_lru_class {
++	MYKS_LRU_INACTIVE_ANON = 0,
++	MYKS_LRU_ACTIVE_ANON,
++	MYKS_LRU_INACTIVE_FILE,
++	MYKS_LRU_ACTIVE_FILE,
++	MYKS_LRU_CLASS_NONE,
++};
++
++enum myks_page_state {
++	MYKS_PAGE_UNKNOWN = 0,
++	MYKS_PAGE_ON_LRU_INACTIVE,
++	MYKS_PAGE_ON_LRU_ACTIVE,
++	MYKS_PAGE_ISOLATED,
++	MYKS_PAGE_RECLAIMED,
++	MYKS_PAGE_DEAD,
++};
++
++enum myks_page_action {
++	MYKS_PAGE_DISCOVER = 0,
++	MYKS_PAGE_ADD_LRU,
++	MYKS_PAGE_ACTIVATE,
++	MYKS_PAGE_DEACTIVATE,
++	MYKS_PAGE_ISOLATE,
++	MYKS_PAGE_PUTBACK,
++	MYKS_PAGE_RECLAIM,
++	MYKS_PAGE_FREE,
++	MYKS_PAGE_MIGRATE,
++	MYKS_PAGE_DOMAIN_CHANGE,
++};
++
++struct myks_page_token {
++	u64 page_id;
++	u32 lifecycle_gen;
++	u32 order;
++};
++
++struct myks_page_context {
++	u64 request_id;
++	u64 priority_seq;
++	u64 scan_seq;
++	enum myks_reclaim_source reclaim_source;
++	enum myks_lru_mode mode;
++};
++
++struct myks_shadow_page {
++	struct hlist_node hash_node;
++	struct list_head free_node;
++	u64 internal_key;
++	struct myks_page_token token;
++	u64 memcg_id;
++	s32 nid;
++	u8 page_type;
++	u8 lru_class;
++	u8 physical_state;
++	u8 flags;
++	u64 created_seq;
++	u64 transition_seq;
++	u64 last_request_id;
++	u64 last_priority_seq;
++	u64 last_scan_seq;
++};
++
++struct myks_page_tombstone {
++	u64 internal_key;
++	struct myks_page_token token;
++	u8 terminal_state;
++	u8 terminal_action;
++	bool valid;
++};
++
++struct myks_page_config {
++	bool enabled;
++	enum myks_lru_mode mode;
++	u64 target_memcg_id;
++	s32 target_nid;
++	u32 page_type_mask;
++	u32 max_entries;
++};
++
++struct myks_page_status {
++	bool enabled;
++	u32 tracked_entries;
++	u32 max_entries;
++	u64 events_total;
++	u64 alloc_fail;
++	u64 capacity_drop;
++	u64 late_discovery;
++	u64 invalid_transition;
++	u64 duplicate_terminal;
++	u64 reuse_detected;
++	u64 mglru_rejected;
++	s32 last_error;
++};
++
++struct myks_page_event_record {
++	u64 transition_seq;
++	enum myks_page_action action;
++	struct myks_page_token token;
++	u32 nr_pages;
++	enum myks_page_type page_type;
++	enum myks_page_state from_state;
++	enum myks_page_state to_state;
++	enum myks_page_lru_class lru_class;
++	enum myks_lru_mode mode;
++	u64 memcg_id;
++	s32 nid;
++	u64 request_id;
++	u64 priority_seq;
++	u64 scan_seq;
++	enum myks_reclaim_source reclaim_source;
++	u32 reason;
++	u32 flags;
++};
++
++struct myks_page_event_batch {
++	u8 count;
++	struct myks_page_event_record events[MYKS_PAGE_EVENT_BATCH_MAX];
++};
++
++struct myks_page_observation {
++	u64 internal_key;
++	u32 order;
++	u32 nr_pages;
++	u64 memcg_id;
++	s32 nid;
++	enum myks_page_type page_type;
++	enum myks_page_lru_class lru_class;
++	enum myks_page_action action;
++	struct myks_page_context context;
++	u32 reason;
++};
++
++struct myks_page_table {
++	/* Protects all table storage, entries, tombstones and counters. */
++	spinlock_t lock;
++	struct myks_shadow_page *entries;
++	struct hlist_head *buckets;
++	struct myks_page_tombstone *tombstones;
++	struct list_head free_entries;
++	u32 bucket_count;
++	u32 tombstone_next;
++	u32 nr_entries;
++	struct myks_page_config config;
++	struct myks_page_status counters;
++	u64 next_page_id;
++	u64 next_transition_seq;
++	bool enabled;
++	bool inject_alloc_failure;
++};
++
++u64 myks_page_head_key(u64 pfn, u32 order);
++void myks_page_table_init(struct myks_page_table *table);
++int myks_page_table_enable(struct myks_page_table *table,
++		const struct myks_page_config *config, bool mglru_enabled);
++void myks_page_table_disable(struct myks_page_table *table);
++bool myks_page_table_observe(struct myks_page_table *table,
++		const struct myks_page_observation *observation,
++		struct myks_page_event_batch *batch);
++void myks_page_table_status(struct myks_page_table *table,
++		struct myks_page_status *status);
++u32 myks_page_table_entries(struct myks_page_table *table);
++void myks_page_table_inject_alloc_failure(struct myks_page_table *table,
++		bool fail);
++void myks_page_config_default(struct myks_page_config *config);
++int myks_page_config_parse(const struct myks_page_config *old_config,
++		char *input, struct myks_page_config *new_config);
++ssize_t myks_page_format_config(const struct myks_page_config *config,
++		char *buffer, size_t length);
++ssize_t myks_page_format_status(const struct myks_page_status *status,
++		char *buffer, size_t length);
++
++#ifdef CONFIG_MYSELF_KSWAPD_PAGE_LIFECYCLE
++int myks_page_lifecycle_enable(const struct myks_page_config *config);
++void myks_page_lifecycle_disable(void);
++bool myks_page_lifecycle_active(void);
++void myks_page_lifecycle_status(struct myks_page_status *status);
++void myks_page_lifecycle_observe(struct folio *folio,
++		enum myks_page_action action,
++		const struct myks_reclaim_observer_ctx *reclaim_ctx, u32 reason);
++#else
++static inline int myks_page_lifecycle_enable(
++		const struct myks_page_config *config)
++{
++	return -EOPNOTSUPP;
++}
++
++static inline void myks_page_lifecycle_disable(void)
++{
++}
++
++static inline bool myks_page_lifecycle_active(void)
++{
++	return false;
++}
++
++static inline void myks_page_lifecycle_status(struct myks_page_status *status)
++{
++	if (status)
++		*status = (struct myks_page_status) { 0 };
++}
++
++static inline void myks_page_lifecycle_observe(struct folio *folio,
++		enum myks_page_action action,
++		const struct myks_reclaim_observer_ctx *reclaim_ctx, u32 reason)
++{
++}
++#endif
++// #lzx--------------------------- Linux L0.3A 页状态契约结束 ---------------------------
++
++#endif /* _MM_MYSELF_KSWAPD_PAGE_LIFECYCLE_H */
+diff --git a/Linux6.17/mm/myself_kswapd/tests/Makefile b/Linux6.17/mm/myself_kswapd/tests/Makefile
+index 244d2de44..65656f162 100644
+--- a/Linux6.17/mm/myself_kswapd/tests/Makefile
++++ b/Linux6.17/mm/myself_kswapd/tests/Makefile
+@@ -1,3 +1,4 @@
+ # SPDX-License-Identifier: GPL-2.0
+ 
+ obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += lruvec_observer_test.o
++obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += page_lifecycle_test.o
+diff --git a/Linux6.17/mm/myself_kswapd/tests/page_lifecycle_test.c b/Linux6.17/mm/myself_kswapd/tests/page_lifecycle_test.c
+new file mode 100644
+index 000000000..81108d98c
+--- /dev/null
++++ b/Linux6.17/mm/myself_kswapd/tests/page_lifecycle_test.c
+@@ -0,0 +1,293 @@
++// SPDX-License-Identifier: GPL-2.0
++
++#include <kunit/test.h>
++
++#include "../include/page_lifecycle.h"
++
++// #lzx: Linux L0.3A bounded page lifecycle state tests
++static struct myks_page_config myks_test_config(u32 max_entries)
++{
++	return (struct myks_page_config) {
++		.enabled = true,
++		.mode = MYKS_LRU_MODE_MEMCG,
++		.target_memcg_id = 42,
++		.target_nid = 1,
++		.page_type_mask = MYKS_PAGE_TYPE_MASK_ANON |
++				      MYKS_PAGE_TYPE_MASK_FILE,
++		.max_entries = max_entries,
++	};
++}
++
++static struct myks_page_observation myks_test_observation(
++		u64 key, enum myks_page_action action)
++{
++	return (struct myks_page_observation) {
++		.internal_key = key,
++		.order = 0,
++		.nr_pages = 1,
++		.memcg_id = 42,
++		.nid = 1,
++		.page_type = MYKS_PAGE_ANON,
++		.lru_class = MYKS_LRU_INACTIVE_ANON,
++		.action = action,
++		.context = {
++			.mode = MYKS_LRU_MODE_MEMCG,
++			.reclaim_source = MYKS_RECLAIM_UNKNOWN,
++		},
++	};
++}
++
++static void myks_page_legal_transition_test(struct kunit *test)
++{
++	struct myks_page_table table;
++	struct myks_page_event_batch batch;
++	struct myks_page_config config = myks_test_config(4);
++	struct myks_page_observation observation =
++		myks_test_observation(100, MYKS_PAGE_ADD_LRU);
++
++	myks_page_table_init(&table);
++	KUNIT_ASSERT_EQ(test, myks_page_table_enable(&table, &config, false), 0);
++	KUNIT_ASSERT_TRUE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	KUNIT_EXPECT_EQ(test, batch.events[0].from_state, MYKS_PAGE_UNKNOWN);
++	KUNIT_EXPECT_EQ(test, batch.events[0].to_state,
++			MYKS_PAGE_ON_LRU_INACTIVE);
++
++	observation.action = MYKS_PAGE_ACTIVATE;
++	observation.lru_class = MYKS_LRU_ACTIVE_ANON;
++	KUNIT_ASSERT_TRUE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	KUNIT_EXPECT_EQ(test, batch.events[0].to_state,
++			MYKS_PAGE_ON_LRU_ACTIVE);
++
++	observation.action = MYKS_PAGE_DEACTIVATE;
++	observation.lru_class = MYKS_LRU_INACTIVE_ANON;
++	KUNIT_ASSERT_TRUE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	KUNIT_EXPECT_EQ(test, batch.events[0].to_state,
++			MYKS_PAGE_ON_LRU_INACTIVE);
++	myks_page_table_disable(&table);
++}
++
++static void myks_page_isolate_putback_context_test(struct kunit *test)
++{
++	struct myks_page_table table;
++	struct myks_page_event_batch batch;
++	struct myks_page_config config = myks_test_config(2);
++	struct myks_page_observation observation =
++		myks_test_observation(101, MYKS_PAGE_ADD_LRU);
++	u64 page_id;
++
++	myks_page_table_init(&table);
++	KUNIT_ASSERT_EQ(test, myks_page_table_enable(&table, &config, false), 0);
++	KUNIT_ASSERT_TRUE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	page_id = batch.events[0].token.page_id;
++
++	observation.action = MYKS_PAGE_ISOLATE;
++	observation.context.request_id = 7;
++	observation.context.priority_seq = 2;
++	observation.context.scan_seq = 3;
++	observation.context.reclaim_source = MYKS_RECLAIM_KSWAPD;
++	KUNIT_ASSERT_TRUE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	KUNIT_EXPECT_EQ(test, batch.events[0].request_id, 7ULL);
++	KUNIT_EXPECT_EQ(test, batch.events[0].scan_seq, 3ULL);
++
++	observation.action = MYKS_PAGE_PUTBACK;
++	KUNIT_ASSERT_TRUE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	KUNIT_EXPECT_EQ(test, batch.events[0].token.page_id, page_id);
++	KUNIT_EXPECT_EQ(test, batch.events[0].from_state,
++			MYKS_PAGE_ISOLATED);
++	myks_page_table_disable(&table);
++}
++
++static void myks_page_late_discovery_reuse_terminal_test(struct kunit *test)
++{
++	struct myks_page_table table;
++	struct myks_page_event_batch batch;
++	struct myks_page_config config = myks_test_config(2);
++	struct myks_page_observation observation =
++		myks_test_observation(102, MYKS_PAGE_ISOLATE);
++	u64 first_page_id;
++	u32 first_generation;
++
++	myks_page_table_init(&table);
++	KUNIT_ASSERT_EQ(test, myks_page_table_enable(&table, &config, false), 0);
++	KUNIT_ASSERT_TRUE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	KUNIT_EXPECT_TRUE(test,
++		batch.events[0].flags & MYKS_PAGE_FLAG_LATE_DISCOVERY);
++	first_page_id = batch.events[0].token.page_id;
++	first_generation = batch.events[0].token.lifecycle_gen;
++
++	observation.action = MYKS_PAGE_RECLAIM;
++	KUNIT_ASSERT_TRUE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	KUNIT_EXPECT_EQ(test, myks_page_table_entries(&table), 0U);
++
++	KUNIT_ASSERT_TRUE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	KUNIT_EXPECT_TRUE(test,
++		batch.events[0].flags & MYKS_PAGE_FLAG_DUPLICATE_TERMINAL);
++
++	observation.action = MYKS_PAGE_ADD_LRU;
++	KUNIT_ASSERT_TRUE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	KUNIT_EXPECT_NE(test, batch.events[0].token.page_id, first_page_id);
++	KUNIT_EXPECT_GT(test, batch.events[0].token.lifecycle_gen,
++			first_generation);
++	KUNIT_EXPECT_TRUE(test,
++		batch.events[0].flags & MYKS_PAGE_FLAG_REUSE_DETECTED);
++	myks_page_table_disable(&table);
++}
++
++static void myks_page_capacity_and_filter_test(struct kunit *test)
++{
++	struct myks_page_table table;
++	struct myks_page_event_batch batch;
++	struct myks_page_config config = myks_test_config(1);
++	struct myks_page_observation observation =
++		myks_test_observation(1, MYKS_PAGE_ADD_LRU);
++	struct myks_page_status status;
++
++	myks_page_table_init(&table);
++	KUNIT_ASSERT_EQ(test, myks_page_table_enable(&table, &config, false), 0);
++	KUNIT_ASSERT_TRUE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	observation.internal_key = 2;
++	KUNIT_EXPECT_FALSE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	myks_page_table_status(&table, &status);
++	KUNIT_EXPECT_EQ(test, status.capacity_drop, 1ULL);
++
++	observation.internal_key = 3;
++	observation.memcg_id = 99;
++	KUNIT_EXPECT_FALSE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	myks_page_table_status(&table, &status);
++	KUNIT_EXPECT_EQ(test, status.capacity_drop, 1ULL);
++	observation.memcg_id = 42;
++	observation.nid = 2;
++	KUNIT_EXPECT_FALSE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	observation.nid = 1;
++	observation.page_type = MYKS_PAGE_TYPE_UNKNOWN;
++	KUNIT_EXPECT_FALSE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	myks_page_table_disable(&table);
++}
++
++static void myks_page_invalid_transition_test(struct kunit *test)
++{
++	struct myks_page_table table;
++	struct myks_page_event_batch batch;
++	struct myks_page_config config = myks_test_config(2);
++	struct myks_page_observation observation =
++		myks_test_observation(103, MYKS_PAGE_ADD_LRU);
++	struct myks_page_status status;
++
++	myks_page_table_init(&table);
++	KUNIT_ASSERT_EQ(test, myks_page_table_enable(&table, &config, false), 0);
++	KUNIT_ASSERT_TRUE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	observation.action = MYKS_PAGE_DEACTIVATE;
++	KUNIT_ASSERT_TRUE(test,
++		myks_page_table_observe(&table, &observation, &batch));
++	KUNIT_EXPECT_TRUE(test,
++		batch.events[0].flags & MYKS_PAGE_FLAG_INVALID_TRANSITION);
++	myks_page_table_status(&table, &status);
++	KUNIT_EXPECT_EQ(test, status.invalid_transition, 1ULL);
++	myks_page_table_disable(&table);
++}
++
++static void myks_page_enable_guard_clear_test(struct kunit *test)
++{
++	struct myks_page_table table;
++	struct myks_page_config config = myks_test_config(2);
++	struct myks_page_status status;
++
++	myks_page_table_init(&table);
++	KUNIT_EXPECT_EQ(test, myks_page_table_enable(&table, &config, true),
++			-EOPNOTSUPP);
++	myks_page_table_status(&table, &status);
++	KUNIT_EXPECT_EQ(test, status.mglru_rejected, 1ULL);
++
++	config.target_nid = -1;
++	KUNIT_EXPECT_EQ(test, myks_page_table_enable(&table, &config, false),
++			-EINVAL);
++	myks_page_table_status(&table, &status);
++	KUNIT_EXPECT_EQ(test, status.last_error, -EINVAL);
++	config = myks_test_config(2);
++	KUNIT_ASSERT_EQ(test, myks_page_table_enable(&table, &config, false), 0);
++	myks_page_table_disable(&table);
++	myks_page_table_status(&table, &status);
++	KUNIT_EXPECT_FALSE(test, status.enabled);
++	KUNIT_EXPECT_EQ(test, status.tracked_entries, 0U);
++}
++
++static void myks_page_alloc_failure_and_compound_key_test(struct kunit *test)
++{
++	struct myks_page_table table;
++	struct myks_page_config config = myks_test_config(2);
++	struct myks_page_status status;
++
++	myks_page_table_init(&table);
++	myks_page_table_inject_alloc_failure(&table, true);
++	KUNIT_EXPECT_EQ(test, myks_page_table_enable(&table, &config, false),
++			-ENOMEM);
++	myks_page_table_status(&table, &status);
++	KUNIT_EXPECT_EQ(test, status.alloc_fail, 1ULL);
++
++	KUNIT_EXPECT_EQ(test, myks_page_head_key(0x1000, 0), 0x1000ULL);
++	KUNIT_EXPECT_EQ(test, myks_page_head_key(0x1007, 3), 0x1000ULL);
++}
++
++static void myks_page_config_parser_test(struct kunit *test)
++{
++	struct myks_page_config config;
++	struct myks_page_config parsed;
++	char valid[] = "target_mode=MEMCG target_memcg_id=42 target_nid=1 "
++		       "page_type_mask=0x3 max_entries=64 page_tracking_enabled=1";
++	char unknown[] = "unbounded_dump=1";
++	char missing_target[] = "page_tracking_enabled=1";
++	char reconfigure[] = "max_entries=32";
++
++	myks_page_config_default(&config);
++	KUNIT_EXPECT_FALSE(test, config.enabled);
++	KUNIT_EXPECT_EQ(test, config.target_nid, -1);
++	KUNIT_ASSERT_EQ(test,
++		myks_page_config_parse(&config, valid, &parsed), 0);
++	KUNIT_EXPECT_TRUE(test, parsed.enabled);
++	KUNIT_EXPECT_EQ(test, parsed.max_entries, 64U);
++
++	myks_page_config_default(&config);
++	KUNIT_EXPECT_EQ(test,
++		myks_page_config_parse(&config, unknown, &parsed), -EINVAL);
++	KUNIT_EXPECT_EQ(test,
++		myks_page_config_parse(&config, missing_target, &parsed), -EINVAL);
++	config = myks_test_config(64);
++	KUNIT_EXPECT_EQ(test,
++		myks_page_config_parse(&config, reconfigure, &parsed), -EBUSY);
++}
++
++static struct kunit_case myks_page_lifecycle_test_cases[] = {
++	KUNIT_CASE(myks_page_legal_transition_test),
++	KUNIT_CASE(myks_page_isolate_putback_context_test),
++	KUNIT_CASE(myks_page_late_discovery_reuse_terminal_test),
++	KUNIT_CASE(myks_page_capacity_and_filter_test),
++	KUNIT_CASE(myks_page_invalid_transition_test),
++	KUNIT_CASE(myks_page_enable_guard_clear_test),
++	KUNIT_CASE(myks_page_alloc_failure_and_compound_key_test),
++	KUNIT_CASE(myks_page_config_parser_test),
++	{}
++};
++
++static struct kunit_suite myks_page_lifecycle_test_suite = {
++	.name = "myks-page-lifecycle",
++	.test_cases = myks_page_lifecycle_test_cases,
++};
++
++kunit_test_suite(myks_page_lifecycle_test_suite);
++// #lzx--------------------------- Linux L0.3A 状态测试结束 ---------------------------
