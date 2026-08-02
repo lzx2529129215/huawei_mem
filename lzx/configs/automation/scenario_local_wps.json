@@ -33,7 +33,7 @@
     {
       "type": "shell",
       "name": "firefox",
-      "command": "mkdir -p /home/lzx/firefox_profiles/automation && env -u WAYLAND_DISPLAY MOZ_ENABLE_WAYLAND=0 GDK_BACKEND=x11 firefox --new-instance --no-remote -profile /home/lzx/firefox_profiles/automation --new-window about:blank",
+      "command": "mkdir -p \"${HOME}/firefox_profiles/automation\" && env -u WAYLAND_DISPLAY MOZ_ENABLE_WAYLAND=0 GDK_BACKEND=x11 firefox --new-instance --no-remote -profile \"${HOME}/firefox_profiles/automation\" --new-window about:blank",
       "optional": true
     },
     {
@@ -102,7 +102,7 @@
       "name": "firefox",
       "class": "firefox|Firefox",
       "cmdline_contains": [
-        "/home/lzx/firefox_profiles/automation"
+        "${HOME}/firefox_profiles/automation"
       ],
       "wait_after_window_close": 2,
       "force_after_seconds": 3,

@@ -2,6 +2,14 @@
 
 本目录用于 Linux 桌面应用自动化：打开应用、执行点击/按键/输入/拖拽、关闭应用、切换应用。
 
+WPS 0010–0070 七个性能场景、样本准备和结果验证工具已合并到本目录，详见
+[`README_WPS.md`](README_WPS.md)。统一入口为：
+
+```bash
+cd /home/lzxxxxxx/桌面/huawei/huawei_mem/lzx
+automation/run_wps_case.sh 0070 --dry-run
+```
+
 ## 依赖
 
 基础启动/关闭只需要 Python。窗口聚焦、点击、按键需要 `xdotool`：

@@ -8,7 +8,7 @@
     "WPS_PPT_BODY_Y": "0.56"
   },
   "actions": [
-    {"type": "launch", "name": "wps_writer", "scope_name": "wps", "command": "wps", "label": "WPS_WRITER_LAUNCH"},
+    {"type": "launch", "name": "wps_writer", "command": "wps", "label": "WPS_WRITER_LAUNCH"},
     {"type": "wait_window", "name": "wps", "class": "wps|wpsoffice", "timeout": 20},
     {"type": "wait", "seconds": 20, "label": "WPS_WORD_HOME_READY"},
     {"type": "click", "x": 270, "y": 158, "label": "WPS_HOME_NEW_WORD"},
@@ -26,7 +26,7 @@
     {"type": "close", "name": "wps_writer", "class": "wps|wpsoffice", "process_names": ["wpsoffice", "wps"], "path_contains": ["/opt/kingsoft/wps-office"], "force_after_seconds": 3, "label": "WPS_WORD_CLOSE"},
     {"type": "wait", "seconds": 2},
 
-    {"type": "launch", "name": "wps_presentation", "scope_name": "wps", "command": "wpp", "label": "WPS_PRESENTATION_LAUNCH"},
+    {"type": "launch", "name": "wps_presentation", "command": "wpp", "label": "WPS_PRESENTATION_LAUNCH"},
     {"type": "wait_window", "name": "wps", "class": "wpp|wps|wpsoffice", "timeout": 20},
     {"type": "wait", "seconds": 20, "label": "WPS_PPT_HOME_READY"},
     {"type": "click", "x": 270, "y": 158, "label": "WPS_HOME_NEW_PPT"},
@@ -43,7 +43,7 @@
     {"type": "close", "name": "wps_presentation", "class": "wpp|wps|wpsoffice", "process_names": ["wpsoffice", "wpp"], "path_contains": ["/opt/kingsoft/wps-office"], "force_after_seconds": 3, "label": "WPS_PPT_CLOSE"},
     {"type": "wait", "seconds": 2},
 
-    {"type": "launch", "name": "wps_spreadsheet", "scope_name": "wps", "command": "et", "label": "WPS_SPREADSHEET_LAUNCH"},
+    {"type": "launch", "name": "wps_spreadsheet", "command": "et", "label": "WPS_SPREADSHEET_LAUNCH"},
     {"type": "wait_window", "name": "wps", "class": "et|wps|wpsoffice", "timeout": 20},
     {"type": "wait", "seconds": 20, "label": "WPS_EXCEL_HOME_READY"},
     {"type": "click", "x": 270, "y": 158, "label": "WPS_HOME_NEW_EXCEL"},
