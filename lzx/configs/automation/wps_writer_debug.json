@@ -14,8 +14,8 @@
     {"type": "click", "x": 350, "y": 250},
     {"type": "type", "text": "DEBUG123"},
     {"type": "paste_text", "text": "调试中文输入", "name": "wps"},
-    {"type": "save_as", "path": "/home/wzx/automation-wps/outputs/wps/debug_writer.docx", "shortcut": "ctrl+s", "location_shortcut": "", "wait_after": 8},
-    {"type": "assert_file", "path": "/home/wzx/automation-wps/outputs/wps/debug_writer.docx"},
+    {"type": "save_as", "path": "${PROJECT_ROOT}/outputs/wps/debug_writer.docx", "shortcut": "ctrl+s", "location_shortcut": "", "wait_after": 8},
+    {"type": "assert_file", "path": "${PROJECT_ROOT}/outputs/wps/debug_writer.docx"},
     {"type": "wait", "seconds": 5},
     {"type": "close", "name": "wps_debug", "class": "wps|wpsoffice", "process_names": ["wpsoffice", "wps"], "path_contains": ["/opt/kingsoft/wps-office"], "force_after_seconds": 2}
   ]

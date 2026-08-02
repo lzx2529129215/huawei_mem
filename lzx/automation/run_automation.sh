@@ -12,17 +12,19 @@ SESSION_ID="${SESSION_ID:-}"
 SCENARIO_ID="${SCENARIO_ID:-}"
 TEST_SLICE="${TEST_SLICE:-huawei-test.slice}"
 RESET_FILES=0
+SCENARIO_VARS=()
 
 usage() {
     cat <<EOF
 Usage:
-  $0 [--scenario FILE] [--display :0] [--xauthority PATH] [--trace-output PATH] [--session-id ID] [--scenario-id ID] [--test-slice SLICE] [--reset-files] [--dry-run]
+  $0 [--scenario FILE] [--display :0] [--xauthority PATH] [--trace-output PATH] [--session-id ID] [--scenario-id ID] [--test-slice SLICE] [--var NAME=VALUE] [--reset-files] [--dry-run]
 
 Examples:
-  cd /home/lzx/Desktop/huawei/huawei_mem/lzx/automation
+  cd "${PROJECT_ROOT}"
   ./run_automation.sh
   ./run_automation.sh --dry-run
-  ./run_automation.sh --scenario configs/automation/scenario_local_files.json --test-slice huawei-test.slice
+  ./run_automation.sh --scenario configs/automation/scenario_local_wps_files.json --test-slice huawei-test.slice
+  ./run_automation.sh --scenario configs/automation/wps_perf_0040_word.json --var WPS_WORD_FILE="\$HOME/samples/word.docx" --var WPS_IMAGE_FILE="\$HOME/samples/image.png"
 EOF
 }
 
@@ -64,6 +66,10 @@ while (($# > 0)); do
             RESET_FILES=1
             shift
             ;;
+        --var)
+            SCENARIO_VARS+=("$2")
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -88,6 +94,10 @@ if [[ -z "$SCENARIO_ID" ]]; then
     base="$(basename -- "$SCENARIO")"
     SCENARIO_ID="${base%.json}"
 fi
+if [[ -z "$TRACE_OUTPUT" ]]; then
+    TRACE_OUTPUT="${PROJECT_ROOT}/outputs/runtime_monitor/${SESSION_ID}/automation_trace.csv"
+fi
+mkdir -p "$(dirname -- "$TRACE_OUTPUT")"
 
 # ===========================================================================
 # Environment setup for GUI applications (especially Snap Firefox)
@@ -95,8 +105,8 @@ fi
 # ===========================================================================
 
 # --- core user identity ---
-export HOME="${HOME:-/home/lzx}"
-export USER="${USER:-lzx}"
+export HOME="${HOME:?HOME is not set; run this script as the logged-in Ubuntu desktop user}"
+export USER="${USER:-$(id -un)}"
 export LOGNAME="${LOGNAME:-$USER}"
 
 # --- runtime directory & D-Bus ---
@@ -122,8 +132,11 @@ fi
 if [ -n "${XAUTHORITY_ARG:-}" ]; then
     export XAUTHORITY="$XAUTHORITY_ARG"
 elif [ -z "${XAUTHORITY:-}" ]; then
-    MUTTER_AUTH=$(ls -t /run/user/$(id -u)/.mutter-Xwaylandauth.* 2>/dev/null | head -1 || true)
-    if [ -n "${MUTTER_AUTH:-}" ]; then
+    GDM_AUTH="${XDG_RUNTIME_DIR}/gdm/Xauthority"
+    MUTTER_AUTH=$(ls -t "${XDG_RUNTIME_DIR}"/.mutter-Xwaylandauth.* 2>/dev/null | head -1 || true)
+    if [ -f "$GDM_AUTH" ]; then
+        export XAUTHORITY="$GDM_AUTH"
+    elif [ -n "${MUTTER_AUTH:-}" ]; then
         export XAUTHORITY="$MUTTER_AUTH"
     elif [ -f "$HOME/.Xauthority" ]; then
         export XAUTHORITY="$HOME/.Xauthority"
@@ -140,8 +153,8 @@ esac
 # Ensure Firefox automation profile directory exists
 # Snap Firefox cannot access host /tmp (private mount namespace).
 # ===========================================================================
-mkdir -p /home/lzx/firefox_profiles/automation
-chown -R "$USER:$USER" /home/lzx/firefox_profiles 2>/dev/null || true
+mkdir -p "$HOME/firefox_profiles/automation"
+chown -R "$USER:$USER" "$HOME/firefox_profiles" 2>/dev/null || true
 
 # ===========================================================================
 # Experiment cgroup slice setup
@@ -181,6 +194,7 @@ echo "SCENARIO_ID=$SCENARIO_ID"
 echo "TRACE_OUTPUT=$TRACE_OUTPUT"
 echo "TEST_SLICE=$TEST_SLICE"
 echo "RESET_FILES=$RESET_FILES"
+echo "SCENARIO_VARS=${SCENARIO_VARS[*]:-}"
 echo "=============================================="
 
 # Build Python arguments (only pass --display/--xauthority if user explicitly set them)
@@ -198,6 +212,9 @@ fi
 if ((DRY_RUN == 1)); then
     ARGS+=("--dry-run")
 fi
+for item in "${SCENARIO_VARS[@]}"; do
+    ARGS+=("--var" "$item")
+done
 ARGS+=("--test-slice" "$TEST_SLICE")
 
 echo "[run_automation] scenario: $SCENARIO"

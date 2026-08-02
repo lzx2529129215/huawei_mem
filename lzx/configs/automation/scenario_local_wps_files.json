@@ -31,43 +31,8 @@
       "command": "nohup sh -c 'gtk-launch qq || gtk-launch linuxqq || linuxqq || qq' >/tmp/qq_automation.log 2>&1 &"
     },
     {
-      "type": "wait_window",
-      "name": "qq",
-      "class": "qq|QQ|linuxqq",
-      "title": "QQ",
-      "timeout": 15,
-      "label": "QQ_WAIT_WINDOW"
-    },
-    {
-      "type": "click_window",
-      "name": "qq",
-      "class": "qq|QQ|linuxqq",
-      "title": "QQ",
-      "x_ratio": 0.5,
-      "y_ratio": 0.82,
-      "button": 1,
-      "label": "QQ_CLICK_LOGIN"
-    },
-    {
       "type": "wait",
-      "seconds": 6,
-      "name": "qq",
-      "label": "QQ_WAIT_AUTO_LOGIN"
-    },
-    {
-      "type": "switch",
-      "name": "qq",
-      "class": "qq|QQ|linuxqq",
-      "title": "QQ",
-      "command": "gtk-launch qq",
-      "label": "APP_SWITCH_QQ"
-    },
-    {
-      "type": "verify_foreground",
-      "name": "qq",
-      "class": "qq|QQ|linuxqq",
-      "title": "QQ",
-      "label": "QQ_VERIFY_MAIN_WINDOW"
+      "seconds": 5
     },
     {
       "type": "shell",

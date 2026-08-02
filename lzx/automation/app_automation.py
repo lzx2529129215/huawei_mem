@@ -184,6 +184,7 @@ _GUI_ENV_KEYS = frozenset({
     "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP",
     "GDK_BACKEND", "QT_QPA_PLATFORM", "MOZ_ENABLE_WAYLAND",
     "GTK_MODULES", "DESKTOP_AUTOPLAY",
+    "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE",
     "HOME", "USER", "LOGNAME", "PATH",
 })
 
@@ -201,6 +202,25 @@ def _inject_env(args: list[str], env: dict[str, str]) -> list[str]:
     return result
 
 
+def _clear_stale_scope(unit: str) -> None:
+    """Release a systemd scope left by an interrupted previous run."""
+    if not _systemd_user_available():
+        return
+    subprocess.run(
+        ["systemctl", "--user", "stop", unit],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    subprocess.run(
+        ["systemctl", "--user", "reset-failed", unit],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    time.sleep(0.2)
+
+
 def _cgroup_launch(command: str, name: str, env: dict[str, str], test_slice: str = "") -> str:
     """Launch *command* (simple, no shell syntax) in a systemd scope.
 
@@ -212,6 +232,7 @@ def _cgroup_launch(command: str, name: str, env: dict[str, str], test_slice: str
     """
     unit_name = _sanitize_unit(name)
     unit = f"{unit_name}.scope"
+    _clear_stale_scope(unit)
     base = ["systemd-run", "--user", "--scope", f"--unit={unit_name}"]
     if test_slice:
         base.append(f"--slice={test_slice}")
@@ -236,6 +257,7 @@ def _cgroup_launch_shell(command: str, name: str, env: dict[str, str], test_slic
         cmd = cmd.rstrip("&").rstrip()
     unit_name = _sanitize_unit(name)
     unit = f"{unit_name}.scope"
+    _clear_stale_scope(unit)
     base = ["systemd-run", "--user", "--scope", f"--unit={unit_name}"]
     if test_slice:
         base.append(f"--slice={test_slice}")
@@ -282,7 +304,13 @@ def infer_app(action: dict[str, Any]) -> str:
         str(action.get(key, ""))
         for key in ("name", "class", "command", "shell_command", "title")
     ).lower()
-    if "wps" in text or "wpsoffice" in text:
+    if (
+        "wps" in text
+        or "wpsoffice" in text
+        or "kingsoft" in text
+        or re.search(r"(^|[| /])wpp($|[| /])", text)
+        or re.search(r"(^|[| /])et($|[| /])", text)
+    ):
         return "WPS"
     if "linuxqq" in text or "qq" in text:
         return "QQ"
@@ -325,6 +353,16 @@ def default_label(action: dict[str, Any], app: str) -> str:
         return "APP_KEY"
     if action_type == "wait":
         return "WAIT"
+    if action_type == "open_file":
+        return "WPS_OPEN_FILE"
+    if action_type == "save_as":
+        return "WPS_SAVE_AS"
+    if action_type == "window_state":
+        return "WPS_WINDOW_STATE"
+    if action_type == "scroll":
+        return "WPS_SCROLL"
+    if action_type in {"paste_text", "clipboard_file"}:
+        return "WPS_CLIPBOARD"
     return f"ACTION_{action_type.upper() or 'UNKNOWN'}"
 
 
@@ -388,7 +426,17 @@ def cgroup_unit_from_path(path: str) -> str:
 
 def map_window_app(title: str, wm_class: str, pid_comm: str, cgroup_path: str = "") -> str:
     text = " ".join([title, wm_class, pid_comm, cgroup_path]).lower()
-    if "wps" in text or "wpsoffice" in text or "kingsoft" in text:
+    process_tokens = {
+        token
+        for token in re.split(r"[|, /\\]+", " ".join([wm_class, pid_comm, cgroup_path]).lower())
+        if token
+    }
+    if (
+        "wps" in text
+        or "wpsoffice" in text
+        or "kingsoft" in text
+        or process_tokens.intersection({"wpp", "et", "wpspdf"})
+    ):
         return "WPS"
     if "linuxqq" in text or "tencent" in text or "腾讯" in text or "qq" in text:
         return "QQ"
@@ -490,7 +538,7 @@ def list_window_candidates(action: dict[str, Any], app: str = "") -> list[Window
         queries.append(["xdotool", "search", "--onlyvisible", "--class", window_class])
     if title:
         queries.append(["xdotool", "search", "--onlyvisible", "--name", title])
-    if name:
+    if name and not window_class and not title:
         queries.append(["xdotool", "search", "--onlyvisible", "--name", name])
     if app == "QQ":
         queries.extend([
@@ -514,12 +562,22 @@ def best_window_candidate(action: dict[str, Any], app: str) -> WindowInfo | None
     candidates = list_window_candidates(action, app)
     if not candidates:
         return None
+    prefer_content = bool(action.get("prefer_content_window"))
+    prefer_smallest = bool(action.get("prefer_smallest_window"))
+    prefer_outer = bool(action.get("prefer_outer_window"))
+    content_titles = {"wpsoffice", "wps", "wpp", "et", "wpspdf"}
     indexed = list(enumerate(candidates))
     indexed.sort(
         key=lambda item: (
             item[1].mapped_app == app,
+            prefer_outer and (
+                "wps office" in item[1].title.strip().lower()
+                or item[1].title.strip().lower().endswith(" - wps")
+            ),
+            -(item[1].width * item[1].height) if prefer_smallest else 0,
+            prefer_content and item[1].title.strip().lower() in content_titles,
             bool(item[1].title),
-            item[1].width * item[1].height,
+            0 if prefer_smallest else item[1].width * item[1].height,
             item[1].cgroup_unit == f"automation-{app.lower()}.scope",
             item[0],
         ),
@@ -814,6 +872,19 @@ def get_str_list(action: dict[str, Any], key: str) -> list[str]:
 _VARIABLE_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
+def parse_var_overrides(values: list[str]) -> dict[str, str]:
+    overrides: dict[str, str] = {}
+    for value in values:
+        if "=" not in value:
+            raise AutomationError(f"--var 必须使用 NAME=VALUE 格式：{value}")
+        name, raw = value.split("=", 1)
+        name = name.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            raise AutomationError(f"变量名无效：{name}")
+        overrides[name] = raw
+    return overrides
+
+
 def expand_scenario_value(value: Any, variables: dict[str, str]) -> Any:
     if isinstance(value, str):
         expanded = value
@@ -859,7 +930,7 @@ def _expand_actions(actions: list[Any], *, prefix: str = "") -> list[dict[str, A
     return expanded
 
 
-def load_scenario(path: Path) -> Scenario:
+def load_scenario(path: Path, cli_variables: dict[str, str] | None = None) -> Scenario:
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
     if isinstance(data, list):
@@ -888,6 +959,7 @@ def load_scenario(path: Path) -> Scenario:
         "SCENARIO_DIR": str(path.resolve().parent),
         **{key: str(value) for key, value in raw_variables.items()},
         **os.environ,
+        **(cli_variables or {}),
     }
     raw_actions = expand_scenario_value(raw_actions, variables)
     actions = _expand_actions(raw_actions)
@@ -1261,18 +1333,18 @@ def robust_switch_to_app(action: dict[str, Any], ctx: Context, app: str) -> None
 
 def switch(action: dict[str, Any], ctx: Context) -> None:
     app = infer_app(action)
-    if app == "QQ":
+    if app != "UNKNOWN":
         try:
             robust_switch_to_app(action, ctx, app)
             return
-        except AutomationError:
+        except AutomationError as first_error:
             command = get_str(action, "command")
             if command:
                 run_shell(command, ctx, check=False)
                 time.sleep(1)
                 robust_switch_to_app(action, ctx, app)
                 return
-            raise
+            raise first_error
     try:
         focus(action, ctx)
         return
@@ -1386,7 +1458,9 @@ def find_matching_pids(process_names: list[str], path_contains: list[str], cmdli
 
 
 def signal_from_name(name: str) -> signal.Signals:
-    normalized = name.upper().removeprefix("SIG")
+    normalized = name.upper()
+    if normalized.startswith("SIG"):
+        normalized = normalized[3:]
     try:
         return signal.Signals[f"SIG{normalized}"]
     except KeyError as exc:
@@ -1471,6 +1545,12 @@ def close(action: dict[str, Any], ctx: Context) -> None:
         return  # cgroup already killed everything, no further cleanup needed
 
     if process_names or path_contains or cmdline_contains:
+        if ctx.dry_run:
+            log(
+                "dry-run: match processes "
+                f"names={process_names} paths={path_contains} cmdline={cmdline_contains}"
+            )
+            return
         sig = signal_from_name(get_str(action, "signal", "TERM"))
         pids = find_matching_pids(process_names, path_contains, cmdline_contains)
         if pids:
@@ -1492,6 +1572,15 @@ def close(action: dict[str, Any], ctx: Context) -> None:
         return
 
     raise AutomationError("close 需要 name、title、class、process_names、path_contains、cmdline_contains 或 command")
+
+
+def cleanup_tracked_processes(ctx: Context) -> None:
+    """Stop applications launched by a scenario that aborted before close actions."""
+    for name in reversed(list(ctx.processes)):
+        try:
+            close({"name": name}, ctx)
+        except (AutomationError, subprocess.CalledProcessError) as exc:
+            log(f"cleanup skipped for {name}: {exc}")
 
 
 ACTION_HANDLERS = {
@@ -1554,6 +1643,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--session-id", default="", help="实验 session id")
     parser.add_argument("--scenario-id", default="", help="场景 id，默认使用 scenario 文件名")
     parser.add_argument("--test-slice", default="huawei-test.slice", help="systemd --slice 参数，所有自动化 scope 挂到此 slice 下")
+    parser.add_argument("--var", action="append", default=[], metavar="NAME=VALUE", help="覆盖场景变量，可重复传入")
     parser.add_argument("--calibration-only", action="store_true", help="只采集窗口信息，不执行 UI 操作")
     parser.add_argument("--calibration-output-dir", default="", help="calibration 截图目录（可选）")
     parser.add_argument("--screenshot-output-dir", default="", help="失败时截图目录（可选）")
@@ -1600,7 +1690,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         configure_display(args.display, args.xauthority)
-        scenario = load_scenario(args.scenario)
+        scenario = load_scenario(args.scenario, parse_var_overrides(args.var))
         actions = scenario.actions
         scenario_id = args.scenario_id or args.scenario.stem
         session_id = args.session_id or dt.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1618,6 +1708,7 @@ def main(argv: list[str] | None = None) -> int:
             screenshot_output_dir=Path(args.screenshot_output_dir) if args.screenshot_output_dir else None,
         )
         log(f"scenario={args.scenario}")
+        completed = False
         try:
             trace_marker(ctx, event_type="SCENARIO_START", status="running", op_type="scenario")
             for index, action in enumerate(actions, start=1):
@@ -1681,6 +1772,7 @@ def main(argv: list[str] | None = None) -> int:
             keep_alive(scenario.keep_alive_after_s, ctx)
             trace_marker(ctx, event_type="SCENARIO_DONE", status="success", op_type="scenario")
             log("done")
+            completed = True
             return 0
         except (AutomationError, subprocess.CalledProcessError) as exc:
             trace_marker(
@@ -1693,6 +1785,8 @@ def main(argv: list[str] | None = None) -> int:
             raise
         finally:
             _stop_clipboard_process(ctx)
+            if not completed:
+                cleanup_tracked_processes(ctx)
             if ctx.trace is not None:
                 ctx.trace.close()
     except (AutomationError, subprocess.CalledProcessError) as exc:
