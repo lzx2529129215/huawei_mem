@@ -21,8 +21,6 @@ done
 source_dir=$(absolute_path "$source_dir")
 [[ -d "$source_dir" ]] || die "source directory not found: $source_dir"
 
-"$ROOT/scripts/handoff/apply_linux_l02_patches.sh" --source-dir "$source_dir"
-
 patch_file="$ROOT/patches/0004-linux617-myself-kswapd-l03a-page-lifecycle.patch"
 expected=$(awk '$2 == "patches/0004-linux617-myself-kswapd-l03a-page-lifecycle.patch" {print $1}' \
     "$ROOT/docs/handoff/checksums/patches.sha256")
@@ -41,13 +39,16 @@ source_apply() {
     GIT_CEILING_DIRECTORIES="$git_ceiling" git -C "$source_dir" apply "$@"
 }
 
-if source_apply --check -p1 "$normalized" >/dev/null 2>&1; then
-    log 'applying 0004'
-    source_apply -p1 "$normalized"
-elif source_apply --reverse --check -p1 "$normalized" >/dev/null 2>&1; then
+if source_apply --reverse --check -p1 "$normalized" >/dev/null 2>&1; then
     log '0004: ALREADY_APPLIED'
 else
-    die '0004: PARTIAL/UNKNOWN; exact forward and reverse checks failed'
+    "$ROOT/scripts/handoff/apply_linux_l02_patches.sh" --source-dir "$source_dir"
+    if source_apply --check -p1 "$normalized" >/dev/null 2>&1; then
+        log 'applying 0004'
+        source_apply -p1 "$normalized"
+    else
+        die '0004: PARTIAL/UNKNOWN; exact forward and reverse checks failed'
+    fi
 fi
 
 for rel in \
