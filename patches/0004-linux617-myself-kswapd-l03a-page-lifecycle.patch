@@ -392,10 +392,10 @@ index ea83f7834..4db7e0cdf 100644
  void myks_reclaim_ctx_end_request(struct myks_reclaim_observer_ctx *ctx)
 diff --git a/Linux6.17/mm/myself_kswapd/adapter/page_lifecycle.c b/Linux6.17/mm/myself_kswapd/adapter/page_lifecycle.c
 new file mode 100644
-index 000000000..c68de6337
+index 000000000..efae40675
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/adapter/page_lifecycle.c
-@@ -0,0 +1,788 @@
+@@ -0,0 +1,791 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include <linux/errno.h>
@@ -465,8 +465,11 @@ index 000000000..c68de6337
 +	u32 i;
 +
 +	if (!table || !myks_page_config_valid(config)) {
-+		if (table)
++		if (table) {
++			spin_lock_irqsave(&table->lock, flags);
 +			table->counters.last_error = -EINVAL;
++			spin_unlock_irqrestore(&table->lock, flags);
++		}
 +		return -EINVAL;
 +	}
 +	if (mglru_enabled) {
@@ -1614,10 +1617,10 @@ index 244d2de44..65656f162 100644
 +obj-$(CONFIG_MYSELF_KSWAPD_KUNIT_TEST) += page_lifecycle_test.o
 diff --git a/Linux6.17/mm/myself_kswapd/tests/page_lifecycle_test.c b/Linux6.17/mm/myself_kswapd/tests/page_lifecycle_test.c
 new file mode 100644
-index 000000000..a84e3f31d
+index 000000000..81108d98c
 --- /dev/null
 +++ b/Linux6.17/mm/myself_kswapd/tests/page_lifecycle_test.c
-@@ -0,0 +1,291 @@
+@@ -0,0 +1,293 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +#include <kunit/test.h>
@@ -1837,6 +1840,8 @@ index 000000000..a84e3f31d
 +	config.target_nid = -1;
 +	KUNIT_EXPECT_EQ(test, myks_page_table_enable(&table, &config, false),
 +			-EINVAL);
++	myks_page_table_status(&table, &status);
++	KUNIT_EXPECT_EQ(test, status.last_error, -EINVAL);
 +	config = myks_test_config(2);
 +	KUNIT_ASSERT_EQ(test, myks_page_table_enable(&table, &config, false), 0);
 +	myks_page_table_disable(&table);
