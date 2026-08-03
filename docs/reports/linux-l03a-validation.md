@@ -85,7 +85,8 @@ Not reliably observable transitions:
 - Handoff tests: PASS；全新 v6.17 严格执行 `0002 -> 0003 -> 0004`，无 `--3way`、reject 或 fuzz。
 - Handoff idempotence: 首次应用 PASS；再次执行 `ALREADY_APPLIED` PASS。
 - Final-tree equality: 完整构建源树 final-v2 与严格应用树 final-v3 全树 `diff -qr` 无差异。
-- KUnit: 四组配置中的 `page_lifecycle_test.o` 均成功构建；未安装/启动新内核，因此未执行运行态 KUnit。
+- KUnit: 四组配置中的 `page_lifecycle_test.o` 均成功构建；本次安装配置未启用
+  运行态 KUnit，因此没有把对象构建替代为运行态 KUnit PASS。
 - Config matrix:
   - `MEMCG=y, LRU_GEN=n, DEBUG_FS=y`: PASS
   - `MEMCG=n, LRU_GEN=n, DEBUG_FS=y`: PASS
@@ -142,10 +143,33 @@ Artifact hashes:
 
 1. 完整构建有 7 条 `-Wframe-larger-than`，其中 1 条为既有 L0.2 debugfs 1040-byte 栈帧，其余来自上游基线；L0.3A 新对象无 warning。
 2. checkpatch 保留长 trace/debugfs 格式字符串和 MAINTAINERS 提示；`0 errors`。
-3. 本阶段按禁止项未安装/启动 L0.3A 内核，因此运行态 debugfs/ftrace/KUnit 验证留给后续安装阶段；不是以编译替代运行 PASS。
+3. 合并前阶段按禁止项未安装/启动 L0.3A；该缺口现已由下述真实 runtime
+   smoke 补充，运行态 KUnit 仍未启用。
 
-Runtime smoke: `NOT RUN / SCOPE BLOCKED`（任务明确禁止安装和重启）。
+Runtime smoke: **L0.3A RUNTIME SMOKE PARTIAL**。
+
+2026-08-03 已人工启动 6.17.0-myks-l03a 并完成真实运行时验证：
+
+- L0.2 request parser：PASS，18 个完整请求、301 轮、总扫描 66,606 页、
+  总回收 54,250 页，0 个不完整请求。
+- lruvec parser：PASS，真实 trace 中 81,312 个 snapshot event。
+- L0.3A page parser/replay：PASS，79,710 个真实页事件、21,176 个生命周期，
+  parse issues、invalid transition、missing isolate 和 trace truncation 均为 0。
+- 匿名页 41,074 个事件，文件页 38,636 个事件。
+- max entries 128 门禁峰值为 128，capacity drop 增长 16,272，
+  invalid/duplicate 均不增长，退出和关闭后均清空。
+- 15 分钟有界 soak 峰值 1,025/4,096，错误计数不增长。
+- 测试状态已恢复，运行前后未发现新增严重内核错误。
+
+结论为 PARTIAL 而非 PASSED：已安装内核是 CONFIG_LRU_GEN=n，系统不存在
+/sys/kernel/mm/lru_gen/enabled，所以 MGLRU guard 的真实拒绝及切换/恢复
+标记为 NOT RUN / ENVIRONMENT BLOCKED。
+
+完整报告：[linux-l03a-runtime-smoke.md](linux-l03a-runtime-smoke.md)。
 
 ## 下一步
 
-L0.3B：在已验证的 Shadow Page Table 上实现每个 `(mode, memcg_id, nid)` domain 的四条 Shadow LRU 链及一致性校验。进入该阶段前应先人工审查本分支，并单独授权安装/启动与运行态 smoke；不要在本分支合并前引入策略排序或内核执行器。
+L0.3B：仅在人工接受本次 PARTIAL 的 MGLRU 覆盖缺口后，在已验证的
+Shadow Page Table 上实现每个 (mode, memcg_id, nid) domain 的四条
+Shadow LRU 链及一致性校验。不要自动开始 L0.3B，也不要引入策略排序或
+内核执行器。
