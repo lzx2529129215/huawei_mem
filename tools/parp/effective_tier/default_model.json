@@ -1,0 +1,38 @@
+{
+  "schema_name": "parp_effective_tier_global_features_v1",
+  "feature_schema_version": 1,
+  "feature_names": [
+    "time_since_last_real_access_ms",
+    "previous_real_access_interval_ms",
+    "reuse_interval_ema_ms",
+    "consecutive_reclaim_candidate_count",
+    "time_in_current_generation_ms",
+    "access_ema_q8"
+  ],
+  "model": {
+    "model_name": "GLOBAL_REUSE_MODEL",
+    "model_version": 1,
+    "bias": 0,
+    "cold_threshold": -48,
+    "hot_threshold_1": 48,
+    "hot_threshold_2": 96,
+    "max_upgrade_tiers": 2,
+    "max_downgrade_tiers": 1,
+    "bin_edges": [
+      [10, 100, 500, 2000, 10000],
+      [10, 100, 500, 2000, 10000],
+      [10, 100, 500, 2000, 10000],
+      [0, 1, 2, 4, 8],
+      [10, 100, 500, 2000, 10000],
+      [8, 32, 96, 160, 224]
+    ],
+    "weights": [
+      [64, 48, 24, 0, -32, -64],
+      [32, 24, 12, 0, -12, -24],
+      [32, 24, 12, 0, -12, -24],
+      [24, 12, 0, -12, -24, -36],
+      [16, 12, 8, 0, -8, -16],
+      [-24, -12, 0, 12, 24, 36]
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://parp.invalid/effective-tier/labeled-candidate-v1",
+  "title": "PARP effective-tier offline labeled candidate",
+  "allOf": [
+    { "$ref": "raw_event.schema.json#/$defs/tier_gate_candidate" },
+    {
+      "type": "object",
+      "required": ["quadrant", "split", "app", "workload", "pressure_level", "labels", "next_real_access_delay_ns", "next_real_access_source", "trace_lost_measured", "trace_lost", "tier_gate_coverage_measured", "tier_gate_coverage_complete"],
+      "properties": {
+        "quadrant": { "enum": ["KEEP_RECLAIM", "PREDICTIVE_UPGRADE", "KEEP_PROTECT", "PREDICTIVE_DOWNGRADE"] },
+        "split": { "enum": ["train", "validation", "test"] },
+        "app": { "enum": ["WPS", "FILES", "QQ", "OTHER"] },
+        "workload": { "type": "string", "minLength": 1 },
+        "pressure_level": { "enum": ["P0", "P1", "P2", "P3", "P4"] },
+        "labels": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reuse_within_100ms", "reuse_within_500ms", "reuse_within_1s", "reuse_within_5s"],
+          "properties": {
+            "reuse_within_100ms": { "type": ["boolean", "null"] },
+            "reuse_within_500ms": { "type": ["boolean", "null"] },
+            "reuse_within_1s": { "type": ["boolean", "null"] },
+            "reuse_within_5s": { "type": ["boolean", "null"] }
+          }
+        },
+        "next_real_access_delay_ns": { "type": ["integer", "null"], "minimum": 1 },
+        "next_real_access_source": { "enum": ["PTE_YOUNG", "MARK_ACCESSED", "FD_REFERENCE", null] },
+        "label_semantics": { "const": "FUTURE_REAL_ACCESS_NOT_REFAULT" },
+        "trace_lost_measured": { "type": "boolean" },
+        "trace_lost": { "type": ["integer", "null"], "minimum": 0 },
+        "tier_gate_coverage_measured": { "type": "boolean" },
+        "tier_gate_coverage_complete": { "type": "boolean" }
+      }
+    }
+  ]
+}

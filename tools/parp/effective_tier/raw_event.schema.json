@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://parp.invalid/effective-tier/raw-event-v1",
+  "title": "PARP effective-tier exported raw event",
+  "oneOf": [
+    { "$ref": "#/$defs/tier_gate_candidate" },
+    { "$ref": "#/$defs/real_access" }
+  ],
+  "$defs": {
+    "identifier": { "type": ["string", "integer"] },
+    "nullableBoolean": { "type": ["boolean", "null"] },
+    "nullableInteger": { "type": ["integer", "null"] },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "time_since_last_real_access_ms",
+        "previous_real_access_interval_ms",
+        "reuse_interval_ema_ms",
+        "consecutive_reclaim_candidate_count",
+        "time_in_current_generation_ms",
+        "access_ema_q8"
+      ],
+      "properties": {
+        "time_since_last_real_access_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "previous_real_access_interval_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "reuse_interval_ema_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "consecutive_reclaim_candidate_count": { "type": ["integer", "null"], "minimum": 0 },
+        "time_in_current_generation_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "access_ema_q8": { "type": ["integer", "null"], "minimum": 0, "maximum": 255 }
+      }
+    },
+    "tier_gate_candidate": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "schema_version", "event_kind", "timestamp_ns", "experiment_id",
+        "session_id", "folio_cookie", "folio_lifetime_epoch",
+        "memcg_anon_id", "nid", "page_type", "source_seq",
+        "generation_index", "native_tier", "native_tier_idx",
+        "special_native_protect", "native_protect", "features",
+        "reuse_score", "cold_threshold", "hot_threshold_1",
+        "hot_threshold_2", "delta_tier_q8", "effective_tier_q8",
+        "effective_protect", "action", "bypass_reason", "folio_nr_pages",
+        "batch_id", "reclaim_epoch", "priority", "score_duration_ns",
+        "actual_native_behavior", "isolate_result", "reclaimed", "putback",
+        "activated", "gate_reached", "candidate_scope"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "event_kind": { "const": "tier_gate_candidate" },
+        "timestamp_ns": { "type": "integer", "minimum": 0 },
+        "experiment_id": { "$ref": "#/$defs/identifier" },
+        "session_id": { "$ref": "#/$defs/identifier" },
+        "folio_cookie": { "$ref": "#/$defs/identifier" },
+        "folio_lifetime_epoch": { "type": "integer", "minimum": 0 },
+        "memcg_anon_id": { "$ref": "#/$defs/identifier" },
+        "nid": { "type": "integer", "minimum": 0 },
+        "page_type": { "enum": ["anon", "file"] },
+        "source_seq": { "type": "integer", "minimum": 0 },
+        "generation_index": { "type": "integer", "minimum": 0 },
+        "native_tier": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "native_tier_idx": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "special_native_protect": { "type": "boolean" },
+        "native_protect": { "type": "boolean" },
+        "features": { "$ref": "#/$defs/features" },
+        "reuse_score": { "$ref": "#/$defs/nullableInteger" },
+        "cold_threshold": { "type": "integer" },
+        "hot_threshold_1": { "type": "integer" },
+        "hot_threshold_2": { "type": "integer" },
+        "delta_tier_q8": { "$ref": "#/$defs/nullableInteger" },
+        "effective_tier_q8": { "$ref": "#/$defs/nullableInteger" },
+        "effective_protect": { "type": "boolean" },
+        "action": { "enum": ["KEEP_RECLAIM", "PREDICTIVE_UPGRADE", "KEEP_PROTECT", "PREDICTIVE_DOWNGRADE", "SPECIAL_NATIVE_PROTECT"] },
+        "bypass_reason": { "type": "string" },
+        "folio_nr_pages": { "type": "integer", "minimum": 1 },
+        "batch_id": { "$ref": "#/$defs/identifier" },
+        "reclaim_epoch": { "$ref": "#/$defs/identifier" },
+        "priority": { "type": "integer" },
+        "score_duration_ns": { "type": "integer", "minimum": 0 },
+        "actual_native_behavior": { "enum": ["protect", "reclaim", "unknown"] },
+        "isolate_result": { "enum": ["not_attempted", "succeeded", "failed", "unknown"] },
+        "reclaimed": { "$ref": "#/$defs/nullableBoolean" },
+        "putback": { "$ref": "#/$defs/nullableBoolean" },
+        "activated": { "$ref": "#/$defs/nullableBoolean" },
+        "gate_reached": { "const": true },
+        "candidate_scope": { "const": "ALL_NATIVE_TIER_GATE_FOLIOS" }
+      }
+    },
+    "real_access": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["schema_version", "event_kind", "timestamp_ns", "experiment_id", "session_id", "folio_cookie", "folio_lifetime_epoch", "access_source", "is_real_access"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "event_kind": { "const": "real_access" },
+        "timestamp_ns": { "type": "integer", "minimum": 0 },
+        "experiment_id": { "$ref": "#/$defs/identifier" },
+        "session_id": { "$ref": "#/$defs/identifier" },
+        "folio_cookie": { "$ref": "#/$defs/identifier" },
+        "folio_lifetime_epoch": { "type": "integer", "minimum": 0 },
+        "access_source": { "enum": ["PTE_YOUNG", "MARK_ACCESSED", "FD_REFERENCE"] },
+        "is_real_access": { "const": true }
+      }
+    }
+  }
+}
