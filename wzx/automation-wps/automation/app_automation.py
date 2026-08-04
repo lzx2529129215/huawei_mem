@@ -1410,7 +1410,9 @@ def find_matching_pids(process_names: list[str], path_contains: list[str], cmdli
 
 
 def signal_from_name(name: str) -> signal.Signals:
-    normalized = name.upper().removeprefix("SIG")
+    normalized = name.upper()
+    if normalized.startswith("SIG"):
+        normalized = normalized[3:]
     try:
         return signal.Signals[f"SIG{normalized}"]
     except KeyError as exc:

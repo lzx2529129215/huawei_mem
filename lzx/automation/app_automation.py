@@ -270,7 +270,7 @@ def _cgroup_launch_shell(command: str, name: str, env: dict[str, str], test_slic
 def _cgroup_stop(unit: str) -> None:
     """Stop a systemd user unit (scope or service) — kills every process in its cgroup."""
     subprocess.run(
-        ["systemctl", "--user", "stop", unit],
+        ["systemctl", "--user", "stop", "--no-block", unit],
         check=False, capture_output=True,
     )
 
@@ -322,6 +322,20 @@ def infer_app(action: dict[str, Any]) -> str:
         return "BROWSER"
     if "wechat" in text or "weixin" in text or "微信" in text:
         return "WECHAT"
+    if "thunderbird" in text:
+        return "THUNDERBIRD"
+    if re.search(r"(^|[| /])vlc($|[| /])", text) or "videolan" in text:
+        return "VLC"
+    if "gimp" in text:
+        return "GIMP"
+    if "keepassxc" in text or "keepass" in text:
+        return "KEEPASSXC"
+    if (
+        "libreoffice" in text
+        or "soffice" in text
+        or re.search(r"(^|[| /])lo(?:writer|calc|impress)($|[| /])", text)
+    ):
+        return "LIBREOFFICE"
     return "UNKNOWN"
 
 
@@ -451,6 +465,20 @@ def map_window_app(title: str, wm_class: str, pid_comm: str, cgroup_path: str = 
         return "FILES"
     if "bilibili" in text or "哔哩哔哩" in text:
         return "BILIBILI"
+    if "thunderbird" in text:
+        return "THUNDERBIRD"
+    if "vlc" in process_tokens or "videolan" in text:
+        return "VLC"
+    if any(token.startswith("gimp") for token in process_tokens) or "gnu image manipulation" in text:
+        return "GIMP"
+    if "keepassxc" in text or "keepass" in text:
+        return "KEEPASSXC"
+    if (
+        "libreoffice" in text
+        or "soffice" in text
+        or process_tokens.intersection({"lowriter", "localc", "loimpress", "soffice.bin"})
+    ):
+        return "LIBREOFFICE"
     return "UNKNOWN"
 
 
@@ -533,17 +561,36 @@ def list_window_candidates(action: dict[str, Any], app: str = "") -> list[Window
     title = get_str(action, "title")
     window_class = get_str(action, "class")
     name = get_str(action, "name")
+    pid_cmdline_contains = get_str(action, "pid_cmdline_contains")
+    allowed_pids: set[int] | None = None
+    if pid_cmdline_contains:
+        allowed_pids = set()
+        marker = pid_cmdline_contains.encode("utf-8")
+        for proc_dir in Path("/proc").glob("[0-9]*"):
+            try:
+                if marker in (proc_dir / "cmdline").read_bytes():
+                    allowed_pids.add(int(proc_dir.name))
+            except (FileNotFoundError, PermissionError, ProcessLookupError, ValueError):
+                continue
+    visibility = [] if bool(action.get("include_hidden")) else ["--onlyvisible"]
     queries: list[list[str]] = []
     if window_class:
-        queries.append(["xdotool", "search", "--onlyvisible", "--class", window_class])
+        queries.append(["xdotool", "search", *visibility, "--class", window_class])
     if title:
-        queries.append(["xdotool", "search", "--onlyvisible", "--name", title])
+        queries.append(["xdotool", "search", *visibility, "--name", title])
     if name and not window_class and not title:
-        queries.append(["xdotool", "search", "--onlyvisible", "--name", name])
-    if app == "QQ":
+        queries.append(["xdotool", "search", *visibility, "--name", name])
+    if allowed_pids is not None:
+        for pid in sorted(allowed_pids):
+            queries.append(["xdotool", "search", *visibility, "--pid", str(pid)])
+    # Some applications have historically needed broad fallback discovery when
+    # their WM_CLASS changes between releases.  An isolated test window must be
+    # able to opt out: adding generic QQ candidates after a unique class match
+    # can otherwise select an unrelated, already-running personal QQ window.
+    if app == "QQ" and not bool(action.get("strict_window_match")):
         queries.extend([
-            ["xdotool", "search", "--onlyvisible", "--class", "qq|QQ|linuxqq"],
-            ["xdotool", "search", "--onlyvisible", "--name", "QQ"],
+            ["xdotool", "search", *visibility, "--class", "qq|QQ|linuxqq"],
+            ["xdotool", "search", *visibility, "--name", "QQ"],
         ])
     seen: set[str] = set()
     ids: list[str] = []
@@ -555,7 +602,10 @@ def list_window_candidates(action: dict[str, Any], app: str = "") -> list[Window
                 if window_id and window_id not in seen:
                     seen.add(window_id)
                     ids.append(window_id)
-    return [read_window_info(window_id) for window_id in ids]
+    candidates = [read_window_info(window_id) for window_id in ids]
+    if allowed_pids is not None:
+        candidates = [candidate for candidate in candidates if candidate.pid in allowed_pids]
+    return candidates
 
 
 def best_window_candidate(action: dict[str, Any], app: str) -> WindowInfo | None:
@@ -1189,7 +1239,9 @@ def find_window(action: dict[str, Any], ctx: Context) -> str:
     title = get_str(action, "title")
     window_class = get_str(action, "class")
     name = get_str(action, "name")
-    search_args = ["xdotool", "search", "--onlyvisible"]
+    search_args = ["xdotool", "search"]
+    if not bool(action.get("include_hidden")):
+        search_args.append("--onlyvisible")
     if window_class:
         search_args.extend(["--class", window_class])
     elif title:
@@ -1203,18 +1255,36 @@ def find_window(action: dict[str, Any], ctx: Context) -> str:
     if ctx.dry_run:
         return "DRY_RUN_WINDOW"
     if (result is None or result.returncode != 0 or not result.stdout.strip()) and window_class and title:
-        result = run(["xdotool", "search", "--onlyvisible", "--name", title], ctx, check=False)
+        fallback = ["xdotool", "search"]
+        if not bool(action.get("include_hidden")):
+            fallback.append("--onlyvisible")
+        fallback.extend(["--name", title])
+        result = run(fallback, ctx, check=False)
     if result is None or result.returncode != 0 or not result.stdout.strip():
         raise AutomationError(f"找不到窗口：{title or window_class or name}")
     return result.stdout.strip().splitlines()[-1]
 
 
 def focus(action: dict[str, Any], ctx: Context) -> None:
-    window_id = find_window(action, ctx)
+    candidate = best_window_candidate(action, infer_app(action)) if not ctx.dry_run else None
+    window_id = candidate.window_id if candidate is not None else find_window(action, ctx)
     if window_id == "DRY_RUN_WINDOW":
         log("dry-run: focus window")
         return
+    if bool(action.get("include_hidden")):
+        run(["xdotool", "windowmap", window_id], ctx, check=False)
+    retag_class = get_str(action, "retag_class")
+    if retag_class:
+        run(["xdotool", "set_window", "--class", retag_class, "--classname", retag_class, window_id], ctx)
+    if bool(action.get("ensure_visible_geometry")):
+        width = str(get_int(action, "window_width", 900))
+        height = str(get_int(action, "window_height", 700))
+        x = str(get_int(action, "window_x", 120))
+        y = str(get_int(action, "window_y", 80))
+        run(["xdotool", "windowsize", window_id, width, height], ctx, check=False)
+        run(["xdotool", "windowmove", window_id, x, y], ctx, check=False)
     run(["xdotool", "windowactivate", "--sync", window_id], ctx)
+    run(["xdotool", "windowraise", window_id], ctx, check=False)
 
 
 def window_state(action: dict[str, Any], ctx: Context) -> None:
@@ -1225,16 +1295,17 @@ def window_state(action: dict[str, Any], ctx: Context) -> None:
         log(f"dry-run: window_state {state}")
         return
     search_action = dict(action)
-    if state == "restore":
-        search_action["include_hidden"] = True
+    # QQ and some tray-aware desktop applications may hide their window while
+    # an Observe dwell is in progress.  Every state transition must retain the
+    # ability to address that same uniquely matched hidden window.
+    search_action["include_hidden"] = True
     candidate = best_window_candidate(search_action, infer_app(search_action))
     window_id = candidate.window_id if candidate is not None else find_window(search_action, ctx)
     if state == "minimize":
-        run(["xdotool", "windowminimize", window_id], ctx)
+        run(["xdotool", "windowminimize", window_id], ctx, check=False)
         return
     require_tool("wmctrl")
-    if state == "restore":
-        run(["xdotool", "windowmap", window_id], ctx, check=False)
+    run(["xdotool", "windowmap", window_id], ctx, check=False)
     run([
         "wmctrl", "-i", "-r", window_id, "-b",
         f"{'add' if state == 'maximize' else 'remove'},maximized_vert,maximized_horz",

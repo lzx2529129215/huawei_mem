@@ -10,6 +10,58 @@ cd /home/lzxxxxxx/桌面/huawei/huawei_mem/lzx
 automation/run_wps_case.sh 0070 --dry-run
 ```
 
+## QQ、Files、WPS 多场景套件
+
+新增的丰富场景通过统一入口执行：
+
+```bash
+cd /home/lzxxxxxx/桌面/huawei/huawei_mem/lzx
+automation/run_rich_scenario.sh --list
+automation/run_rich_scenario.sh qq --dry-run
+automation/run_rich_scenario.sh files --dry-run
+automation/run_rich_scenario.sh wps --dry-run
+automation/run_rich_scenario.sh cross --dry-run
+```
+
+场景覆盖：
+
+- `qq`：启动与登录状态验证、联系人搜索、会话打开、历史消息滚动、草稿输入和清理、最小化/恢复。
+- `files`：在 `outputs/automation_rich/files_workspace` 隔离目录中执行多层导航、搜索、列表/网格视图切换、新建目录和返回父目录。
+- `wps`：Writer 文档输入、搜索和另存，Spreadsheet 单元格定位、表格输入和另存，Presentation 新增幻灯片、放映和另存。
+- `cross`：Files 查找任务素材，WPS 生成报告，Files 检索产物，QQ 生成通知草稿后清除。
+
+QQ 场景默认搜索“我的电脑”，可以指定测试会话：
+
+```bash
+automation/run_rich_scenario.sh qq \
+  --var QQ_TEST_CONTACT="测试会话" \
+  --var QQ_DRAFT_TEXT="automation safe draft"
+```
+
+QQ 和跨应用场景只输入草稿，随后使用 `Ctrl+A` + `BackSpace` 清除，不执行发送。如果搜索结果或快捷键与当前 QQ 版本不同，应先使用 `--dry-run` 和 `--calibration-only` 校准，不要直接添加发送键。
+
+### Thunderbird、VLC、GIMP、KeePassXC、LibreOffice
+
+五个桌面应用已加入同一个场景入口：
+
+```bash
+automation/run_rich_scenario.sh thunderbird --dry-run
+automation/run_rich_scenario.sh vlc --dry-run
+automation/run_rich_scenario.sh gimp --dry-run
+automation/run_rich_scenario.sh keepassxc --dry-run
+automation/run_rich_scenario.sh libreoffice --dry-run
+automation/run_rich_scenario.sh five-app --dry-run
+```
+
+- Thunderbird：邮件窗口启动、全局搜索、邮件夹/邮件列表浏览、地址簿和日历切换；不发送邮件。
+- VLC：本地视频打开、播放/暂停、进度跳转、音量、静音、全屏和播放列表。
+- GIMP：仅编辑 `outputs/automation_rich/gimp/working_copy.png` 隔离副本，覆盖缩放、画布浏览、工具栏/全屏切换、图像复制和 XCF 保存。
+- KeePassXC：只运行启动页、打开/新建数据库对话框的取消流程、密码生成器、设置和窗口状态，不打开真实密码库。
+- LibreOffice：Writer 创建/搜索/保存 ODT，Calc 生成场景矩阵 ODS，Impress 新建幻灯片、放映和保存 ODP。
+- `five-app`：一次启动五应用，循环两轮执行切换、前台验证和应用内代表操作，可用于模拟桌面多任务。
+
+上述场景的样本和可写产物都限定在仓库 `samples/` 与 `outputs/automation_rich/` 中。正式运行前建议先 dry-run，然后在当前分辨率下做一次真实 UI 校准。
+
 ## 依赖
 
 基础启动/关闭只需要 Python。窗口聚焦、点击、按键需要 `xdotool`：
