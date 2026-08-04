@@ -49,7 +49,7 @@ def main() -> int:
     before = WORK / "source/vmscan_before_bindfix.c"
     current = SRC / "mm/vmscan.c"
     patch = subprocess.run(["diff", "-u", "--label", "a/mm/vmscan.c", "--label", "b/mm/vmscan.c", str(before), str(current)], text=True, capture_output=True).stdout
-    for relative in ("runtime_monitor/core/app_bind_table.py", "runtime_monitor/scripts/replay_app_bind_commands.py", "runtime_monitor/tests/test_app_bind_table.py", "configs/automation/scenario_dual_markov_bindfix_validation.json", "design/AppBind表修复说明.md", "design/Hint计数语义说明.md"):
+    for relative in ("runtime_monitor/core/app_bind_table.py", "runtime_monitor/scripts/replay_app_bind_commands.py", "runtime_monitor/tests/test_app_bind_table.py", "configs/automation/scenario_dual_markov_bindfix_validation.json", "docs/design/AppBind表修复说明.md", "docs/design/Hint计数语义说明.md"):
         patch += subprocess.run(["git", "diff", "--no-index", "--", "/dev/null", relative], cwd=ROOT, text=True, capture_output=True).stdout
     (WORK / "source/dual_markov_bindfix_complete.patch").write_text(patch)
     check = subprocess.run([str(SRC / "scripts/checkpatch.pl"), "--no-tree", "--no-signoff", str(WORK / "source/vmscan_bindfix_initial.diff")], text=True, capture_output=True)
@@ -65,7 +65,7 @@ def main() -> int:
     (WORK / "rollback/回滚说明.md").write_text("如新内核无法启动，在 GRUB 的 Advanced options 选择 `6.17.13-mglru-dual-observe-20260713_174412` 或 `6.17.13-mglru`。本轮未更改 GRUB 默认项，未删除任何内核。\n")
     if SHARE.exists(): shutil.rmtree(SHARE)
     SHARE.mkdir(parents=True)
-    direct = {"00_请先阅读.md": WORK / "reports/dual_markov_bindfix_summary.md", "dual_markov_bindfix_summary.md": WORK / "reports/dual_markov_bindfix_summary.md", "dual_markov_bindfix_summary.json": WORK / "reports/dual_markov_bindfix_summary.json", "app_bind_fix_design.md": ROOT / "design/AppBind表修复说明.md", "hint_counter_semantics.md": ROOT / "design/Hint计数语义说明.md", "重启后Bind修复运行态验收Prompt.md": WORK / "reports/重启后Bind修复运行态验收Prompt.md", "dual_markov_bindfix_complete.patch": WORK / "source/dual_markov_bindfix_complete.patch"}
+    direct = {"00_请先阅读.md": WORK / "reports/dual_markov_bindfix_summary.md", "dual_markov_bindfix_summary.md": WORK / "reports/dual_markov_bindfix_summary.md", "dual_markov_bindfix_summary.json": WORK / "reports/dual_markov_bindfix_summary.json", "app_bind_fix_design.md": ROOT / "docs/design/AppBind表修复说明.md", "hint_counter_semantics.md": ROOT / "docs/design/Hint计数语义说明.md", "重启后Bind修复运行态验收Prompt.md": WORK / "reports/重启后Bind修复运行态验收Prompt.md", "dual_markov_bindfix_complete.patch": WORK / "source/dual_markov_bindfix_complete.patch"}
     for name, source in direct.items(): copy(source, SHARE / name)
     for group in ("analysis", "replay", "kernel", "tests", "install", "reports", "logs", "rollback", "source"):
         shutil.copytree(WORK / group, SHARE / group, dirs_exist_ok=True)

@@ -29,7 +29,7 @@ SOURCE_FILES = (
     "runtime_monitor/tests/test_dual_workload_markov.py",
     "runtime_monitor/tests/test_foreground_continue_markov.py",
     "runtime_monitor/tests/test_reentry_workload_markov.py",
-    "design/双模式Markov完整修复说明.md",
+    "docs/design/双模式Markov完整修复说明.md",
 )
 
 
@@ -169,7 +169,7 @@ def copy_share(root: Path, work: Path, share: Path, kernel_source: Path) -> None
 
     direct = {
         "reports/项目完整链路检查报告.md": "项目完整链路检查报告.md",
-        "design/双模式Markov完整修复说明.md": "双模式Markov修复说明.md",
+        "docs/design/双模式Markov完整修复说明.md": "双模式Markov修复说明.md",
         "reports/新内核Observe验证计划.md": "新内核Observe验证计划.md",
         "reports/dual_markov_full_fix_summary.md": "dual_markov_full_fix_summary.md",
         "reports/dual_markov_full_fix_summary.json": "dual_markov_full_fix_summary.json",
@@ -179,7 +179,7 @@ def copy_share(root: Path, work: Path, share: Path, kernel_source: Path) -> None
         "source/dual_markov_full_fix.patch": "dual_markov_full_fix.patch",
     }
     for source, destination in direct.items():
-        base = root if source.startswith("design/") else work
+        base = root if source.startswith("docs/design/") else work
         copy_file(base / source, share / destination)
 
     groups = {

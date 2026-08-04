@@ -605,7 +605,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prediction-ttl-s", type=float, default=180.0)
     parser.add_argument("--periodic-refresh-s", type=float, default=180.0)
     parser.add_argument("--min-event-cooldown-s", type=float, default=5.0)
-    parser.add_argument("--disable-dwell-bucket-trigger", action=argparse.BooleanOptionalAction, default=True)
+    if hasattr(argparse, "BooleanOptionalAction"):
+        parser.add_argument(
+            "--disable-dwell-bucket-trigger",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+        )
+    else:
+        dwell_group = parser.add_mutually_exclusive_group()
+        dwell_group.add_argument(
+            "--disable-dwell-bucket-trigger",
+            dest="disable_dwell_bucket_trigger",
+            action="store_true",
+        )
+        dwell_group.add_argument(
+            "--no-disable-dwell-bucket-trigger",
+            dest="disable_dwell_bucket_trigger",
+            action="store_false",
+        )
+        parser.set_defaults(disable_dwell_bucket_trigger=True)
     return parser.parse_args()
 
 
