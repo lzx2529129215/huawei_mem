@@ -516,6 +516,7 @@ struct lru_gen_folio {
 		unsigned long upgrade_pages;
 		unsigned long downgrade_pages;
 		u16 no_progress_rounds;
+		u8 state_epoch;
 	} parp_effective_tier[ANON_AND_FILE];
 #endif
 	/* whether the multi-gen LRU is enabled */

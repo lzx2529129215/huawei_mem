@@ -2229,14 +2229,14 @@ int zap_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 		} else
 			WARN_ONCE(1, "Non present huge pmd without pmd migration enabled!");
 
-			if (folio_test_anon(folio)) {
-				zap_deposited_table(tlb->mm, pmd);
-				add_mm_counter(tlb->mm, MM_ANONPAGES, -HPAGE_PMD_NR);
-				if (flush_needed && pmd_young(orig_pmd) &&
-				    likely(vma_has_recency(vma)))
-					parp_effective_tier_note_access(folio,
+		if (folio_test_anon(folio)) {
+			zap_deposited_table(tlb->mm, pmd);
+			add_mm_counter(tlb->mm, MM_ANONPAGES, -HPAGE_PMD_NR);
+			if (flush_needed && pmd_young(orig_pmd) &&
+			    likely(vma_has_recency(vma)))
+				parp_effective_tier_note_access(folio,
 							PARP_ACCESS_PTE_YOUNG);
-			} else {
+		} else {
 			if (arch_needs_pgtable_deposit())
 				zap_deposited_table(tlb->mm, pmd);
 			add_mm_counter(tlb->mm, mm_counter_file(folio),

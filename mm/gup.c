@@ -897,8 +897,7 @@ static struct page *follow_page_pte(struct vm_area_struct *vma,
 		 * is needed to avoid losing the dirty bit: it is easier to use
 		 * folio_mark_accessed().
 		 */
-		folio_mark_accessed_source(folio,
-					     PARP_ACCESS_UNTRUSTED_MARK);
+		folio_mark_accessed_native(folio);
 	}
 out:
 	pte_unmap_unlock(ptep, ptl);

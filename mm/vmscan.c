@@ -1521,6 +1521,8 @@ retry:
 			if (!filemap_release_folio(folio, sc->gfp_mask))
 				goto activate_locked;
 			if (!mapping && folio_ref_count(folio) == 1) {
+				parp_effective_tier_outcome(folio,
+						PARP_TIER_OUTCOME_RECLAIMED);
 				folio_unlock(folio);
 				if (folio_put_testzero(folio))
 					goto free_it;
@@ -1532,8 +1534,6 @@ retry:
 					 * increment nr_reclaimed here (and
 					 * leave it off the LRU).
 					 */
-					parp_effective_tier_outcome(folio,
-							PARP_TIER_OUTCOME_RECLAIMED);
 					nr_reclaimed += nr_pages;
 					continue;
 				}
@@ -1558,10 +1558,10 @@ retry:
 							 sc->target_mem_cgroup))
 			goto keep_locked;
 
-		folio_unlock(folio);
-free_it:
 		parp_effective_tier_outcome(folio,
 					PARP_TIER_OUTCOME_RECLAIMED);
+		folio_unlock(folio);
+free_it:
 		/*
 		 * Folio may get swapped out as a whole, need to account
 		 * all pages in it.
@@ -4512,6 +4512,29 @@ void lru_gen_soft_reclaim(struct mem_cgroup *memcg, int nid)
  *                          the eviction
  ******************************************************************************/
 
+static void parp_tier_native_fallback(
+		struct parp_tier_decision *decision, int native_tier,
+		int tier_idx, bool special_native_protect,
+		enum parp_tier_bypass_reason bypass)
+{
+	decision->native_tier = native_tier;
+	decision->native_tier_idx = tier_idx;
+	decision->special_native_protect = special_native_protect;
+	decision->native_protect = native_tier > tier_idx;
+	decision->delta_tier_q8 = 0;
+	decision->effective_tier_q8 = native_tier * PARP_TIER_SCALE;
+	decision->effective_protect = decision->native_protect;
+	decision->actual_tier_protect = decision->native_protect ||
+		special_native_protect;
+	decision->bypass = bypass;
+	if (special_native_protect)
+		decision->action = PARP_TIER_SPECIAL_NATIVE_PROTECT;
+	else if (decision->native_protect)
+		decision->action = PARP_TIER_KEEP_PROTECT;
+	else
+		decision->action = PARP_TIER_KEEP_RECLAIM;
+}
+
 static bool sort_folio(struct lruvec *lruvec, struct folio *folio,
 		       struct scan_control *sc, int tier_idx,
 		       struct parp_tier_scan_ctx *tier_ctx,
@@ -4559,6 +4582,35 @@ static bool sort_folio(struct lruvec *lruvec, struct folio *folio,
 	actual_tier_protect = tier_decision->evaluated ?
 		tier_decision->actual_tier_protect :
 		(tier > tier_idx || special_native_protect);
+	if (tier_decision->evaluated &&
+	    tier_decision->action == PARP_TIER_PREDICTIVE_DOWNGRADE &&
+	    !actual_tier_protect) {
+		int current_gen = folio_lru_gen(folio);
+		int current_refs = folio_lru_refs(folio);
+		bool current_workingset = folio_test_workingset(folio);
+
+		if (!parp_effective_tier_commit_revalidate(tier_ctx, folio,
+				tier_decision->page_state_sequence) ||
+		    current_gen != gen || current_refs != refs ||
+		    current_workingset != workingset) {
+			gen = current_gen;
+			refs = current_refs;
+			workingset = current_workingset;
+			tier = lru_tier_from_refs(refs, workingset);
+			special_native_protect =
+				refs + workingset == BIT(LRU_REFS_WIDTH) + 1;
+			parp_tier_native_fallback(tier_decision, tier, tier_idx,
+					special_native_protect,
+					PARP_TIER_BYPASS_GENERATION_RACE);
+			if (current_gen !=
+			    lru_gen_from_seq(lrugen->min_seq[type])) {
+				tier_decision->actual_tier_protect = true;
+				tier_decision->action = PARP_TIER_KEEP_PROTECT;
+			}
+			actual_tier_protect =
+				tier_decision->actual_tier_protect;
+		}
+	}
 	if (actual_tier_protect) {
 		bool policy_upgrade = tier_decision->evaluated &&
 			tier_decision->action == PARP_TIER_PREDICTIVE_UPGRADE &&

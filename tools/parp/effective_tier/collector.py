@@ -66,7 +66,7 @@ AccessPoint = Tuple[int, str]
 SessionKey = Tuple[str, str]
 
 TRACE_EVENT_PATTERN = re.compile(
-    r"\bparp_effective_tier_(decision|access|outcome|batch):\s+(.*)$")
+    r"\bparp_effective_tier_(decision|access|outcome|batch|lock):\s+(.*)$")
 TRACE_MODES = {
     0: "OFF",
     1: "SHADOW_EFFECTIVE_TIER",
@@ -109,6 +109,10 @@ TRACE_OUTCOME = {
     1: "putback",
     2: "activated",
     3: "demote_attempt",
+}
+TRACE_LOCK_SCOPES = {
+    0: "scan_folios",
+    1: "batch",
 }
 
 
@@ -221,6 +225,7 @@ def parse_exported_trace(paths: Sequence[Path]) -> Tuple[List[Dict[str, object]]
     raw_accesses: List[Dict[str, object]] = []
     outcomes: List[Dict[str, object]] = []
     batches: List[Dict[str, object]] = []
+    locks: List[Dict[str, object]] = []
     stats: Counter[str] = Counter()
     for path in paths:
         try:
@@ -261,6 +266,19 @@ def parse_exported_trace(paths: Sequence[Path]) -> Tuple[List[Dict[str, object]]
                             "batch_id": fields.get("batch"),
                             "mode": _trace_int(fields, "mode", context),
                             "model_time_ns": _trace_int(fields, "model_ns", context),
+                        })
+                    elif kind == "lock":
+                        context = "effective-tier lock"
+                        locks.append({
+                            "timestamp_ns": _trace_int(fields, "time", context),
+                            "experiment_id": fields.get("experiment"),
+                            "session_id": fields.get("session"),
+                            "mode": _trace_int(fields, "mode", context),
+                            "scope": _trace_int(fields, "scope", context),
+                            "wait_ns": _trace_int(fields, "wait_ns", context),
+                            "held_ns": _trace_int(fields, "held_ns", context),
+                            "irq_disabled_ns": _trace_int(
+                                fields, "irq_disabled_ns", context),
                         })
         except OSError as exc:
             raise ContractError("cannot read exported trace %s: %s" %
@@ -346,6 +364,24 @@ def parse_exported_trace(paths: Sequence[Path]) -> Tuple[List[Dict[str, object]]
             "batch_id": str(raw["batch_id"]),
         })
         stats["batch_model_latency_events"] += 1
+    for raw in locks:
+        records.append({
+            "schema_version": SCHEMA_VERSION,
+            "event_kind": "lock_latency",
+            "timestamp_ns": int(raw["timestamp_ns"]),
+            "experiment_id": str(raw["experiment_id"]),
+            "session_id": str(raw["session_id"]),
+            "mode": _trace_enum(TRACE_MODES, int(raw["mode"]), "mode"),
+            "lock_name": "lru_lock",
+            "scope": _trace_enum(
+                TRACE_LOCK_SCOPES, int(raw["scope"]), "lock scope"),
+            "held_ns": int(raw["held_ns"]),
+            "wait_ns": int(raw["wait_ns"]),
+            "irq_disabled_ns": int(raw["irq_disabled_ns"]),
+            "wait_measured": True,
+            "irq_disabled_measured": True,
+        })
+        stats["lock_latency_events"] += 1
     stats["decision_events"] = len(decisions)
     return records, dict(stats)
 

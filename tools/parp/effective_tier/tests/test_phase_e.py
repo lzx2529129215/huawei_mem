@@ -179,6 +179,9 @@ class PhaseECollectorTests(unittest.TestCase):
             "task: parp_effective_tier_batch: time=1100000000 batch=11 "
             "epoch=12 type=1 mode=1 candidates=4 upgrades=4 downgrades=0 "
             "isolated=4 reclaimed=4 model_ns=80 lock_ns=100",
+            "task: parp_effective_tier_lock: time=1100000100 experiment=1 "
+            "session=2 nid=0 mode=1 scope=0 wait_ns=5 held_ns=100 "
+            "irq_disabled_ns=110",
         ]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "trace.txt"
@@ -192,6 +195,11 @@ class PhaseECollectorTests(unittest.TestCase):
         self.assertTrue(labeled[0]["reclaimed"])
         self.assertEqual(stats["policy_move_access_events_ignored"], 1)
         self.assertEqual(telemetry[0]["component"], "batch_model_total")
+        lock = next(row for row in telemetry
+                    if row["event_kind"] == "lock_latency")
+        self.assertEqual(lock["scope"], "scan_folios")
+        self.assertEqual(lock["held_ns"], 100)
+        self.assertTrue(lock["wait_measured"])
         self.assertTrue(summary["tier_gate_coverage_complete"])
 
     def test_real_access_labels_lifetime_and_all_windows(self):

@@ -4,7 +4,6 @@
 
 #include <linux/types.h>
 #include <linux/jump_label.h>
-#include <linux/string.h>
 
 struct folio;
 struct page;
@@ -166,12 +165,15 @@ struct parp_tier_decision {
 	u8 generation_index;
 	u8 action;
 	u8 bypass;
+	u16 page_state_sequence;
 	bool evaluated;
 	bool model_valid;
 	bool native_protect;
 	bool effective_protect;
 	bool special_native_protect;
 	bool actual_tier_protect;
+	bool reservation_active;
+	bool reservation_upgrade;
 };
 
 struct parp_tier_scan_ctx {
@@ -210,12 +212,18 @@ struct parp_tier_state_snapshot {
 	u8 generation;
 	u8 pending_action;
 	u8 state_epoch;
+	u16 state_sequence;
 	bool uncertain;
 };
 
 #ifdef CONFIG_PARP_EFFECTIVE_TIER
 extern struct static_key_false parp_effective_tier_enabled;
 extern struct page_ext_operations parp_effective_tier_page_ext_ops;
+
+static inline bool parp_effective_tier_tracking_active(void)
+{
+	return static_branch_unlikely(&parp_effective_tier_enabled);
+}
 
 void __parp_effective_tier_note_access(struct folio *folio,
 		enum parp_access_event event);
@@ -287,6 +295,11 @@ u32 parp_effective_tier_elapsed_ms(u32 now, u32 then, bool *valid);
 size_t parp_effective_tier_metadata_size(void);
 bool parp_effective_tier_state_snapshot(struct folio *folio,
 		struct parp_tier_state_snapshot *snapshot);
+bool parp_effective_tier_revalidate(struct folio *folio,
+		u16 state_sequence);
+bool parp_effective_tier_commit_revalidate(
+		const struct parp_tier_scan_ctx *ctx, struct folio *folio,
+		u16 state_sequence);
 
 static inline void parp_effective_tier_note_access(
 		struct folio *folio, enum parp_access_event event)
@@ -362,7 +375,7 @@ static inline void parp_effective_tier_lock_start(
 	if (static_branch_unlikely(&parp_effective_tier_enabled))
 		__parp_effective_tier_lock_start(measurement);
 	else
-		memset(measurement, 0, sizeof(*measurement));
+		*measurement = (struct parp_tier_lock_measurement) { };
 }
 
 static inline void parp_effective_tier_lock_acquired(
@@ -387,6 +400,11 @@ static inline void parp_effective_tier_lock_released(
 		__parp_effective_tier_lock_released(measurement, scope, nid);
 }
 #else
+static inline bool parp_effective_tier_tracking_active(void)
+{
+	return false;
+}
+
 static inline void parp_effective_tier_note_access(
 		struct folio *folio, enum parp_access_event event)
 {
@@ -433,7 +451,7 @@ static inline void parp_effective_tier_outcome(struct folio *folio,
 static inline void parp_effective_tier_lock_start(
 		struct parp_tier_lock_measurement *measurement)
 {
-	memset(measurement, 0, sizeof(*measurement));
+	*measurement = (struct parp_tier_lock_measurement) { };
 }
 static inline void parp_effective_tier_lock_acquired(
 		struct parp_tier_lock_measurement *measurement)

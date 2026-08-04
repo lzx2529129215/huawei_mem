@@ -166,6 +166,8 @@ struct parp_effective_tier_batch_trace {
 
 struct parp_effective_tier_lock_trace {
 	u64 timestamp_ns;
+	u64 experiment_id;
+	u64 session_id;
 	u64 wait_ns;
 	u64 held_ns;
 	u64 irq_disabled_ns;
@@ -475,6 +477,8 @@ TRACE_EVENT(parp_effective_tier_lock,
 	TP_ARGS(event),
 	TP_STRUCT__entry(
 		__field(u64, timestamp_ns)
+		__field(u64, experiment_id)
+		__field(u64, session_id)
 		__field(u64, wait_ns)
 		__field(u64, held_ns)
 		__field(u64, irq_disabled_ns)
@@ -484,6 +488,8 @@ TRACE_EVENT(parp_effective_tier_lock,
 	),
 	TP_fast_assign(
 		__entry->timestamp_ns = event->timestamp_ns;
+		__entry->experiment_id = event->experiment_id;
+		__entry->session_id = event->session_id;
 		__entry->wait_ns = event->wait_ns;
 		__entry->held_ns = event->held_ns;
 		__entry->irq_disabled_ns = event->irq_disabled_ns;
@@ -491,8 +497,9 @@ TRACE_EVENT(parp_effective_tier_lock,
 		__entry->mode = event->mode;
 		__entry->scope = event->scope;
 	),
-	TP_printk("time=%llu nid=%u mode=%u scope=%u wait_ns=%llu held_ns=%llu irq_disabled_ns=%llu",
-		  __entry->timestamp_ns, __entry->nid, __entry->mode,
+	TP_printk("time=%llu experiment=%llu session=%llu nid=%u mode=%u scope=%u wait_ns=%llu held_ns=%llu irq_disabled_ns=%llu",
+		  __entry->timestamp_ns, __entry->experiment_id,
+		  __entry->session_id, __entry->nid, __entry->mode,
 		  __entry->scope, __entry->wait_ns, __entry->held_ns,
 		  __entry->irq_disabled_ns)
 );

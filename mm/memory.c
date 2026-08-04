@@ -1510,11 +1510,17 @@ static __always_inline void zap_present_folio_ptes(struct mmu_gather *tlb,
 						     PARP_ACCESS_PTE_YOUNG);
 		rss[mm_counter(folio)] -= nr;
 	} else {
-		/* We don't need up-to-date accessed/dirty bits. */
-		clear_full_ptes(mm, addr, pte, nr, tlb->fullmm);
-		if (pte_young(ptent) && likely(vma_has_recency(vma)))
-			parp_effective_tier_note_access(folio,
-						PARP_ACCESS_PTE_YOUNG);
+		/* Preserve the native fast path unless PARP needs aggregate young. */
+		if (parp_effective_tier_tracking_active()) {
+			ptent = get_and_clear_full_ptes(mm, addr, pte, nr,
+							 tlb->fullmm);
+			if (pte_young(ptent) && likely(vma_has_recency(vma)))
+				parp_effective_tier_note_access(folio,
+							PARP_ACCESS_PTE_YOUNG);
+		} else {
+			/* We don't need up-to-date accessed/dirty bits. */
+			clear_full_ptes(mm, addr, pte, nr, tlb->fullmm);
+		}
 		rss[MM_ANONPAGES] -= nr;
 	}
 	/* Checking a single PTE in a batch is sufficient. */
