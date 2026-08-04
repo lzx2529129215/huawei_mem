@@ -405,6 +405,13 @@ static inline bool parp_effective_tier_tracking_active(void)
 	return false;
 }
 
+static inline bool parp_effective_tier_commit_revalidate(
+		const struct parp_tier_scan_ctx *ctx, struct folio *folio,
+		u16 state_sequence)
+{
+	return false;
+}
+
 static inline void parp_effective_tier_note_access(
 		struct folio *folio, enum parp_access_event event)
 {

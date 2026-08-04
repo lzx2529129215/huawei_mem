@@ -450,6 +450,9 @@ void __parp_effective_tier_note_access(struct folio *folio,
 		bool initialized = old_state & PARP_STATE_INITIALIZED;
 		u8 access_ema = FIELD_GET(PARP_STATE_ACCESS_MASK, old_state);
 		u32 previous = READ_ONCE(ext->last_access_ms);
+		u8 current_epoch = READ_ONCE(parp_tier_state_epoch);
+		bool new_run = FIELD_GET(PARP_TIER_STATE_EPOCH_MASK,
+					 decision_epochs) != current_epoch;
 		bool valid = false;
 		u32 interval = 0;
 
@@ -476,8 +479,11 @@ void __parp_effective_tier_note_access(struct folio *folio,
 			       PARP_STATE_UNCERTAIN);
 		new_state |= parp_access_ema_on_access(access_ema);
 		new_state |= PARP_STATE_INITIALIZED;
-		decision_epochs = FIELD_PREP(PARP_TIER_STATE_EPOCH_MASK,
-					     READ_ONCE(parp_tier_state_epoch));
+		if (new_run) {
+			decision_epochs = FIELD_PREP(
+				PARP_TIER_STATE_EPOCH_MASK, current_epoch);
+			new_state &= ~PARP_STATE_ACTION_MASK;
+		}
 		WRITE_ONCE(ext->decision_epochs, decision_epochs);
 	} else if (old_state & PARP_STATE_INITIALIZED) {
 		new_state |= PARP_STATE_UNCERTAIN;
@@ -1065,8 +1071,6 @@ void __parp_effective_tier_prepare(struct parp_tier_scan_ctx *ctx,
 	ctx->config_sequence = config.sequence;
 	ctx->severe_pressure =
 		reclaim_priority <= PARP_SEVERE_PRESSURE_PRIORITY;
-	ctx->no_progress = state->no_progress_rounds >=
-		PARP_NO_PROGRESS_LIMIT;
 	if (!state->epoch_id || state->source_seq != ctx->source_seq ||
 	    state->state_epoch != READ_ONCE(parp_tier_state_epoch)) {
 		state->source_seq = ctx->source_seq;
@@ -1074,6 +1078,7 @@ void __parp_effective_tier_prepare(struct parp_tier_scan_ctx *ctx,
 		state->candidate_pages = 0;
 		state->upgrade_pages = 0;
 		state->downgrade_pages = 0;
+		state->no_progress_rounds = 0;
 		if (!++state->epoch_id)
 			state->epoch_id++;
 	}
@@ -1082,6 +1087,8 @@ void __parp_effective_tier_prepare(struct parp_tier_scan_ctx *ctx,
 		state->epoch_id++;
 		tag = state->epoch_id & PARP_TIER_EPOCH_MASK;
 	}
+	ctx->no_progress = state->no_progress_rounds >=
+		PARP_NO_PROGRESS_LIMIT;
 	ctx->epoch_id = state->epoch_id;
 	ctx->epoch_tag = tag;
 }
