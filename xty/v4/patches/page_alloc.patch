@@ -1,0 +1,38 @@
+--- D:/HUAWEI_pc/2026-08/2026-0801/v4/analysis/original/v4/mglru_kernel_transfer/linux-hwe-6.17-6.17.0/mm/page_alloc.c	2026-07-14 17:37:54.000000000 +0800
++++ D:/HUAWEI_pc/2026-08/2026-0801/v4/analysis/current/mm_page_alloc.c	2026-08-04 12:05:38.734719000 +0800
+@@ -6687,6 +6687,35 @@
+ 		.extra1		= SYSCTL_ZERO,
+ 		.extra2		= SYSCTL_ONE_THOUSAND,
+ 	},
++#ifdef CONFIG_TIER2_WATERMARK_MEMCG
++	{
++		.procname	= "tier2_predict_enabled",
++		.data		= &sysctl_tier2_predict_enabled,
++		.maxlen		= sizeof(sysctl_tier2_predict_enabled),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= SYSCTL_ZERO,
++		.extra2		= SYSCTL_ONE,
++	},
++	{
++		.procname	= "tier2_predict_latency_ms",
++		.data		= &sysctl_tier2_predict_latency_ms,
++		.maxlen		= sizeof(sysctl_tier2_predict_latency_ms),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= SYSCTL_ZERO,
++		.extra2		= SYSCTL_ONE_THOUSAND,
++	},
++	{
++		.procname	= "tier2_predict_horizon_ratio",
++		.data		= &sysctl_tier2_predict_horizon_ratio,
++		.maxlen		= sizeof(sysctl_tier2_predict_horizon_ratio),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= SYSCTL_ZERO,
++		.extra2		= SYSCTL_ONE_HUNDRED,
++	},
++#endif /* CONFIG_TIER2_WATERMARK_MEMCG */
+ #endif /* CONFIG_TIER2_WATERMARK */
+ 	{
+ 		.procname	= "defrag_mode",
