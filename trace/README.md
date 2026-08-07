@@ -90,7 +90,7 @@ python3 trace_parser.py
 
 解析成功后，当前目录下会生成 aligned_trace.csv 文件。
 
- 输出数据说明 (aligned_trace.csv)
+##  输出数据说明 (aligned_trace.csv)
 
 生成的 CSV 文件包含以下字段，方便后续进行数据可视化与分析：
 
