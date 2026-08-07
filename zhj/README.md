@@ -1,6 +1,3 @@
-这是您要求的中文版 `README.md`，已保留原始 Markdown 格式、代码块和文档链接：
-
-```markdown
 # Linux 6.17 内存调度实验
 
 本仓库实现了一套以测量为先的复现框架，与以下工作对齐：
@@ -84,4 +81,4 @@ python3 -m memsched_exp.report --root results --output results/summary.csv
 参见 [详细的实验设计](docs/EXPERIMENT_DESIGN.md) 和 [指标词典](docs/METRICS.md)。
 
 对于 Windows 宿主机开发和 Linux 虚拟机操作，请遵循 [VS Code + Linux 6.17 虚拟机操作指南](docs/VSCODE_VM_OPERATION_GUIDE.md)。
-```
+
