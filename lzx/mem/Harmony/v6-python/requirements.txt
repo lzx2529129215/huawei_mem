@@ -1,2 +1,0 @@
-# No third-party dependencies are required.
-# The collector uses only the Python standard library and the hdc executable in PATH.

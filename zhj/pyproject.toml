@@ -1,0 +1,12 @@
+[project]
+name = "memsched-exp"
+version = "0.1.0"
+description = "Linux 6.17 memory scheduling experiment collectors"
+requires-python = ">=3.10"
+
+[project.scripts]
+memsched-exp = "memsched_exp.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["memsched_exp*"]
+

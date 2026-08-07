@@ -1,4 +1,0 @@
-KDIR=/lib/modules/6.17.0-29-generic/build
-ARCH=x86_64
-CROSS_COMPILE=
-USER_CC=cc

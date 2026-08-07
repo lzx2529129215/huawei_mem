@@ -1,0 +1,2 @@
+[console_scripts]
+memsched-exp = memsched_exp.cli:main

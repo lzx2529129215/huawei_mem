@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: memsched-exp
+Version: 0.1.0
+Summary: Linux 6.17 memory scheduling experiment collectors
+Requires-Python: >=3.10
