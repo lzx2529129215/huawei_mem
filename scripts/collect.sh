@@ -11,12 +11,15 @@
 #   ./collect.sh 斗鱼 -o op_launch     # 指定操作ID
 #
 # 选项:
-#   -o <op_id>    操作ID (默认 auto_YYYYMMDD_HHMMSS)
-#   -a <app_id>   应用ID (默认 app_auto)
-#   -f <fg_state> 前后台 (默认 foreground)
-#   --all         采集所有匹配的进程 (默认只采第一个)
-#   --no-push     跳过编译和推送
-#   --no-pull     跳过拉回结果
+#   -o <op_id>      操作ID (默认 auto_YYYYMMDD_HHMMSS)
+#   -a <app_id>     应用ID (默认 app_auto)
+#   -f <fg_state>   前后台 (默认 foreground)
+#   --all           采集所有匹配的进程 (默认只采第一个)
+#   --no-push       跳过编译和推送
+#   --no-pull       跳过拉回结果
+#   --out <dir>     本地输出目录 (默认 memcap_out)
+#   --device-out <dir> 设备端输出目录 (默认 /data/local/tmp/memcap/out)
+#   --reset-out     采集前清空设备和本地输出目录
 
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
@@ -63,6 +66,7 @@ FG_STATE="foreground"
 DO_PUSH=true
 DO_PULL=true
 DO_ALL=false
+RESET_OUT=false
 SAMPLE_INDEX="1"
 
 # ====== 工具函数 ======
@@ -96,6 +100,9 @@ while [[ $# -gt 0 ]]; do
         --all) DO_ALL=true; shift ;;
         --no-push) DO_PUSH=false; shift ;;
         --no-pull) DO_PULL=false; shift ;;
+        --out) LOCAL_OUT="$2"; shift 2 ;;
+        --device-out) DEVICE_OUT="$2"; shift 2 ;;
+        --reset-out) RESET_OUT=true; shift ;;
         -*)
             echo "未知选项: $1"
             echo "用法: $0 <PID|进程名> [应用标签] [-o op_id] [--all] [--no-push] [--no-pull]"
@@ -196,6 +203,14 @@ echo "  设备输出目录:   $DEVICE_OUT"
 echo "============================================"
 echo ""
 
+# ====== 第 1.5 步：重置输出目录（可选） ======
+if [[ "$RESET_OUT" == true ]]; then
+    echo "[重置] 清空设备端输出目录: $DEVICE_OUT"
+    hdc shell "rm -rf $DEVICE_OUT" 2>/dev/null || true
+    echo "[重置] 清空本地输出目录: $LOCAL_OUT"
+    rm -rf "$LOCAL_OUT"
+fi
+
 # ====== 第 2 步：编译与推送 ======
 if [[ "$DO_PUSH" == true ]]; then
     echo "[编译] 交叉编译 memcap.c ..."
@@ -245,13 +260,15 @@ echo "  采集完成 ($FAILED 个失败)"
 # ====== 第 4 步：拉回结果 ======
 if [[ "$DO_PULL" == true ]]; then
     echo "[拉回] 从设备拉取 CSV 结果..."
-    rm -rf "$LOCAL_OUT"
+    mkdir -p "$LOCAL_OUT"
     hdc file recv "$DEVICE_OUT" "$LOCAL_OUT"
     echo "  结果保存到: $LOCAL_OUT"
     echo ""
     echo "============================================"
     echo "  采集完成"
     echo "============================================"
+    echo "  SAMPLE_ID=$SAMPLE_ID"
+    echo "  OUTPUT_DIR=$LOCAL_OUT"
     echo "  快照索引:"
     cat "$LOCAL_OUT/snapshot_index.csv" 2>/dev/null | column -t -s',' || true
     echo ""

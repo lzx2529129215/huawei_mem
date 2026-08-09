@@ -140,6 +140,51 @@ python3 scripts/analyze_memory.py -i memcap_out/ \
 - **ArkTS Heap 是最大内存消费者**：占 RSS 52-57%，前后台波动 77MB
 - **虚拟地址 47.5GB，物理驻留仅 1.4%**：Chromium partition_alloc 特征，不影响实际内存
 
+### 会话级采集
+
+```bash
+# 单次会话多操作、多阶段自动编排
+bash scripts/collect_session.sh douyu 斗鱼 session_001
+
+# 指定操作序列
+bash scripts/collect_session.sh douyu 斗鱼 session_001 -o op_launch,op_switch,op_minimize
+
+# 自定义采集阶段
+bash scripts/collect_session.sh douyu 斗鱼 session_001 --phases before,after_0s,after_3s
+```
+
+每个操作默认采集 before、after_0s、after_1s、after_3s、after_5s 五个阶段。
+脚本会提示用户在设备上执行操作，自动处理延迟等待，并维护 session_index.csv、process_snapshot.csv。
+
+### 数据质量校验
+
+```bash
+# 校验 CSV 数据可 join 性和采集质量
+python3 scripts/validate_dataset.py -i memcap_out/
+
+# 按 session 筛选校验
+python3 scripts/validate_dataset.py -i memcap_out/ --session session_001
+```
+
+检查项：snapshot/VMA/pagemap/operation join 一致性、success sample 数据完整性、
+时间戳单调性、collect_status/pagemap scan_status 分布、session 数据一致性。
+
+### collect.sh 高级选项
+
+```bash
+# 指定本地输出目录
+bash scripts/collect.sh douyu --out my_output/
+
+# 指定设备端输出目录
+bash scripts/collect.sh douyu --device-out /data/local/tmp/memcap/custom_out
+
+# 采集前清空设备和本地输出（全新开始）
+bash scripts/collect.sh douyu --reset-out
+
+# 组合使用
+bash scripts/collect.sh 9376 斗鱼 -o op_test --out session_out/ --reset-out
+```
+
 ## 文件说明
 
 ```
@@ -148,7 +193,10 @@ huawei_mem/
 ├── scripts/
 │   ├── setup_env.sh                 # 环境初始化（sourced）
 │   ├── collect.sh                   # 一键采集脚本（bash）
-│   └── analyze_memory.py            # 跨快照对比分析（Python3）
+│   ├── collect_session.sh           # 会话级编排脚本（bash）
+│   ├── analyze_memory.py            # 跨快照对比分析（Python3）
+│   ├── analyze_operations.py        # 操作级持久性分析（Python3）
+│   └── validate_dataset.py          # 数据集质量校验（Python3）
 ├── docs/
 │   ├── douyu_experiment_report.html # 斗鱼三次采集实验报告（浏览器打开）
 │   ├── progress_dashboard.html      # 项目进展可视化看板
@@ -157,7 +205,9 @@ huawei_mem/
 └── memcap_out/                      # 采集结果 CSV（gitignore）
     ├── snapshot_index.csv
     ├── vma_memory_snapshot.csv
-    └── pagemap_snapshot.csv
+    ├── pagemap_snapshot.csv
+    ├── session_index.csv            # (会话脚本生成)
+    └── process_snapshot.csv         # (会话脚本生成)
 ```
 
 ## 注意事项

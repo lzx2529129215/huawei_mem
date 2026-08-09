@@ -17,6 +17,8 @@ typedef struct {
     unsigned long start, end, offset, inode;
     char perms[16], dev[64], pathname[4096], region_type[64];
     long rss_kb, pss_kb, referenced_kb, anonymous_kb, swap_kb;
+    long shared_clean_kb, shared_dirty_kb, private_clean_kb, private_dirty_kb;
+    long locked_kb;
     char vm_flags[1024];
 } VMA;
 
@@ -69,12 +71,17 @@ static void append_temp_to_file(const char *tmp_path, const char *dest_path) {
 
 static void classify_region(VMA *v) {
     const char *p = v->pathname;
-    if (strstr(p, "[heap]")) strcpy(v->region_type, "heap");
-    else if (strstr(p, "[stack]")) strcpy(v->region_type, "stack");
-    else if (strlen(p) == 0) strcpy(v->region_type, "anon");
-    else if (strstr(p, ".so")) strcpy(v->region_type, "shared_lib");
-    else if (strstr(p, "/")) strcpy(v->region_type, "file");
-    else strcpy(v->region_type, "other");
+
+    /* HarmonyOS / Linux 匿名区域命名模式 */
+    if (strstr(p, "[anon:"))          strcpy(v->region_type, "anon");
+    else if (strstr(p, "[heap]"))     strcpy(v->region_type, "heap");
+    else if (strstr(p, "[stack"))     strcpy(v->region_type, "stack");
+    else if (strstr(p, "[vdso]"))     strcpy(v->region_type, "vdso");
+    else if (strstr(p, "[vvar]"))     strcpy(v->region_type, "vdso");
+    else if (strlen(p) == 0)          strcpy(v->region_type, "anon");
+    else if (strstr(p, ".so"))        strcpy(v->region_type, "shared_lib");
+    else if (strstr(p, "/"))          strcpy(v->region_type, "file");
+    else                              strcpy(v->region_type, "other");
 }
 
 static int parse_maps(int pid, VMA *vmas, int *nvma) {
@@ -99,6 +106,8 @@ static int parse_maps(int pid, VMA *vmas, int *nvma) {
             v.pathname[0] = 0;
         }
         v.rss_kb = v.pss_kb = v.referenced_kb = v.anonymous_kb = v.swap_kb = 0;
+        v.shared_clean_kb = v.shared_dirty_kb = v.private_clean_kb = v.private_dirty_kb = 0;
+        v.locked_kb = 0;
         classify_region(&v);
         vmas[n++] = v;
     }
@@ -137,6 +146,11 @@ static void parse_smaps(int pid, VMA *vmas, int nvma) {
         else if (sscanf(line, "Referenced: %ld kB", &val) == 1) vmas[cur].referenced_kb = val;
         else if (sscanf(line, "Anonymous: %ld kB", &val) == 1) vmas[cur].anonymous_kb = val;
         else if (sscanf(line, "Swap: %ld kB", &val) == 1) vmas[cur].swap_kb = val;
+        else if (sscanf(line, "Shared_Clean: %ld kB", &val) == 1) vmas[cur].shared_clean_kb = val;
+        else if (sscanf(line, "Shared_Dirty: %ld kB", &val) == 1) vmas[cur].shared_dirty_kb = val;
+        else if (sscanf(line, "Private_Clean: %ld kB", &val) == 1) vmas[cur].private_clean_kb = val;
+        else if (sscanf(line, "Private_Dirty: %ld kB", &val) == 1) vmas[cur].private_dirty_kb = val;
+        else if (sscanf(line, "Locked: %ld kB", &val) == 1) vmas[cur].locked_kb = val;
         else if (strncmp(line, "VmFlags:", 8) == 0) {
             char *p = line + 8;
             while (*p == ' ' || *p == '\t') p++;
@@ -171,7 +185,7 @@ static void append_headers(const char *outdir) {
     snprintf(p, sizeof(p), "%s/vma_memory_snapshot.csv", outdir);
     if (!file_exists(p)) {
         FILE *f=fopen(p,"w");
-        if(f){fprintf(f,"sample_id,operation_id,app_id,app_name,process_name,pid,timestamp_ms,snapshot_index,vma_id,vma_start,vma_end,vma_size_kb,perms,offset,dev,inode,pathname,region_type,rss_kb,pss_kb,referenced_kb,anonymous_kb,swap_kb,vm_flags,note\n"); fclose(f);}
+        if(f){fprintf(f,"sample_id,operation_id,app_id,app_name,process_name,pid,timestamp_ms,snapshot_index,vma_id,vma_start,vma_end,vma_size_kb,perms,offset,dev,inode,pathname,region_type,rss_kb,pss_kb,referenced_kb,anonymous_kb,swap_kb,shared_clean_kb,shared_dirty_kb,private_clean_kb,private_dirty_kb,locked_kb,vm_flags,note\n"); fclose(f);}
     }
 
     snprintf(p, sizeof(p), "%s/pagemap_snapshot.csv", outdir);
@@ -221,8 +235,12 @@ static void write_vma_csv(const char *outdir, VMA *vmas, int nvma, const char *s
                 vmas[i].perms, vmas[i].offset, vmas[i].dev, vmas[i].inode);
         csv_escape(f, vmas[i].pathname); fprintf(f, ",");
         csv_escape(f, vmas[i].region_type);
-        fprintf(f, ",%ld,%ld,%ld,%ld,%ld,", vmas[i].rss_kb, vmas[i].pss_kb,
-                vmas[i].referenced_kb, vmas[i].anonymous_kb, vmas[i].swap_kb);
+        fprintf(f, ",%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld,",
+                vmas[i].rss_kb, vmas[i].pss_kb,
+                vmas[i].referenced_kb, vmas[i].anonymous_kb, vmas[i].swap_kb,
+                vmas[i].shared_clean_kb, vmas[i].shared_dirty_kb,
+                vmas[i].private_clean_kb, vmas[i].private_dirty_kb,
+                vmas[i].locked_kb);
         csv_escape(f, vmas[i].vm_flags);
         fprintf(f, ",\n");
     }
