@@ -39,6 +39,12 @@ DEFAULT_DEVICE_DIR = "/data/local/tmp/mem_analyze_v6"
 DEFAULT_DEVICE_OUT_ROOT = "/data/local/tmp/mem_analyze_v6/wps_reports"
 DOCUMENT_ROOT = "/storage/media/100/local/files/Docs"
 DESKTOP_ROOT = "/storage/media/100/local/files/Docs/Desktop"
+EXPERIMENT_ROOT = f"{DOCUMENT_ROOT}/WPS_VMA_Experiments"
+DOCUMENT_SCAN_ROOTS = (
+    DOCUMENT_ROOT,
+    "/storage/media/100/local/files/Download",
+    "/storage/media/100/local/files/Documents",
+)
 DEFAULT_TEST_SERIAL = "WPS-TEST-0001"
 
 # HarmonyOS key codes.  ``uitest uiInput keyEvent`` accepts up to three key
@@ -95,7 +101,18 @@ def q(value: str) -> str:
 
 
 def find_hdc() -> str:
-    value = os.environ.get("HDC", "") or shutil.which("hdc")
+    configured = os.environ.get("HDC", "").strip()
+    if configured:
+        configured_path = Path(configured).expanduser()
+        if configured_path.is_file():
+            return str(configured_path)
+        if configured_path.is_dir():
+            for name in ("hdc.exe", "hdc"):
+                candidate = configured_path / name
+                if candidate.is_file():
+                    return str(candidate)
+
+    value = shutil.which("hdc")
     if value:
         return value
     candidates = (
@@ -113,21 +130,24 @@ def run_host(command: list[str], *, check: bool = True, timeout_s: float = 180.0
         result = subprocess.run(
             command,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=timeout_s,
         )
     except subprocess.TimeoutExpired as exc:
         raise HdcError(f"命令超时: {' '.join(command)}") from exc
+    output = result.stdout or ""
     if check and result.returncode != 0:
-        raise HdcError(f"命令失败({result.returncode}): {' '.join(command)}\n{result.stdout.strip()}")
+        raise HdcError(f"命令失败({result.returncode}): {' '.join(command)}\n{output.strip()}")
     return result
 
 
 def list_targets(hdc: str) -> list[str]:
     result = run_host([hdc, "list", "targets"])
     targets: list[str] = []
-    for line in result.stdout.splitlines():
+    for line in (result.stdout or "").splitlines():
         token = line.strip().split()[0] if line.strip() else ""
         if token and not token.startswith("[") and token not in targets:
             targets.append(token)
@@ -149,7 +169,7 @@ class Device:
 
     def run(self, *args: str, check: bool = True, timeout_s: float = 180.0) -> str:
         result = run_host([self.hdc, "-t", self.target, *args], check=False, timeout_s=timeout_s)
-        output = result.stdout.strip()
+        output = (result.stdout or "").strip()
         lower = output.lower()
         remote_error = any(
             marker in lower
@@ -248,6 +268,9 @@ class Session:
         self.device = Device(self.hdc, target)
         self.session_timestamp = args.session_id or dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         self.session_id = f"wps_v6_{self.session_timestamp}" if not self.session_timestamp.startswith("wps_v6_") else self.session_timestamp
+        self.experiment_slug = re.sub(r"[^A-Za-z0-9_-]+", "_", self.session_timestamp)
+        self.experiment_dir = f"{EXPERIMENT_ROOT}/WPS_VMA_Experiment_{self.experiment_slug}"
+        self.experiment_file_name = f"WPS_VMA_{self.experiment_slug}.docx"
         self.script_dir = Path(__file__).resolve().parent
         self.local_out = Path(args.out).expanduser() if args.out else self.script_dir / "hdc_out" / f"wps_session_{self.session_id}"
         self.local_out.mkdir(parents=True, exist_ok=True)
@@ -346,8 +369,9 @@ class Session:
         self.device.shell(f"{q(self.device_bin)} --clear-refs --app {q(BUNDLE)}")
 
     def list_documents(self) -> list[dict[str, Any]]:
+        scan_roots = " ".join(q(path) for path in DOCUMENT_SCAN_ROOTS)
         command = (
-            f"find {q(DOCUMENT_ROOT)} -type f "
+            f"find {scan_roots} -type f "
             "\\( -iname '*.docx' -o -iname '*.doc' -o -iname '*.wps' \\) "
             "2>/dev/null | while read -r f; do "
             "stat -c '%n|%s|%y' \"$f\"; done"
@@ -531,6 +555,15 @@ class Session:
 
     def ui_click(self, x: int, y: int) -> None:
         self.device.shell(f"uitest uiInput click {x} {y}")
+
+    def set_save_filename(self) -> None:
+        """Replace WPS's reused default name with this trial's unique name."""
+        # Native WPS save picker filename field on the 3120x2080 target.
+        # The field is above the file-type selector; y=1585 lands on the
+        # selector and leaves WPS's reused filename unchanged.
+        self.ui_click(1800, 1500)
+        self.ui_key_chord(KEY_CTRL_LEFT, KEY_A)
+        self.ui_text_payload(self.experiment_file_name)
 
     def ui_text_payload(self, text: str) -> None:
         safe = re.sub(r"[^A-Za-z0-9_.:/+-]+", "_", text)
@@ -740,6 +773,7 @@ class Session:
     def save_document(self, *, verify_content: bool = True) -> dict[str, Any]:
         before = {item["path"]: (item["size_bytes"], item["mtime"]) for item in self.list_documents()}
         self.document_baseline = before
+        self.device.shell(f"mkdir -p {q(self.experiment_dir)}")
         self.capture_screen("05_save_before")
         # Toolbar save icon on the current WPS editor window.  On this
         # 3120x2080 display it is x≈1055; x≈850 is the auto-save toggle.
@@ -747,6 +781,7 @@ class Session:
         time.sleep(4)
         # Choose the user-visible Desktop in the WPS save picker.  A first
         # access may show a HarmonyOS permission dialog; allow it and retry.
+        self.set_save_filename()
         self.ui_click(650, 842)
         time.sleep(2)
         self.ui_click(2300, 1665)
@@ -756,13 +791,48 @@ class Session:
         # If the permission dialog was absent, this is harmless only when it
         # lands outside the app; retrying Save is the useful action.
         self.ui_click(2300, 1665)
-        saved = self.find_saved_document(wait_s=20.0)
+        saved = self.find_saved_document(wait_s=8.0)
         if not saved:
-            raise HdcError("保存操作后未在设备 Docs 目录发现新增或变化的文档")
+            # Some WPS builds do not activate the toolbar Save button after a
+            # formatting/menu operation.  Reset the picker/editor state and
+            # retry through the standard Ctrl+S shortcut.
+            self.ui_key(KEY_ESCAPE)
+            time.sleep(1)
+            self.ui_click(self.args.editor_x, self.args.editor_y)
+            self.ui_key_chord(KEY_CTRL_LEFT, KEY_S)
+            time.sleep(4)
+            self.set_save_filename()
+            self.ui_click(650, 842)
+            time.sleep(2)
+            self.ui_click(2300, 1665)
+            time.sleep(4)
+            self.ui_click(1885, 1275)
+            time.sleep(2)
+            self.ui_click(2300, 1665)
+            saved = self.find_saved_document(wait_s=20.0)
+        if not saved:
+            self.capture_screen("05_save_failed")
+            current = self.list_documents()
+            current_text = "; ".join(
+                f"{item['path']} ({item['size_bytes']} bytes)" for item in current[-8:]
+            ) or "(none)"
+            raise HdcError(
+                "保存操作后未发现新增或变化的文档；已扫描 Docs/Download/Documents，"
+                f"当前文档={current_text}"
+            )
+        source_path = saved["path"]
+        final_path = f"{self.experiment_dir}/{self.experiment_file_name}"
+        self.device.shell(f"mkdir -p {q(self.experiment_dir)} && mv {q(source_path)} {q(final_path)}")
+        moved = next((item for item in self.list_documents() if item["path"] == final_path), None)
+        if not moved or moved["size_bytes"] <= 0:
+            raise HdcError(f"文档已保存但归档到实验文件夹失败: {final_path}")
+        saved = moved
         content_markers = self.verify_document_content(saved["path"]) if verify_content else {}
         self.saved_document = {
             **saved,
-            "original_path": saved["path"],
+            "original_path": source_path,
+            "final_path": final_path,
+            "file_name": Path(saved["path"]).name,
             "content_markers_verified": content_markers,
         }
         self.capture_screen("05_save_after")
@@ -774,7 +844,7 @@ class Session:
             raise HdcError("普通保存前没有已保存文档记录")
         path = str(self.saved_document.get("final_path") or self.saved_document.get("path") or "")
         before = next((item for item in self.list_documents() if item["path"] == path), None)
-        self.ui_click(1055, 555)
+        self.ui_key_chord(KEY_CTRL_LEFT, KEY_S)
         time.sleep(5)
         after = next((item for item in self.list_documents() if item["path"] == path), None)
         if after:

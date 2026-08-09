@@ -597,7 +597,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[wps-dataset] trial {offset + 1}/{args.trials}: trial_{trial_number:03d}", flush=True)
         result = _run_trial(args, root, trial_number)
         trial_results.append(result)
-        print(f"[wps-dataset] trial_{trial_number:03d}: {result['status']}", flush=True)
+        status_line = f"[wps-dataset] trial_{trial_number:03d}: {result['status']}"
+        if result["status"] != "success" and result.get("error"):
+            status_line += f" | {result['error']}"
+        print(status_line, flush=True)
 
     build_error = ""
     summary: dict[str, Any] = {}
