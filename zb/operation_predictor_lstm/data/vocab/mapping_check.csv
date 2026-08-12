@@ -1,0 +1,1160 @@
+﻿process_name,event_count,mapped_app,mapping_type,mapping_reason,is_system,is_in_target_vocab,type
+com.huawei.hmos.browser,56011,华为浏览器,alias,explicit process alias: com.huawei.hmos.browser,False,True,app
+com.tencent.wechat.pc,54466,微信,alias,explicit process alias: com.tencent.wechat.pc,False,True,app
+cn.wps.office.hap,41176,WPS,alias,explicit process alias: cn.wps.office.hap,False,True,app
+com.huawei.hmos.filemanager,39412,,system,system/background service rule,True,False,system
+com.huawei.hmos.settings,16990,,system,system/background service rule,True,False,system
+com.huawei.hmsapp.appgallery,12270,,system,system/background service rule,True,False,system
+com.tencent.wework.hmos,11336,,unresolved,no safe mapping rule matched,False,False,unresolved
+yylx.danmaku.bili,9581,哔哩哔哩,alias,explicit process alias: yylx.danmaku.bili,False,True,app
+com.huawei.shell_assistant,8906,,system,system/background service rule,True,False,system
+com.huawei.hmos.vassistant,7999,,system,system/background service rule,True,False,system
+com.haitai.htbrowser,6855,海泰浏览器,alias,explicit process alias: com.haitai.htbrowser,False,True,app
+com.tencent.harmonyqq,5358,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmsapp.music,5064,华为音乐,alias,explicit process alias: com.huawei.hmsapp.music,False,True,app
+com.huawei.hmos.notepad,4936,备忘录,alias,explicit process alias: com.huawei.hmos.notepad,False,True,app
+com.xingin.xhs_hos,4608,小红书,alias,explicit process alias: com.xingin.xhs_hos,False,True,app
+com.huawei.hmos.photos,4503,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.hm.qqmusic,3806,华为音乐,category_fallback,recognized music; app_vocab.json has one candidate: 华为音乐,False,True,app
+com.ss.ohpc.ugc.aweme,3702,抖音,alias,explicit process alias: com.ss.ohpc.ugc.aweme,False,True,app
+com.hos.moonshot.kimichat,3480,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.devicecollaboration,2646,,system,system/background service rule,True,False,system
+com.hm.youdao,2525,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sanway.ecoengine,2246,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.email,2216,华为邮箱,alias,explicit process alias: com.huawei.hmos.email,False,True,app
+com.ss.feishu,2196,飞书,alias,explicit process alias: com.ss.feishu,False,True,app
+com.huawei.hmos.videoplayer,2172,华为视频,alias,explicit process alias: com.huawei.hmos.videoplayer,False,True,app
+com.salmon.sweetmusic,1924,华为音乐,category_fallback,recognized music; app_vocab.json has one candidate: 华为音乐,False,True,app
+com.wifiservice.portallogin,1915,,system,system/background service rule,True,False,system
+com.dingtalk.hmos.pc,1837,钉钉,alias,explicit process alias: com.dingtalk.hmos.pc,False,True,app
+com.huawei.hmos.hipreview,1794,,system,system/background service rule,True,False,system
+com.luna.hm.music,1696,华为音乐,category_fallback,recognized music; app_vocab.json has one candidate: 华为音乐,False,True,app
+com.tencent.meeting.app,1560,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.myhuawei,1484,,system,system/background service rule,True,False,system
+com.qihoo.hms.browser,1425,,unresolved,"category browser is ambiguous or unavailable in app_vocab.json: 华为浏览器,海泰浏览器",False,False,unresolved
+com.huawei.hmsapp.himovie,1378,华为视频,alias,explicit process alias: com.huawei.hmsapp.himovie,False,True,app
+com.huawei.hmsapp.totemweather,1211,,system,system/background service rule,True,False,system
+com.huawei.hmsapp.hisearch,1080,,system,system/background service rule,True,False,system
+com.aliyun.tongyi4ohos,1049,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.hinotepad,1041,备忘录,alias,explicit process alias: com.huawei.hmos.hinotepad,False,True,app
+com.oseasy1.ohvm,1033,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.droi.tong,952,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.baidu.netdisk.hmpc,922,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.qidian,917,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.calculator,857,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.quark.ohosbrowser,854,,unresolved,"category browser is ambiguous or unavailable in app_vocab.json: 华为浏览器,海泰浏览器",False,False,unresolved
+com.hmkuwo.cn,832,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.calendar,799,日历,package_match,package contains calendar,False,True,app
+com.kugou.hmmusic,782,华为音乐,category_fallback,recognized music; app_vocab.json has one candidate: 华为音乐,False,True,app
+com.qiyi.video.hmy,714,华为视频,category_fallback,recognized video; app_vocab.json has one candidate: 华为视频,False,True,app
+com.netease.cloudmusic,712,华为音乐,category_fallback,recognized music; app_vocab.json has one candidate: 华为音乐,False,True,app
+com.lemon.lvpro,694,剪映,alias,explicit process alias: com.lemon.lvpro,False,True,app
+com.huawei.hmos.hishell,687,,system,system/background service rule,True,False,system
+com.xuexitong.study,648,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.qqlivepchm,641,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmsapp.thememanager,609,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.tips,599,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hms.huaweiid,597,,system,system/background service rule,True,False,system
+com.cscec.portal.harmonyosnext,590,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmsapp.appgallery.devicetest,587,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.wechat.pc:browser,563,微信,alias,explicit process alias: com.tencent.wechat.pc,False,True,app
+com.edrawsoft.mindmaster.pc,558,mindmaster,package_match,package contains mind map product,False,True,app
+com.youku.next,542,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.taskmanager,541,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.oray.sunloginclient,512,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmsapp.books,507,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ohos.callui,494,,system,system/background service rule,True,False,system
+com.dragon.read.next,484,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zhihu.hmos,465,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.wps.office.hap:wpscloudsvr,464,WPS,alias,explicit process alias: cn.wps.office.hap,False,True,app
+cherrystudio.cherryai.com,459,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.xljsci,458,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.baidu.translateharmony,452,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hexin.hmn.sjcg,450,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.haozip2345.app,448,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.biandangroup.biandan,428,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.ailife,422,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zwsoft.zwcad.PE,388,中望CAD,package_match,package contains ZWCAD,False,True,app
+org.xbgroup.clashboxLTS,387,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ohos.mms,385,,system,system/background service rule,True,False,system
+hos.cn.com.langeasy.bbdc,379,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mgtv.phone,376,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.spooler,372,,system,system/background service rule,True,False,system
+com.chaoxing.cxstudy,371,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.camera,369,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mikannqaq.obsidian,361,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dewu.hos,351,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hottagames.yh.huawei,350,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qcc.hm,338,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.devecostudio,336,悟空图像,alias,explicit process alias: com.huawei.devecostudio,False,True,app
+com.huawei.hmos.hwstartupguide,330,,system,system/background service rule,True,False,system
+com.deepseek.chat,326,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.clock,313,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.finddevice,308,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.baidu.netdisk.hmos,298,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hdg4.ql.huawei,298,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.fenbi.gwy,295,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.salmon.doubao,289,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hellocham3.app,280,,unresolved,no safe mapping rule matched,False,False,unresolved
+jp.pokemon.pokemontcgp,279,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.phoenix.read.next,274,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kot32.hongmeng.tomatodo,272,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sina.weibo.stage,264,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmsapp.gamecenter,262,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.developer.rgm.images_openeuler22.03,247,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.photosir.himirage,243,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.baicizhan.bcz.hm,241,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.edrawsoft.edrawmax.pc,231,亿图图示,package_match,package contains Edraw,False,True,app
+com.ohos.contacts,230,,system,system/background service rule,True,False,system
+com.plantsvszombies3.mengxinghm.huawei,222,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.hunyuan.app.chat,219,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zhanhuo.mw.hm.huawei,217,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.canva.hmos.editor,202,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.imahm,201,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.feiyu.luobo4.hm.huawei,197,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yinxiang.hm,190,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.chuckfang.meow,185,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hikvision.isecurecenter,183,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.salmon.web.ncm,181,,unresolved,no safe mapping rule matched,False,False,unresolved
+xyz.chatboxapp.chatbox,181,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.codearts,179,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zuler.ohospc.todesk,179,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.eastmoney.emapp,171,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.shanbay.hmsentence,171,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cctv.yangshipin.app.harmonyp,165,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.soundrecorder,157,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.netease.ohmail,153,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.develop.opensource.ohpcd.openclaw.assistant,150,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.taobao.idlefish4ohos,150,,unresolved,no safe mapping rule matched,False,False,unresolved
+org.xbgroup.clashbox,148,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bilibili.blhx.harmonyblhx,147,哔哩哔哩,package_match,package contains Bilibili/Danmaku,False,True,app
+com.huawei.hmos.findservice,145,,system,system/background service rule,True,False,system
+com.xunlei.thunder,145,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.maps.app,143,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.foxit.foxitpdfeditor,142,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ykb.hm,142,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kingsoft.iciba,140,WPS,package_match,package contains WPS/Kingsoft,False,True,app
+com.onyx.galaxy.hmos.note,138,备忘录,category_fallback,recognized notes; app_vocab.json has one candidate: 备忘录,False,True,app
+com.huawei.hmos.hiviewcare,134,,system,system/background service rule,True,False,system
+com.coolapk.hmclient,130,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.ohdosbox,121,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bsy.hxqhm,120,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.rrsp,120,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.vmall,119,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.seewo.easinote5,119,备忘录,category_fallback,recognized notes; app_vocab.json has one candidate: 备忘录,False,True,app
+com.xiaoe.client.huawei,117,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.strato.webprinter,115,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sankuai.hmeituan,114,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.haitai.quick_htbrowser,112,海泰浏览器,package_match,package contains Haitai Browser,False,True,app
+com.huawei.hmos.vassistant:free,110,,system,system/background service rule,True,False,system
+com.meitu.mtxxpro,108,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ohos.sceneboard,108,,system,system/background service rule,True,False,system
+com.baidu.baiduapp,106,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmsapp.alliance,106,,unresolved,no safe mapping rule matched,False,False,unresolved
+org.xbstudio.clashnext,105,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.seayoo.ggd.hmos.huawei,99,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.meetimeservice,93,,system,system/background service rule,True,False,system
+com.fingertip.saolei.harm,92,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmsapp.litegamelauncher,90,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.audioaccessorymanager,89,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zj.lt,89,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.xuexi.qg4ohos,88,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.jideos.jnotes.hm,88,备忘录,category_fallback,recognized notes; app_vocab.json has one candidate: 备忘录,False,True,app
+com.xgplayer.ttmusic.hm,85,华为音乐,category_fallback,recognized music; app_vocab.json has one candidate: 华为音乐,False,True,app
+com.dream.nimble_widget_app,83,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.meetime,82,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.larus.nova,81,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.mtthm,81,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.atomicservice.5765880207854799389,80,,system,system/background service rule,True,False,system
+com.jd.hm.mall,79,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.alkaidlab.sdream,78,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bilibili.ohos_electron,75,哔哩哔哩,alias,explicit process alias: com.bilibili.ohos_electron,False,True,app
+com.vortex,75,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xunlei.xmp,75,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.docsohos,74,WPS,category_fallback,recognized office; app_vocab.json has one candidate: WPS,False,True,app
+com.huawei.hmos.inputmethod,73,,system,system/background service rule,True,False,system
+com.sangfor.atrust.mobile,73,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cnvcs.go.hm,72,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.eusoft.eudic.hm_desktop,70,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dingtalk.hmos.zju,67,钉钉,package_match,package contains DingTalk,False,True,app
+com.example.celechomo_next,65,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.accessorymanager,63,,system,system/background service rule,True,False,system
+com.huawei.hmsapp.apptest,63,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qingqinglearn.newconcept,62,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hms.pafservice,59,,system,system/background service rule,True,False,system
+com.huawei.hmos.fontinstaller,56,,system,system/background service rule,True,False,system
+com.ss.android.ugc.aweme.lite,56,抖音,alias,explicit process alias: com.ss.android.ugc.aweme.lite,False,True,app
+com.tak916.AudioEasePro,56,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ahaspeed4.app,55,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zhuzx.webdavhelper,55,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.mucang.hm.jiakao,54,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.atomicservice.6917585484756622684,53,,system,system/background service rule,True,False,system
+nutstore.hm.client,53,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.RoamingStar.BlueArchive,52,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.magicalstory.toolbox.huawei,52,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.chinarailway.ticketingHM,51,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dunodoge.flowcourse,51,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.liuzh.deviceinfo.hmos,51,,unresolved,no safe mapping rule matched,False,False,unresolved
+xsdg.pixcakeai.com,51,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.biji.getNotesOh,49,备忘录,category_fallback,recognized notes; app_vocab.json has one candidate: 备忘录,False,True,app
+cn.wondershare.filmora.2in1,48,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hp.printercontrol.china,47,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zhangxm.aipasswordmemo,47,备忘录,category_fallback,recognized notes; app_vocab.json has one candidate: 备忘录,False,True,app
+,46,,system,system/background service rule,True,False,system
+com.lilian.minyudao,46,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.fileunzip.zxwknight.hos,45,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.iqh.ark,45,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cnki.oh_estudy,44,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.dataclone,44,,system,system/background service rule,True,False,system
+com.dingtalk.hmos.pc:entry,43,钉钉,alias,explicit process alias: com.dingtalk.hmos.pc,False,True,app
+com.fenbi.zhaojiao,43,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mikannqaq.motrix,43,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.netease.yyslscn.huawei,42,,unresolved,no safe mapping rule matched,False,False,unresolved
+app.xmind.vana,41,mindmaster,alias,explicit process alias: app.xmind.vana,False,True,app
+com.px.product,41,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ss.hm.article.news,41,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.guandan.hap,40,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.megagame.crosscore.hmos,40,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.songjy.synologydsmhelper,40,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.ieway.evcapturenext,39,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.freenotes.freenotes,39,备忘录,category_fallback,recognized notes; app_vocab.json has one candidate: 备忘录,False,True,app
+com.uc.mobile,39,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.acmetone.airplanmode,38,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.easy.hmos.abroad,38,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ohos.FusionSearch,38,,system,system/background service rule,True,False,system
+com.aircode.app,37,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.airvnc.app,37,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mikannqaq.telegram,37,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.netease.edu.ucmooc,37,,unresolved,no safe mapping rule matched,False,False,unresolved
+net.cnki.oh_cajviewer,36,,unresolved,no safe mapping rule matched,False,False,unresolved
+zhiyanlingxi.huawei.com,36,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.jucai.happygohap,35,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cctv.cboxpc,34,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yt.radioHarmony,34,,unresolved,no safe mapping rule matched,False,False,unresolved
+org.b3log.siyuan.ho,34,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ftsafe.otp,33,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.juexiao.kaoyan,33,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.peopledailychina.hosactivity,33,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ximalaya.ting.xmharmony,33,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.baijiayun.shouyixiaozao,32,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qihoo.namiso.h,32,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.nrc,32,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.youdao.hm.translate,32,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yuewen.qqreaderhm,32,,unresolved,no safe mapping rule matched,False,False,unresolved
+openvpn.huawei.com,32,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.atomicservice.6917574064535076369,31,,system,system/background service rule,True,False,system
+com.xiaobai.hap_installer,31,,system,system/background service rule,True,False,system
+com.zhangxm.aitodo,31,,unresolved,no safe mapping rule matched,False,False,unresolved
+net.csdn.csdnplusoh,31,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.playrix.township.chukong.hm.HUAWEI,30,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.wenyu.bodian.hm,29,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.jd.jrapp.hongmeng,29,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yuntu.cadreaderhmpc,29,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zxxk.zj,29,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.sweetvideo,28,华为视频,category_fallback,recognized video; app_vocab.json has one candidate: 华为视频,False,True,app
+com.huawei.hmos.clouddrive,28,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.lws.celesmarkx,28,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qidian.reader,28,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sakura.app,28,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.salmon.mihoyo.launcher,28,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.antgroup.leopard.lumina,27,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.oxunlong.editor,27,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.pmph.irenwei.hm,27,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.pzds.panzhi,27,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.salmon.ncmdump,26,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.shimo.desktop.main,26,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ctrip.harmonynext,25,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.growing.topwidgets.hm,25,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.salmon.hlju.helper,25,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.xinghezuoyong.screenartist,24,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.360.zip,24,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.able.wisdomtreehm,24,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.lotoze.md,24,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.vintage.pomelo,24,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zlketang.hm,24,,unresolved,no safe mapping rule matched,False,False,unresolved
+fun.wakeup.schedule,24,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cjkjapp.pencopybook.hw,23,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.codex.telegram,23,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dlzz.manxia,23,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kaoshibao.app,23,,unresolved,no safe mapping rule matched,False,False,unresolved
+cc.canstudio.cando,22,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.haidii.oxford_necdict_17001,22,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.actgames.bbee.huawei,21,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.databackup,21,,system,system/background service rule,True,False,system
+com.miHoYo.hkrpg,21,,unresolved,no safe mapping rule matched,False,False,unresolved
+harmory.lanjinger.choiassociatedpress,21,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.coze.space,20,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.eusoft.ting.en.hm_desktop,20,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.gstarcad.hmos.mobile,20,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.meeting,20,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.hm.news,20,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.umetrip.pro.hm.app,20,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xes.xuejia.harmonyHD,20,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cmcc.cmvideohm,19,华为视频,category_fallback,recognized video; app_vocab.json has one candidate: 华为视频,False,True,app
+com.dongqiudi.hmn.news,19,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wisdomgarden.tronclass,19,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dfjz.moba.hmos,18,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.minitech.miniworld.hm,18,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mubu.ohapp,18,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.salmon.fdtest,18,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.special.cat.meta,18,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yuanchushan.app,18,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.cctvnews.hm,17,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ezviz.mt,17,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.ecaengine,17,,system,system/background service rule,True,False,system
+com.huawei.hmos.exfusiondisplay,17,,system,system/background service rule,True,False,system
+com.pkulaw.fabao,17,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sanye.xiongyingjiasuqi.hm,17,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.shuge888.frogtodo.hos,17,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zhuoyi.browser,17,,unresolved,"category browser is ambiguous or unavailable in app_vocab.json: 华为浏览器,海泰浏览器",False,False,unresolved
+com.RZ.Clipboard,16,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.app.yangjibao,16,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cainiao.cainiao4hmos,16,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.changba.ktv,16,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.eachfofo.localsend,16,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.idoharmony.learingtimer,16,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.jjwxc.jjharmony.reader,16,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mikannqaq.bilimusic,16,哔哩哔哩,package_match,package contains Bilibili/Danmaku,False,True,app
+com.tmall.tmall4hmos,16,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xiaoji.egggame,16,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.airpocket.app,15,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bytedance.dreamina,15,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.foxit.foxitpdfeditor:Activation,15,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.jingback.hm.daojishi,15,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.michael.imageplus,15,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.netease.mail,15,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wisedu.campus,15,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yhd.hm.mall,15,,unresolved,no safe mapping rule matched,False,False,unresolved
+pc2c.richinfo.richmail,15,,unresolved,no safe mapping rule matched,False,False,unresolved
+app.podcast.cosmos.hongmeng,14,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.lymps,14,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.google.android.apps.labs.language.tailwind,14,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qimo.appdj41,14,,unresolved,no safe mapping rule matched,False,False,unresolved
+me.ele.eleme,14,,unresolved,no safe mapping rule matched,False,False,unresolved
+tv.danmaku.bili,14,哔哩哔哩,alias,explicit process alias: tv.danmaku.bili,False,True,app
+cn.jj.chess.hm,13,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.li4.zhentibanlv,13,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bym.hm.huli,13,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.finance.pcoh,13,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.fut,13,,system,system/background service rule,True,False,system
+com.njwsb.iclockhm,13,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.nu11.tools.lazycat.timer,13,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qunar.hos,13,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.smartcloud.sygcs,13,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.soulharbor.ecoarkstudio,13,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yantu.viphm,13,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yhdja.attendance.prod,13,,unresolved,no safe mapping rule matched,False,False,unresolved
+app.hackeris.hish,12,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.jianyun.hm.timetable,12,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cib.client_pc,12,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.edo.xfilesProHM,12,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.app_22,12,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.gaoding.client,12,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.hiviewpage,12,,system,system/background service rule,True,False,system
+com.huawei.hmos.world,12,华为浏览器,alias,explicit process alias: com.huawei.hmos.world,False,True,app
+com.hupu.heroes,12,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.jyeoo.ystudy,12,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zhuanzhuan.hmoszz,12,,unresolved,no safe mapping rule matched,False,False,unresolved
+net.arraynetworks.mobilenow.browser,12,,unresolved,"category browser is ambiguous or unavailable in app_vocab.json: 华为浏览器,海泰浏览器",False,False,unresolved
+cn.axi.chiaki.hw,11,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bookdao.bdstudy,11,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.chaoge.athena_harmony,11,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cnspeedtest.hmos.globalspeed,11,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.github.metacubex.clash.meta,11,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.gw.ohphone,11,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.happyelements.OhosAnimal,11,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.laiyin.editscore,11,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.maimemo.huawei.momo,11,备忘录,category_fallback,recognized notes; app_vocab.json has one candidate: 备忘录,False,True,app
+com.tencent.tmgp.sgame,11,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.wechat.pc:browser:1,11,微信,alias,explicit process alias: com.tencent.wechat.pc,False,True,app
+com.upgadata.zhushou32,11,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wedobest.xiangqi.harm,11,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zhzjplus.study,11,,unresolved,no safe mapping rule matched,False,False,unresolved
+TSViewer.svitek.cn,10,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cjapp.usbcamera,10,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.easy.abroad,10,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.excelliance.cloudapp,10,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.galasports.b5.hmos,10,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.aidispatchservice,10,,system,system/background service rule,True,False,system
+com.huawei.hms.iapservice,10,,system,system/background service rule,True,False,system
+com.joym.xiongdakuaipao.hw,10,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kuaishou.hmapp,10,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kuaishou.hmnebula,10,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.szsx.countdown,10,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.wechat.pc1,10,微信,process_match,process prefix com.tencent.wechat,False,True,app
+com.xf.day,10,,unresolved,no safe mapping rule matched,False,False,unresolved
+painless.xiangzi.tech,10,,unresolved,no safe mapping rule matched,False,False,unresolved
+ycfs.tools.refocus,10,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.polarz.insnap,9,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.wps.office.hap:ksolaunch,9,WPS,alias,explicit process alias: cn.wps.office.hap,False,True,app
+com.btk.hmcube,9,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cottongame.greenpondtownhm.huawei,9,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cottongame.sunsethills.huawei,9,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.develop.opensource.ohdpc.devnode,9,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.douban.frodo.hap,9,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dwnna.aljzd,9,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.helloworld,9,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.mediacontroller,9,,system,system/background service rule,True,False,system
+com.kathy.solarterms,9,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.max.hos.xiaoheihe,9,亿图图示,package_match,package contains Edraw,False,True,app
+com.ohos.ohosqttemplate,9,,system,system/background service rule,True,False,system
+com.qimao.novel,9,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ruanmei.ithome.hosnext,9,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xylink.video.conference.pc,9,华为视频,category_fallback,recognized video; app_vocab.json has one candidate: 华为视频,False,True,app
+org.xbstudio.homl.pro,9,,unresolved,no safe mapping rule matched,False,False,unresolved
+top.frankhan.easytier,9,,unresolved,no safe mapping rule matched,False,False,unresolved
+yuanqiqishi.game.huaweiohos,9,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.lceda.pro,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.android.chrome,8,,system,system/background service rule,True,False,system
+com.app.ydlyc,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.boshibao.hospital.check,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bytedance.hm.ad.deliver,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.chaochaoshishi.slytherin_hm,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.chatexcelHM1.app,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cjtec.uncompress.hw,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.subway_manage_system,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.screenrecorder,8,,system,system/background service rule,True,False,system
+com.hwohos.jsyk.hw,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.leisu.sports.hm,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.leson.crazyalarm,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.next.liny.symbolu,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.papegames.lysk.cn,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.softfox.imemo_pro,8,备忘录,category_fallback,recognized notes; app_vocab.json has one candidate: 备忘录,False,True,app
+com.taobao.litetao4harmony,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.KiHan,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yoka.sgs.hm.hw,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.youdroid.copohub,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+net.qytclient.app,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+org.xbstudio.gitstorebox,8,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.biandangroup.getrace,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.damai.hongmeng,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.xdf.roombox.ohapp,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.54sher.ydqc,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.alicloud.hmdatabox,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bzl.bosszhipin,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.chaoxing.mobile,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cqz.talktalk,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.develop.opensource.devbox,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.develop.opensource.gitnext,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.eduyun.zxx,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.eltechs.ed,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ericple.onebill,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.eusoft.eudic.hm,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.app_25,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hupan.openhmw,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.konicaminolta.printerdriver,7,,system,system/background service rule,True,False,system
+com.lsapp.lighmongdesk,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.miyuedong.liuhuimermaid,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.nange.widgettodo.os,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.netease.stzb.huawei,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.shiguangxu.huawei,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.steampy.hm.app,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.td.ispirit_hm,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.v2ray.ang,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xiaoluobo.xsvn,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yuan_li_network.cailing_harmony,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+mc.com.moveStudy,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+top.handwer.cloudpureplay,7,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.com.canon.print,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.daji.business.hm,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.alipay.antmark,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ambrose.overwall,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.atomicservice.5765880207855796059,6,,system,system/background service rule,True,False,system
+com.baitongzaixian.apphm,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.charm.clockdesktop.h,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.chinamobo.moxueyuanharmony,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.edifier.echms,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.flight_copilot,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.gaotu100.har.xinli,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.gpskit.elevationohos,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.hinote,6,备忘录,category_fallback,recognized notes; app_vocab.json has one candidate: 备忘录,False,True,app
+com.huawei.hms.payment,6,,system,system/background service rule,True,False,system
+com.kiloo.subwaysurf.huaweihm,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kuailon.jdjfwlhm,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ledu.harmonydeepvideoAIgen,6,华为视频,category_fallback,recognized video; app_vocab.json has one candidate: 华为视频,False,True,app
+com.leson.moyunlinktie,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.lvbing.zhoubingmian.hm,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mojang.minecraftpe,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.nbdeli.deliprinter,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.newbee.voice2,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qimo.appdj45,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qimo.appdj60,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sevenpig.hms.unlock,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tongcheng.hmos,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tpyzq.tdxhos,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zhipuai.qingyan.glm,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zhongheschoolharmony.online,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zkhcsoft.zxxspk,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zktk.hm.youliyouhuo,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+dev.hackeris.hish,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+net.beido.hm.twoapps,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+org.ohpg.fin.player,6,华为视频,category_fallback,recognized video; app_vocab.json has one candidate: 华为视频,False,True,app
+org.servo.servo,6,,unresolved,no safe mapping rule matched,False,False,unresolved
+zone.yby.seamusic,6,华为音乐,category_fallback,recognized music; app_vocab.json has one candidate: 华为音乐,False,True,app
+cn.biandangroup.xiangji,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.ieway.mobile.evplayernext,5,华为视频,category_fallback,recognized video; app_vocab.json has one candidate: 华为视频,False,True,app
+cn.samsclub.hm.app,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.airrdp.app,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.artand.plus,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.atomicservice.5765880207855410333,5,,system,system/background service rule,True,False,system
+com.beadmaster.app,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bjshijihaiwai.nfchm,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bym.hm.shequ,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cjkj.clanide.hw,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cosmos.tools,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.duolingo,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.app_17,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.faquan.faquan_test,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.feitool.app,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hamo.shotcase,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hermes.p6game.hm,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.htwoplayers.srjjc.harm,5,华为视频,category_fallback,recognized video; app_vocab.json has one candidate: 华为视频,False,True,app
+com.huawei.hmos.aibase,5,,system,system/background service rule,True,False,system
+com.hykj.piano.master,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kuaidihelp.weizhanggui,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kuiuan.word,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.liuchangos.xiatuantuan,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.liulishuo.ohos_lingodarwin,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.lltskb.skb,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.meta.box,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mfw.hm.roadbook,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mtz.wincompress,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mxprohwhm.tumax,5,亿图图示,package_match,package contains Edraw,False,True,app
+com.netease.sky.huawei,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.netease.uu,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.nwpu.codecockpit,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.outfit7.talkingtomgoldrun.hm.huawei,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.pantum.hm.mobilePrint,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qianfan.pujiangwang,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.queshengshi.huawei,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.renyi_hm.castclone,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.salmon.performance.dashboard,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.seetong.app,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.tmgp.speedmobile,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.tmgp.supercell.clashofclans,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tianyancha.skyeye.hm,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wisforce.hm.wisae,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yanghai.fenghuarwz,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yunbu.nonogram.hm.huawei,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zkff.exchangerate,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zlfcapp.copyingmachine.hw,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ztgame.mjs.hm.huawei,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+dji.mimo,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+inland.twgame.restaurant.hm,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+md.obsidian,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+qing.qian.com,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+top.handwer.hish.hinavidromy,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+top.shuoguoit.penman.hm,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+type.fun.app,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+windows.hmos.netpower.pdfconverter,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+zbsyk.haoRanYuanDa.huawei,5,,unresolved,no safe mapping rule matched,False,False,unresolved
+cc.exuexue.appb,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.dxy.hm.medicinehelper,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.alibaba.alimail.standard,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.anjuke.home,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.atomicservice.5765880207855861389,4,,system,system/background service rule,True,False,system
+com.atomicservice.5765880207855986331,4,,system,system/background service rule,True,False,system
+com.baidu.netdisk,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.baidu.wenkupc,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.byd.zhizhu,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cdtec.barmakime,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.chaosheng.mingyuehaohar,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.chinasofti.hongyunvd,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.compass.stockapp,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ertonggang.sinology,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.snooker_scorer,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.utcncedit,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ffcs.js.hm,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.foxwq.yhwqhm,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.gaotu100.har.gongkao,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.gspace.android,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hamo.wardrobe,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hm.limir.printer,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hms.adsservice,4,,system,system/background service rule,True,False,system
+com.iflytek.sparkclient,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.igame.xmzqhm.zjbzwjs.huawei,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.imib.cctv,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.jy.jyidcard,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kingsoft.xiezuo.hm,4,WPS,package_match,package contains WPS/Kingsoft,False,True,app
+com.laughtale.cheeseword,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.lh.receptacle.online,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.liangshi.lanmin,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.lilian.keyudao,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ltapp.lightrol,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.magicalstory.factory,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mao.bobing,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.memo93.anymo,4,备忘录,category_fallback,recognized notes; app_vocab.json has one candidate: 备忘录,False,True,app
+com.mikannqaq.cc_switch,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mizhongtech.huiben.moh,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.navicat.premiumlite,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.nd.hmos.account,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.njbianchuang.yggaokaohm,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.panicartstudios.herosiegepocket,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.plaso.yxt,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qihoo.cleandroid_cn.hms,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qimo.app18,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qingxi.OmniWatchOS,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qxhms.fund,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.redfinger.ohosapp,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sangfor.vpn.client.phone,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.shuishenhuole.draw,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sojump.wjxharmonyos,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.songjy.homeassistanthelper,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.jkchess,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tsy.tsy.hos,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.upgadata.up7723,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.upsco.habittrack,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wesing.flowermood.hm,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xcj.hm.kouqzyys,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xinkao.jiaxiaohulian_hm,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ynjkeji.boxgo.mhdr.hm,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yofijoy.zhetian_harmonyos,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yuewen.accomichm,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yunx.jinsehaiyun.hm,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yuyanshine.etecn.ohs.huawei,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zhuanzhuan.hmoshunter,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zykeji.mjjdb.huawei,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+gzsh.bqla.coob,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+jp.ne.ibis.ibispaintx.app.hms,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+renminchenggui.hm.huawei,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+suiyue.yuelan.com,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+weicom.yi.wallpaper.hm,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+zone.yby.novaflow,4,,unresolved,no safe mapping rule matched,False,False,unresolved
+ai.x.grok,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+alook.browser.com,3,,unresolved,"category browser is ambiguous or unavailable in app_vocab.json: 华为浏览器,海泰浏览器",False,False,unresolved
+cc.studio97.txt2,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+cloud.codepower.gamepadtester,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.bt.btpanel.huawei,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.net.zhidian.liantigou.futureshm,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.pan2017.habit,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.wutangmao.xuexiaolian,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.360.zip:entry,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.QZFZ.BBLQ.JunJian,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.android.packageinstaller,3,,system,system/background service rule,True,False,system
+com.atrenew.aihuishou,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.badnew.baddoublezxinghos,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.baidu.yiyan,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.beautiful.photo,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bingsyds.oms,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bird.lanmin,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bym.hm.anquanyuan,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.camscanner.quannengwang,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.carbonpool.hmlitewearactivator,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.chu.limitrollhos,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ck.investtracking,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cn.shuangzi.timer.hw,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.develop.opensource.ohdpc.python.launcherforpython312,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.douyu.ho.app,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.duoduo.hm.opera,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.eduyun.zxx.hm,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.endy.python,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.jiaoxiaozhuapp,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.ldpflyefb,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.myapplication,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.rag,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.simple_note,3,备忘录,category_fallback,recognized notes; app_vocab.json has one candidate: 备忘录,False,True,app
+com.follow.clash,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.genxibaogao.wuxu,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ggeye.exam.xiaofang,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.github.kr328.clash,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.haima.cloudpc.mobile,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hm.cat.readall,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hnsc.xjskphm.huawei,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.hmos.passwordvault,3,,system,system/background service rule,True,False,system
+com.huawei.hmos.superdevice,3,,system,system/background service rule,True,False,system
+com.huawei.hmsapp.samplemanagement,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huayiharm.zw,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hxshuz30.hmapp,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hygame.ssfh.huawei.hyohos,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hyl.user,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.inhehm.paiche,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kangaroo.simpledrawing.simple_drawing,3,亿图图示,package_match,package contains Edraw,False,True,app
+com.kathy.favor,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kathy.oldfood,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kit.app,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kuaikan.world,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kwly.pstouch,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.lenovoimage.hmos.LenovoPrint,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.lilian.yuenanyudao,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.liubowang.metronome.hm,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.luo.emotionhos,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mao.app26,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.miaoxuan.mm,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.my.hmaiwzzsp,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.netease.moba.huawei,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.netlea.smart,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.never88gone.airpaly.THLAirPlayApp,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.nineton.todolist.hm,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.pandadastudio.ninjamustdie3.hm,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.pjftne.vtqxymox,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.polomeetingoh.videoconference,3,华为视频,category_fallback,recognized video; app_vocab.json has one candidate: 华为视频,False,True,app
+com.qimo.app21,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qimo.app4,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qimo.appdj34,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qiuqi.hm.deepaizyst,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qpx.app.hm.chinese,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.rice.xui,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sankuai.dianping,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.scca.hm.health,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.shenjiying.harmony_receipt,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sjb.shijubao.appb,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sqf.jingjdwzhm,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.szsx.susuan,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tanwan.qhmlrly.hos.huawei,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.weread,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tmri.app.harmony12123,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tuzi.bookkeeping,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.umooc.course,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.whyactions.authenticatorcenter,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wifi.hm,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wmall.harmo,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xlaigc.neoimaging,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xmgod.promptassistant,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xueqiu.hm,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yiban.harmonyapp,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.youxuedianzi.xuehuliHarmonyApp,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yulian.cejuceliang.hm,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zbchhub.voiceledger,3,,unresolved,"category browser is ambiguous or unavailable in app_vocab.json: 华为浏览器,海泰浏览器",False,False,unresolved
+com.zhumaharmonyonline.exercise,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zhutu.meinc,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zpwdsc.dis,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ztnet.mzt,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zykeji.kxtq.huawei,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+io.typora.hmpc,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+ldtx.huawei.com,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+net.huanci.hsjpro,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+org.yzy.gorilla,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+qh.kjl.client,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+ren.yuan.xueheng,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+top.frankhan.resk,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+yylx.hny.qwq,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+zmqx.xsnd.wxkhmos,3,,unresolved,no safe mapping rule matched,False,False,unresolved
+Color.com.Tools,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+WealthAccounting.hhxw.cc,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+app.xmind.cronut,2,mindmaster,alias,explicit process alias: app.xmind.cronut,False,True,app
+caitty.com.CheckInEveryday,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.com.livelab.huawei,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.coremail.chordmail,2,coremail,package_match,package contains Coremail,False,True,app
+cn.hmtsc.samba,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.jj.mahjong.hm,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.xiaolongonly.andpods,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.actgames.jiangmu,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.airtouch.app,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.aitutor.hippo,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.aloereed.aloesend,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.aqgctk.hm.youliyouhuo,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.atomicservice.5765880207855247671,2,,system,system/background service rule,True,False,system
+com.atomicservice.5765880207855419893,2,,system,system/background service rule,True,False,system
+com.atomicservice.5765880207855877209,2,,system,system/background service rule,True,False,system
+com.atomicservice.6917559410059285149,2,,system,system/background service rule,True,False,system
+com.atomicservice.6917571344110253030,2,,system,system/background service rule,True,False,system
+com.atomicservice.6917587981061209453,2,,system,system/background service rule,True,False,system
+com.atomicservice.6917588329064524976,2,,system,system/background service rule,True,False,system
+com.babychemistry.lanmin,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.banyunjuhe.pchmos.hyplayer,2,华为视频,category_fallback,recognized video; app_vocab.json has one candidate: 华为视频,False,True,app
+com.blulion.barber_harmony,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bosera.BoseraFundApp,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bym.hm.fangdichan,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bym.hm.yixuejichu,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.bym.hm.zhongyidoctor,2,WPS,category_fallback,recognized office; app_vocab.json has one candidate: WPS,False,True,app
+com.ch999.mallapp,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.chaoranxin.chat,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.chinapost.harmonyapp,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.chintanneng.gfxzhyhar,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.chrming.NoteMusic,2,华为音乐,category_fallback,recognized music; app_vocab.json has one candidate: 华为音乐,False,True,app
+com.cnki.homeng.cnkimobile,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cnvcs.xiangqi.hm,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cscjapp.python.hw,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ctc.pdfer,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cytd.cyyjjzshm,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.deepcjzntai.khvulb.hm,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.develop.opensource.ohdpc.jdk.bishengjdk17,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dgzq.zzbhos,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dingtalk.hmos.pc:screencast,2,钉钉,alias,explicit process alias: com.dingtalk.hmos.pc,False,True,app
+com.dlxx.mam.Internal,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dong.weiqi,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dongffl.baifude.haros,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dongwuyuan.baby,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dqme.yougehms,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.drvoice.flutterapp,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dunodoge.arklearn,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.eduyun.app.factory.ykt,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.epson.printandscan,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.exagear.ed302,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.app70p01p01,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.time.plane,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.xxwidgt,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.youshiyun,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.fanli.hmos.apps,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.gaoping.makewallpaper_harmony,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ggeye.exam.kjzj,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.gh.gamecenter,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.gstarcad.hmos.gcad,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.guokaoxitong.iapp,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.guzhuo.youyi,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.gzsunj.jread,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.gzsunj.syphoto,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.haidii.sw_gjxdhycd_10012,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hamo.clock,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hcp.ieltsbrohospc,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hjwordgames,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hmxz.nhmv,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hmys.kdhwjbfl,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hos.korean,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hos.yshb.distanceday,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hos.yshb.vedio,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ht.ztk,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.devecostudiocom.huawei.devecostudio:entry:BackgroundAbility:0,2,悟空图像,alias,explicit process alias: com.huawei.devecostudio,False,True,app
+com.huawei.devecostudiocom.huawei.devecostudio:entry:BackgroundAbility:4,2,悟空图像,alias,explicit process alias: com.huawei.devecostudio,False,True,app
+com.huawei.hmos.aidataservice,2,,system,system/background service rule,True,False,system
+com.huawei.hmos.ouc,2,,system,system/background service rule,True,False,system
+com.huawei.hms.myfamily,2,,system,system/background service rule,True,False,system
+com.huwai.baby,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hxkj.huida,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hxmengd29.hmapp,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hz.hm.jsjsxlmnq.huawei,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hzdajiu.stay,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.iflytek.inputmethod.iFlytekInputIME,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.iorder.hap,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.jlzg.app,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.junglefisher.clothing,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.just_soft.local_music.hm,2,华为音乐,category_fallback,recognized music; app_vocab.json has one candidate: 华为音乐,False,True,app
+com.kl.hm.scjxkb.huawei,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.klgame.hm.qxwqmn.huawei,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.klingai.hmapp,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kuake.rarharmony,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kunpeng.ziticehm,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.lc.readio,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ldxx.smartdyhm,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.lebo.cast.source,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.lianmao.hongmeng,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.libv.miaodis,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.longrise.lgoa,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.luo.superdrawerhos,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.luojilab.dedao,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.lwbedu.gkztc,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.magicalstory.cost.huawei,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.magicalstory.scanner.huawei,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mao.app28,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mao.app31,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mao.fenzu,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.maoyan.hmovie,2,华为视频,category_fallback,recognized video; app_vocab.json has one candidate: 华为视频,False,True,app
+com.maoying.maketableos,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.maoying.voiceos,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.meyer.meiya.yylx,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.michuang.ppttemplate.hm,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.miya.jingtousheji,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.miya.kafei,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.moyuan.creation,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mutangtech.qianji.flthm,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mxsjharmony.word,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.my.hmpptduck,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.netease.race,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ohos.certmanager,2,,system,system/background service rule,True,False,system
+com.ovital.ovitalmapHMPC,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.papegames.infinitynikki,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.pei.UniversalUnit,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.pinweishufa.pwsf.hm,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qimo.app9,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qimo.appdj27,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qimo.appdj33,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qimo.appdj67,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qimo.appdj68,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.quark.clouddrive,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.salmon.notepad,2,备忘录,package_match,package contains notepad,False,True,app
+com.saubcy.hos.historymap,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sensee.soundechoesos,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sfexpress.mainlandapp,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.shem.xiezsqharmony,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.shuge888.offphone.hos,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.smartcloud.lifetime,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.soulharbor.pixelartisan,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.taobao.movie.hongmeng,2,华为视频,category_fallback,recognized video; app_vocab.json has one candidate: 华为视频,False,True,app
+com.taptap,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.tmgp.dfm,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tietie.tie520,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.urumqi.btdebug,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.valvesoftware.android.steam.community,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wanjunjs.pmp,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wedobest.shudu.harm,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wepie.huiwan.ohapp,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wepie.snake.huawei.ohm,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.winlator,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wm.aidraw.hm,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wsgw.harmonyAPP,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xiangshikeji.coffee_note,2,备忘录,category_fallback,recognized notes; app_vocab.json has one candidate: 备忘录,False,True,app
+com.xiaobai.autoinstaller,2,,system,system/background service rule,True,False,system
+com.xiaomi.smarthome,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yafangwanhui.hongmeng,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ycsh.pptcreator.hm,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ygkj.chelaile.standard.har,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ygsf.hmy,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ykpass.hw.boaoclassroom,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.youyi.oppositehos,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.youyi.screenhos,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yuchuang.xycscreencuthos,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zhilian.zhaopin,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zhongqi.apprdzq,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zhuoyi.appstore.lite,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zulong.yslzmharmonyos,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zyyx.fsscyx.huawei,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+con.hmtp.xqq,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+czh.mindnode.app,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+dangniao.xiaofei.acterh,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+dlpoai.qwaicc.dcbqwh,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+hm.dmplp.xbdwan,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+jyfxx.sxbh.mkssc,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+net.xinhuamm.xhshos,2,小红书,package_match,package contains Xiaohongshu,False,True,app
+riybvulc.com.adt,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+sany.dais.hyini,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+todo.hbtyapp.planhm,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+top.moonsprout.app,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+windows.netpower.audioconverterclient,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+windows.netpower.unzip,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+wubiTypingpass.huawei.jiandandian,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+x.fish.info,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+xjy.com.shici,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+xsdg.pixcakeai.comxsdg.pixcakeai.com:entry:PixWorkerAbility:0,2,哔哩哔哩,package_match,package contains Bilibili/Danmaku,False,True,app
+xyz.luojunqi.zhengjianzhaoshengchengqi,2,,unresolved,no safe mapping rule matched,False,False,unresolved
+app.superedu.nds,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+cc.naily.redis,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.com.chsi.app,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.com.wind.wft_pc,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.eeo.hos.classin.pc,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.guoxincloud.meeting,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.maxlee.renpyplayer,1,亿图图示,package_match,package contains Edraw,False,True,app
+cn.net.zhidian.liantigou.fsengineerhm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.polarz.insnapcn.polarz.insnap:entry:BackGroundAbility:0,1,,system,system/background service rule,True,False,system
+cn.txteditor.bhkapp,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.unipus.cloud.hm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.weilaihongtech.tanceqihm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+cn.xdf.student,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.3vjia.clouddesign,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.JMComic3.app,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.WoodenStool.SectSimulator,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.a7m3p9xv.t6qk2z8.app,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.abglvcha.main,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.aeqkydk.mdfsofa,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.airssh.app,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.asiainfoSec.sdp.token,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.atomicservice.5765880207853636497,1,,system,system/background service rule,True,False,system
+com.atomicservice.5765880207854357741,1,,system,system/background service rule,True,False,system
+com.atomicservice.5765880207854816735,1,,system,system/background service rule,True,False,system
+com.atomicservice.5765880207855239239,1,,system,system/background service rule,True,False,system
+com.atomicservice.5765880207855388609,1,,system,system/background service rule,True,False,system
+com.atomicservice.5765880207855418353,1,,system,system/background service rule,True,False,system
+com.atomicservice.5765880207856132315,1,,system,system/background service rule,True,False,system
+com.atomicservice.5765880207856147647,1,,system,system/background service rule,True,False,system
+com.atomicservice.5765880207856197627,1,,system,system/background service rule,True,False,system
+com.atomicservice.5765880207856344205,1,,system,system/background service rule,True,False,system
+com.atomicservice.6917559496613238598,1,,system,system/background service rule,True,False,system
+com.atomicservice.6917565679842611745,1,,system,system/background service rule,True,False,system
+com.atomicservice.6917567030266182976,1,,system,system/background service rule,True,False,system
+com.atomicservice.6917574974806264587,1,,system,system/background service rule,True,False,system
+com.atomicservice.6917576915973641118,1,,system,system/background service rule,True,False,system
+com.atomicservice.6917580809895154020,1,,system,system/background service rule,True,False,system
+com.auramarker.zine,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.aurora.printerdriver,1,,system,system/background service rule,True,False,system
+com.bjmf.hm.xsmxd.huawei,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ble.helper.next,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.brianbaek.popstar.huawei,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.brother.mfc.mobileconnect.hm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.car318.pdf.hw,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.carrot.carrotfantasy,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cctv.hmnext.cctv5,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.chinapost.ems.emsapp,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.citics.xet,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.clipboard.manager,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cmbchina.harmony,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cmcm.cfwallpaper.hos,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cmr.gaokaohm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cottongame.FrontierSpacehm.huawei,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cwanhui.yqqhm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.cyxjl.huawei,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dbappsecurity.flkvpnclient,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.deepsdskai.xumggk.hm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dev.maskdatinghm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.develop.opensource.CrossShellNext,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.develop.opensource.meldnext,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.develop.opensource.ohdpc.jdk.bishengjdk8,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dingtalk.hmos,1,钉钉,package_match,package contains DingTalk,False,True,app
+com.dingtalk.hmos.pc:meeting,1,钉钉,alias,explicit process alias: com.dingtalk.hmos.pc,False,True,app
+com.dji.hm.home,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.dji.store,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.drcom.DuoDian,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.eusoft.frhelper,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.app_06,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.barragetool,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.instructionmagic,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.llynh,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.myproject1,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.typing,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.example.xuhongxiang.andriodpiano.hm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.feelingtouch.zfsniper.hm.huawei,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.fengweisoft.bluetools,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.fghmz.mztuy,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.gotokeep.hm.keep,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.guoqi.testdanmu,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.haidii.wys_lwddgjyycd_8027,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.haier.uhome.uplus.hm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.haobuhao.kuaitutuhm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hcp.ieltsbrohos,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hfnwk.xirviolationcheckharmony,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hg.titp2,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.higo.higomid,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hl0109.webedit,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hls.nasplayerplus,1,华为视频,category_fallback,recognized video; app_vocab.json has one candidate: 华为视频,False,True,app
+com.hm.paperyy,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hmzhongan.insurance,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hnch.hymc.harm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huawei.devecostudio:324de6d2-63d3-4713-95d7-399b6041419d,1,悟空图像,alias,explicit process alias: com.huawei.devecostudio,False,True,app
+com.huawei.devecostudio:cd5bab5c-e014-4c02-bff4-5301778d16e8,1,悟空图像,alias,explicit process alias: com.huawei.devecostudio,False,True,app
+com.huawei.devecostudiocom.huawei.devecostudio:entry:BackgroundAbility:1,1,悟空图像,alias,explicit process alias: com.huawei.devecostudio,False,True,app
+com.huawei.devecostudiocom.huawei.devecostudio:entry:BackgroundAbility:16,1,悟空图像,alias,explicit process alias: com.huawei.devecostudio,False,True,app
+com.huawei.devecostudiocom.huawei.devecostudio:entry:BackgroundAbility:2,1,悟空图像,alias,explicit process alias: com.huawei.devecostudio,False,True,app
+com.huawei.hmos.pcsettings,1,,system,system/background service rule,True,False,system
+com.huawei.hmos.vassistant:MiniMain,1,,system,system/background service rule,True,False,system
+com.huawei.qtelectron,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.huoshandizhen.baby,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hwohos.scrap.hw,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hxyuand28.hmapp,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.hypergryph.arknights,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.iflytek.zhixue.tch,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ihuman.recite,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.imgo.pad,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.jd.app.reader.hos,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.jdapi.cihai,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.jesse.inspirationmelody.hos,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.jhyan.yanhm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.jiaweikang.one18,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kankanews.kankanxinwen.hm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kaoba.testpaperhm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kekenet.english,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kugou.android.lite,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kunpeng.bluefonthm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.kurogame.mingchao,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.lcapps.fastplayer,1,华为视频,category_fallback,recognized video; app_vocab.json has one candidate: 华为视频,False,True,app
+com.leijian.yqhm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.liangjie.camfusion,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.lilian.ayudao,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.liquid.editor,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.liubaiagcc.assistant,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.liunian.zitiku,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.liuzho.file.explorer.hmos,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.lixiangdong.videocutter.hm,1,华为视频,category_fallback,recognized video; app_vocab.json has one candidate: 华为视频,False,True,app
+com.magicalstory.files.huawei,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.magicalstory.picture.huawei,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.magicalstory.player.huawei,1,华为视频,category_fallback,recognized video; app_vocab.json has one candidate: 华为视频,False,True,app
+com.meimei.zhuilang,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.meituan.takeaway,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.microsoft.emmx,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.miga.world.os.huawei,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mikannqaq.ohcode,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mike.koutu2,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.minitools.miniwidget.hos,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mockingbot.desktop,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mrliang.notes,1,备忘录,category_fallback,recognized notes; app_vocab.json has one candidate: 备忘录,False,True,app
+com.mt.meitu.wink,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.mxbc.mxsa_oh,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.netease.dfjs.huawei,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.netease.l10,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.nutpi.OnsenUI,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.pantum.hm.oneClickInstall,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.papegames.lysk.cn.huawei,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.pla.dailyharmonyos,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ppf.myquizbank,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.pplive.hwapp,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.pz.jianli,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qisi.soundmanager,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.quark.scankingohos,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qxhms.bookingagent,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.qxhms.gasoperator,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.rainzhuhai.wendu,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sankuai.xmpp.hm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sanway.ecoengine:releaseiso,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sgabg.tomatoclock,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sgmw.wuling,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.shanbay.kaoyan,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.shandong.myqipu.qp2,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.shanhu.baby,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.shuyuan.umarkall,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.silence.animalMB,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.singxie.notebookhw,1,备忘录,category_fallback,recognized notes; app_vocab.json has one candidate: 备忘录,False,True,app
+com.sirius.timeassistant,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sobot.chathm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.sparkgame.MiniWorldRoyale,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ss.android.ugc.livelite,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ss.hm.ugc.sicily_cm,1,剪映,alias,explicit process alias: com.ss.hm.ugc.sicily_cm,False,True,app
+com.sumscope.qeubee.terminal.hm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.superacme.shenmou,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.supermaket.huawei,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tangsong.mengbao,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.taole.pisces.hm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tencent.tmgp.osgame,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.tlntin.sonawave,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.toshiba.toshibaprinter,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.twx.zip.harmonyapp,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ultralisk.game152.hm.huawei,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.umetrip.hm.app,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.vivo.vivotws,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wanqu.shop,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.weatherbb.hm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wedobest.fivechess.harm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wedobest.llk.harm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wenj91.pixel,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wingsluo.AIHome,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wlq.tbxharmony,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wsitopohw.formatconvert,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wujie.connect.huawei,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.wyxinsheng.PPT.hm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xcz.huawei,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xia.excel,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xiaoe.merchant.huawei,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xiaohoumengqi.pinyinhm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xiaoqieyy.huawei,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xin.poem,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xingyueldh.cantonesestory,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xinmang.unzip.hm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xiyao.inshow,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xjs.ehviewer,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xlsoftware.camera,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xmgod.skillup,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xmgod.studentarithmetic,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xueersi.ohparentsmeeting,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.xuq.led.nos,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yaerxing.fkst,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yingyu.chuti.hw,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yinwang.qiankunapp.hm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.youzm.ltraining.oohos,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.ypnet.officehm,1,WPS,category_fallback,recognized office; app_vocab.json has one candidate: WPS,False,True,app
+com.ysdq.hos,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yxt.hm.phoenix,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yydwlxqcy66.cs,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yyzy.huaweihap,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.yz.yzbaiwaoh,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zbj.zhouse.hm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zouqi.qingfeng.hm,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zuichang.hm.wzzyygj,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+com.zuoyebang.hm.airclass,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+cscec.com.cn.cscecZS.treasury,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+hos.cn.com.langeasy.qtyy,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+lany.suan.fazs,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+litegamelauncher1,1,,system,system/background service rule,True,False,system
+local.sond.action,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+me.veer.tool,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+net.ai.mimu,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+net.dawuxia.blackhil,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+ooon.mnbg.hgrt,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+org.tinghood.TpsForMobile.huawei.hos,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+org.xbstudio.homl,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+pro.cat.dfga,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+tuoyan.com.xinghuo_daying,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+tv.danmaku.bilibilihd,1,哔哩哔哩,alias,explicit process alias: tv.danmaku.bilibilihd,False,True,app
+wcy1013.furina.HUAWEI,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+xkkj.uni.UNI9D507E5,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+xkkj.uni.UNIF96137B,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+xsdg.pixcakeai.comxsdg.pixcakeai.com:entry:PixWorkerAbility:1,1,哔哩哔哩,package_match,package contains Bilibili/Danmaku,False,True,app
+xsdg.pixcakeai.comxsdg.pixcakeai.com:entry:PixWorkerAbility:2,1,哔哩哔哩,package_match,package contains Bilibili/Danmaku,False,True,app
+zouqrysw.com.yyds,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+zy.zhangyuelvshifalvzixun.com,1,,unresolved,no safe mapping rule matched,False,False,unresolved
+zy.zhenlvfalvzixun.law,1,,unresolved,no safe mapping rule matched,False,False,unresolved
