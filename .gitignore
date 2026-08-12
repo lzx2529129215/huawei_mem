@@ -1,0 +1,13 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Generated experiment data can be many gigabytes and may contain host metadata.
+/lzx/tool/outputs/
+
+# Locally built helper
+lzx/tool/runtime_monitor/tools/parp_memory_ballast
