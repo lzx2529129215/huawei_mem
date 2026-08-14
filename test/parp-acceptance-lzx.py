@@ -23,9 +23,11 @@ import shlex
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import time
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -36,7 +38,10 @@ REPO_ROOT = TEST_DIR.parent
 DEFAULT_CONFIG = TEST_DIR / "parp-acceptance-config-lzx.json"
 AUTOMATION = REPO_ROOT / "lzx/tool/automation/run_automation.sh"
 FIXTURE = TEST_DIR / "memory-fixture-lzx.py"
+OOM_PROBE = TEST_DIR / "oom-probe-lzx.py"
 TRACE_HELPER = TEST_DIR / "trace-helper-lzx.sh"
+PARP_DEBUGFS = Path("/sys/kernel/debug/parp")
+TIER2_SYSCTL = Path("/proc/sys/vm/tier2_predict_enabled")
 MIB = 1024 * 1024
 GIB = 1024 * MIB
 KEEPER_UNIT = "parp-acceptance-keeper.service"
@@ -61,15 +66,80 @@ class AppSpec:
 
 def app_specs(session_dir: Path) -> dict[str, AppSpec]:
     firefox_profile = session_dir / "firefox-profile"
-    gimp_image = session_dir / "fixtures/gimp-test.ppm"
+    thunderbird_profile = session_dir / "thunderbird-profile"
+    fixture_dir = session_dir / "fixtures"
+    file_manager = "nautilus" if command_exists("nautilus") else "pcmanfm"
+    file_manager_command = (
+        f"nautilus --new-window {shlex.quote(str(REPO_ROOT))}"
+        if file_manager == "nautilus"
+        else f"pcmanfm --new-win {shlex.quote(str(REPO_ROOT))}"
+    )
     return {
         "WPS": AppSpec("WPS", "wps", "wps", "wps", "wps|Wps", "WPS|Writer|文字", ("wps", "wpsoffice", "wpp", "et"), "Page_Down"),
-        "FILES": AppSpec("FILES", "files", "nautilus", f"nautilus --new-window {shlex.quote(str(REPO_ROOT))}", "org.gnome.Nautilus|Nautilus|nautilus", "文件|Files|Home|主文件夹|myself-kswapd", ("nautilus",), "Page_Down"),
+        "FILES": AppSpec("FILES", "files", file_manager, file_manager_command, "org.gnome.Nautilus|Nautilus|nautilus|Pcmanfm|pcmanfm", "文件|Files|Home|主文件夹|PARP", ("nautilus", "pcmanfm"), "Page_Down"),
         "QQ": AppSpec("QQ", "qq", "qq", "qq", "qq|QQ|linuxqq", "QQ", ("qq", "linuxqq"), "Tab"),
-        "FIREFOX": AppSpec("FIREFOX", "firefox", "firefox", f"firefox --new-instance --no-remote -profile {shlex.quote(str(firefox_profile))} --new-window about:blank", "firefox|Firefox", "Mozilla Firefox|Firefox", ("firefox",), "ctrl+l"),
-        "GIMP": AppSpec("GIMP", "gimp", "gimp", f"gimp {shlex.quote(str(gimp_image))}", "gimp|Gimp", "GIMP|visible_paste_test", ("gimp", "gimp-2.10"), "plus"),
-        "LIBREOFFICE": AppSpec("LIBREOFFICE", "libreoffice", "libreoffice", "libreoffice --writer", "libreoffice-writer|soffice", "Writer|LibreOffice", ("soffice.bin", "soffice"), "Page_Down"),
+        "FIREFOX": AppSpec("FIREFOX", "firefox", "firefox", f"firefox --new-instance --no-remote -profile {shlex.quote(str(firefox_profile))} --new-window {shlex.quote((fixture_dir / 'local-page.html').as_uri())}", "firefox|Firefox", "PARP local page|Mozilla Firefox|Firefox", ("firefox",), "Page_Down"),
+        "GIMP": AppSpec("GIMP", "gimp", "gimp", f"gimp {shlex.quote(str(fixture_dir / 'gimp-test.ppm'))}", "gimp|Gimp", "GIMP|gimp-test", ("gimp", "gimp-2.10"), "plus"),
+        "LIBREOFFICE": AppSpec("LIBREOFFICE", "libreoffice", "libreoffice", f"libreoffice --writer --norestore {shlex.quote(str(fixture_dir / 'writer-test.txt'))}", "libreoffice-writer|soffice", "writer-test|Writer|LibreOffice", ("soffice.bin", "soffice"), "Page_Down"),
+        "VLC": AppSpec("VLC", "vlc", "vlc", f"vlc --no-one-instance --no-video-title-show {shlex.quote(str(fixture_dir / 'audio-test.wav'))}", "vlc|Vlc", "VLC|audio-test", ("vlc",), "space"),
+        "AUDACITY": AppSpec("AUDACITY", "audacity", "audacity", f"audacity {shlex.quote(str(fixture_dir / 'audio-test.wav'))}", "audacity|Audacity", "Audacity|audio-test", ("audacity",), "space"),
+        "THUNDERBIRD": AppSpec("THUNDERBIRD", "thunderbird", "thunderbird", f"thunderbird --no-remote --profile {shlex.quote(str(thunderbird_profile))} {shlex.quote(str(fixture_dir / 'mail-test.eml'))}", "thunderbird|Thunderbird", "PARP local message|Thunderbird", ("thunderbird",), "Page_Down"),
+        "EVINCE": AppSpec("EVINCE", "evince", "evince", f"evince {shlex.quote(str(fixture_dir / 'document-test.pdf'))}", "evince|Evince", "document-test|Document Viewer|文档查看器", ("evince",), "Page_Down"),
+        "CALCULATOR": AppSpec("CALCULATOR", "calculator", "gnome-calculator", "gnome-calculator", "gnome-calculator|Gnome-calculator", "Calculator|计算器", ("gnome-calculator",), "1"),
     }
+
+
+def write_local_app_fixtures(session_dir: Path) -> None:
+    """Create login-free, network-free fixtures for the LSAPP-aligned suite."""
+    fixture_dir = session_dir / "fixtures"
+    fixture_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "firefox-profile").mkdir(parents=True, exist_ok=True)
+    (session_dir / "thunderbird-profile").mkdir(parents=True, exist_ok=True)
+    (fixture_dir / "local-page.html").write_text(
+        "<html><head><title>PARP local page</title></head><body>" +
+        "".join(f"<h2>Section {index}</h2><p>{'local workload ' * 80}</p>" for index in range(1, 31)) +
+        "</body></html>\n",
+        encoding="utf-8",
+    )
+    (fixture_dir / "writer-test.txt").write_text(
+        "\n\n".join(f"PARP local office page {index}\n" + "offline document workload " * 120 for index in range(1, 31)) + "\n",
+        encoding="utf-8",
+    )
+    (fixture_dir / "mail-test.eml").write_text(
+        "From: parp-local@example.invalid\nTo: test@example.invalid\n"
+        "Subject: PARP local message\nMIME-Version: 1.0\nContent-Type: text/plain; charset=UTF-8\n\n" +
+        ("This is a local, login-free message fixture for memory testing.\n" * 100),
+        encoding="utf-8",
+    )
+    wav_path = fixture_dir / "audio-test.wav"
+    with wave.open(str(wav_path), "wb") as stream:
+        stream.setnchannels(1)
+        stream.setsampwidth(2)
+        stream.setframerate(8000)
+        samples = [int(5000 * math.sin(2 * math.pi * 440 * index / 8000)) for index in range(8_000 * 8)]
+        stream.writeframes(b"".join(struct.pack("<h", sample) for sample in samples))
+    write_minimal_pdf(fixture_dir / "document-test.pdf")
+
+
+def write_minimal_pdf(path: Path) -> None:
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length 75 >>\nstream\nBT /F1 18 Tf 72 720 Td (PARP local PDF workload) Tj 0 -30 Td (Login-free fixture) Tj ET\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    payload = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, start=1):
+        offsets.append(len(payload))
+        payload.extend(f"{index} 0 obj\n".encode("ascii") + obj + b"\nendobj\n")
+    xref = len(payload)
+    payload.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode("ascii"))
+    for offset in offsets[1:]:
+        payload.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    payload.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode("ascii"))
+    path.write_bytes(payload)
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -280,7 +350,7 @@ def command_exists(command: str) -> bool:
 
 
 def debugfs_value(name: str) -> str:
-    path = Path("/sys/kernel/debug/parp") / name
+    path = PARP_DEBUGFS / name
     outcome = run(["sudo", "-n", "cat", str(path)], timeout=5)
     return outcome.stdout.strip() if outcome.returncode == 0 else ""
 
@@ -288,6 +358,83 @@ def debugfs_value(name: str) -> str:
 def parse_debug_stat(text: str, key: str) -> str:
     match = re.search(rf"(?:^|\s){re.escape(key)}[=: ]+([^\s]+)", text, re.MULTILINE)
     return match.group(1) if match else ""
+
+
+POLICY_VARIANTS: dict[str, dict[str, int]] = {
+    "native": {"parp_mode": 0, "effective_tier_mode": 0, "tier2_enabled": 0},
+    "effective": {"parp_mode": 0, "effective_tier_mode": 2, "tier2_enabled": 0},
+    "tier2": {"parp_mode": 2, "effective_tier_mode": 0, "tier2_enabled": 1},
+    "combined": {"parp_mode": 2, "effective_tier_mode": 2, "tier2_enabled": 1},
+}
+
+
+def policy_state(cgroup_path: Path | None = None) -> dict[str, Any]:
+    return {
+        "parp_mode": debugfs_value("mode"),
+        "effective_tier_mode": debugfs_value("effective_tier_mode"),
+        "tier2_enabled": optional_text(TIER2_SYSCTL),
+        "cgroup_tier2_enabled": optional_text(cgroup_path / "memory.tier2_enabled") if cgroup_path else None,
+        "effective_tier_stats": debugfs_value("effective_tier_stats"),
+        "effective_tier_config": debugfs_value("effective_tier_config"),
+    }
+
+
+def privileged_write(path: Path, value: int | str) -> None:
+    outcome = subprocess.run(
+        ["sudo", "-n", "tee", str(path)], input=f"{value}\n", text=True,
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15,
+    )
+    if outcome.returncode != 0:
+        raise RuntimeError(f"cannot write {path}: {outcome.stderr.strip()}")
+
+
+def apply_global_policy(variant: str) -> dict[str, Any]:
+    if variant not in POLICY_VARIANTS:
+        raise ValueError(f"unknown policy variant: {variant}")
+    desired = POLICY_VARIANTS[variant]
+    original = policy_state()
+    stats = original.get("effective_tier_stats") or ""
+    if desired["effective_tier_mode"] >= 2 and parse_debug_stat(stats, "apply_compiled") != "1":
+        raise RuntimeError(
+            "effective-tier Apply is not compiled; rebuild the Linux 6.17.13 target "
+            "with LZX_EXPERIMENTAL_APPLY=1 tools/parp/build_lzx_kernel.sh all"  # lzx-note
+        )
+    privileged_write(PARP_DEBUGFS / "effective_tier_mode", 0)
+    privileged_write(TIER2_SYSCTL, 0)
+    privileged_write(PARP_DEBUGFS / "mode", desired["parp_mode"])
+    if desired["effective_tier_mode"]:
+        privileged_write(PARP_DEBUGFS / "effective_tier_mode", desired["effective_tier_mode"])
+    if desired["tier2_enabled"]:
+        privileged_write(TIER2_SYSCTL, 1)
+    current = policy_state()
+    for key in ("parp_mode", "effective_tier_mode", "tier2_enabled"):
+        if int(current[key] or -1) != desired[key]:
+            raise RuntimeError(f"policy state mismatch for {key}: desired={desired[key]} actual={current[key]}")
+    return original
+
+
+def apply_cgroup_policy(cgroup_path: Path, variant: str) -> None:
+    desired = POLICY_VARIANTS[variant]
+    tier2_path = cgroup_path / "memory.tier2_enabled"
+    if not tier2_path.exists():
+        if desired["tier2_enabled"]:
+            raise RuntimeError(f"Tier2 cgroup switch missing: {tier2_path}")
+        return
+    privileged_write(tier2_path, desired["tier2_enabled"])
+    actual = optional_text(tier2_path)
+    if int(actual or -1) != desired["tier2_enabled"]:
+        raise RuntimeError(f"Tier2 cgroup switch mismatch: desired={desired['tier2_enabled']} actual={actual}")
+
+
+def restore_global_policy(original: dict[str, Any]) -> None:
+    privileged_write(PARP_DEBUGFS / "effective_tier_mode", 0)
+    if original.get("tier2_enabled") is not None:
+        privileged_write(TIER2_SYSCTL, original["tier2_enabled"])
+    if original.get("parp_mode"):
+        privileged_write(PARP_DEBUGFS / "mode", original["parp_mode"])
+    original_effective = int(original.get("effective_tier_mode") or 0)
+    if original_effective:
+        privileged_write(PARP_DEBUGFS / "effective_tier_mode", original_effective)
 
 
 def output_root(config: dict[str, Any]) -> Path:
@@ -339,7 +486,7 @@ def x11_environment() -> dict[str, str]:
     }
 
 
-def preflight(config: dict[str, Any], profile: str, suite: str) -> dict[str, Any]:
+def preflight(config: dict[str, Any], profile: str, suite: str, variant: str = "observe") -> dict[str, Any]:
     memory = meminfo()
     total = memory.get("MemTotal", 0)
     available = memory.get("MemAvailable", 0)
@@ -385,6 +532,12 @@ def preflight(config: dict[str, Any], profile: str, suite: str) -> dict[str, Any
     apply_compiled = parse_debug_stat(effective_stats, "apply_compiled")
     model_provenance = parse_debug_stat(effective_config, "model_provenance")
     diagnostic_only = apply_compiled in {"", "0"} or "UNTRAINED" in effective_config
+    if variant != "observe":
+        desired = POLICY_VARIANTS[variant]
+        checks["parp_policy_controls"] = bool(mode and effective_stats and effective_config)
+        checks["tier2_master_switch"] = TIER2_SYSCTL.is_file()
+        if desired["effective_tier_mode"] >= 2:
+            checks["effective_tier_apply_compiled"] = apply_compiled == "1"
     return {
         "status": "READY" if all(checks.values()) else "BLOCKED",
         "metrics_schema_version": 3,  #lzx
@@ -394,6 +547,7 @@ def preflight(config: dict[str, Any], profile: str, suite: str) -> dict[str, Any
         "kernel_release": os.uname().release,
         "profile": profile,
         "suite": suite,
+        "variant": variant,
         "memory": {"total_bytes": total, "available_bytes": available},
         "swap_bytes": swap_bytes(),
         "disk_free_bytes": disk.free,
@@ -403,6 +557,8 @@ def preflight(config: dict[str, Any], profile: str, suite: str) -> dict[str, Any
         "system_metadata": metadata,  #lzx
         "checks": checks,
         "parp": {
+            "requested_policy": POLICY_VARIANTS.get(variant),
+            "observed_policy": policy_state(),
             "effective_tier_mode": mode,
             "apply_compiled": apply_compiled,
             "model_provenance": model_provenance,
@@ -470,10 +626,11 @@ def allocation_by_app(total_bytes: int, apps: list[str], ratios: dict[str, float
     return {app: max(8 * MIB, each) for app in apps}
 
 
-def generate_scenario(config: dict[str, Any], *, suite: str, profile: str, round_index: int, seed: int, session_dir: Path, trace_instance: str) -> dict[str, Any]:
+def generate_scenario(config: dict[str, Any], *, suite: str, profile: str, round_index: int, seed: int, session_dir: Path, trace_instance: str, replay_plan: dict[str, Any] | None = None) -> dict[str, Any]:
     profile_cfg = config["profiles"][profile]
     suite_cfg = config[suite]
     apps = list(suite_cfg["apps"])
+    write_local_app_fixtures(session_dir)
     specs = app_specs(session_dir)
     total_memory = meminfo()["MemTotal"]
     logical_ratio = float(profile_cfg[f"{suite}_logical_ratio"])
@@ -500,6 +657,20 @@ def generate_scenario(config: dict[str, Any], *, suite: str, profile: str, round
                 pixels.extend(((x * 255) // (width - 1), (y * 255) // (height - 1), 128))
         gimp_fixture.write_bytes(f"P6\n{width} {height}\n255\n".encode("ascii") + pixels)
     actions: list[dict[str, Any]] = []
+    oom_probe_cfg = suite_cfg.get("oom_probe", {}) if suite == "peak" else {}
+
+    def append_oom_probe(probe_index: int) -> None:
+        probe_command = [
+            sys.executable, str(OOM_PROBE),
+            "--memory-ratio", str(float(oom_probe_cfg["memory_ratio"])),
+            "--ramp-seconds", str(float(oom_probe_cfg.get("ramp_seconds", 8))),
+            "--hold-seconds", str(float(oom_probe_cfg.get("hold_seconds", 12))),
+            "--oom-score-adj", str(int(oom_probe_cfg.get("oom_score_adj", 1000))),
+            "--output", str(session_dir / f"oom-probe-{probe_index:02d}-state.json"),
+        ]
+        actions.append({"type": "trace_marker", "event_type": "OOM_PROBE_START", "status": "running", "label": f"OOM_PROBE_{probe_index:02d}_START"})
+        actions.append({"type": "shell", "name": f"oom-probe-{probe_index:02d}", "command": shlex.join(probe_command), "label": f"OOM_PROBE_{probe_index:02d}_LAUNCH"})
+        actions.append({"type": "wait", "seconds": 1.0, "label": f"OOM_PROBE_{probe_index:02d}_RAMP_OVERLAP"})
     if "FIREFOX" in apps:
         actions.append({"type": "shell", "command": f"mkdir -p {shlex.quote(str(session_dir / 'firefox-profile'))}", "label": "PREPARE_FIREFOX_PROFILE"})
     if suite == "hotcold":
@@ -527,6 +698,8 @@ def generate_scenario(config: dict[str, Any], *, suite: str, profile: str, round
     for app in apps:
         actions.append(py_fixture_action(sockets[app], "PREPARE", timeout=1200, label=f"FIXTURE_PREPARE_{app}"))
     if suite == "peak":
+        if oom_probe_cfg.get("enabled"):
+            append_oom_probe(0)
         launch_and_wait = {app: app_launch_actions(specs[app]) for app in apps}
         for app in apps:
             actions.append(launch_and_wait[app][0])
@@ -539,9 +712,30 @@ def generate_scenario(config: dict[str, Any], *, suite: str, profile: str, round
     actions.append(trace_action(trace_instance, "enable", "TRACE_MEASURE_ENABLE"))
     actions.append({"type": "trace_marker", "event_type": "ACCEPTANCE_MEASURE_START", "status": "running", "label": "MEASURE_START"})
     previous = ""
+    case_plan: list[dict[str, Any]] = []
+    replay_cases = list(replay_plan.get("cases", [])) if replay_plan else []
+    if replay_plan:
+        if replay_plan.get("suite") != suite or replay_plan.get("profile") != profile:
+            raise ValueError("replay plan suite/profile does not match requested experiment")
+        if int(replay_plan.get("seed", -1)) != seed or len(replay_cases) != steps:
+            raise ValueError("replay plan seed/step count does not match requested experiment")
+        if list(replay_plan.get("apps", [])) != apps:
+            raise ValueError("replay plan app order does not match current config")
+        expected_oom_probe = suite_cfg.get("oom_probe", {"enabled": False}) if suite == "peak" else {"enabled": False}
+        if replay_plan.get("oom_probe", {"enabled": False}) != expected_oom_probe:
+            raise ValueError("replay plan OOM probe settings do not match current config")
     for step in range(steps):
-        choices = [app for app in apps if app != previous] or apps
-        app = rng.choice(choices)
+        repeat_every = int(oom_probe_cfg.get("repeat_every_steps", 0) or 0)
+        if step > 0 and repeat_every and step % repeat_every == 0:
+            append_oom_probe(step // repeat_every)
+        if replay_plan:
+            planned = replay_cases[step]
+            app = str(planned["app"])
+            if app not in apps or app == previous:
+                raise ValueError(f"invalid replay app at step {step}: {app}")
+        else:
+            choices = [app for app in apps if app != previous] or apps
+            app = rng.choice(choices)
         spec = specs[app]
         actions.append({"type": "trace_marker", "event_type": f"{suite.upper()}_CASE_START", "status": "running", "app_key": app, "label": f"{suite.upper()}_CASE_{step:03d}_START", "metadata": {"seed": seed, "round": round_index, "case": step}})
         actions.append({"type": "switch", "name": spec.name, "app_key": app, "class": spec.window_class, "title": spec.window_title, "label": f"{suite.upper()}_CASE_{step:03d}_SWITCH_{app}"})
@@ -550,11 +744,24 @@ def generate_scenario(config: dict[str, Any], *, suite: str, profile: str, round
         sample_bytes = max(4 * MIB, int(fixture_layout[app]["file_bytes"] * float(suite_cfg["sample_fraction_per_step"])))
         cold_start = fixture_layout[app]["hot_bytes"]
         cold_span = max(4096, fixture_layout[app]["file_bytes"] - cold_start - sample_bytes)
-        offset = cold_start + rng.randrange(0, cold_span, 4096) if cold_span > 4096 else cold_start
-        if rng.random() < (0.35 if suite == "hotcold" else 0.20):
+        if replay_plan:
+            offset = int(planned["sample_offset_bytes"])
+            touch_sample = bool(planned["touch_sample"])
+            dwell = float(planned["dwell_seconds"])
+            if int(planned["sample_bytes"]) != sample_bytes or offset < cold_start or offset + sample_bytes > fixture_layout[app]["file_bytes"]:
+                raise ValueError(f"replay memory layout mismatch at step {step}")
+        else:
+            offset = cold_start + rng.randrange(0, cold_span, 4096) if cold_span > 4096 else cold_start
+            touch_sample = rng.random() < (0.35 if suite == "hotcold" else 0.20)
+            dwell = rng.uniform(float(profile_cfg["dwell_min_seconds"]), float(profile_cfg["dwell_max_seconds"]))
+        case_plan.append({
+            "case": step, "app": app, "touch_sample": touch_sample,
+            "sample_offset_bytes": offset, "sample_bytes": sample_bytes,
+            "dwell_seconds": round(dwell, 3),
+        })
+        if touch_sample:
             actions.append(py_fixture_action(sockets[app], f"TOUCH_SAMPLE {offset} {sample_bytes}", timeout=180, label=f"{suite.upper()}_CASE_{step:03d}_SAMPLE_{app}"))
         actions.append({"type": "key", "name": spec.name, "app_key": app, "key": spec.operation_key, "optional": app == "FIREFOX", "label": f"{suite.upper()}_CASE_{step:03d}_UI_{app}"})
-        dwell = rng.uniform(float(profile_cfg["dwell_min_seconds"]), float(profile_cfg["dwell_max_seconds"]))
         actions.append({"type": "wait", "seconds": round(dwell, 3), "label": f"{suite.upper()}_CASE_{step:03d}_DWELL"})
         actions.append({"type": "trace_marker", "event_type": f"{suite.upper()}_CASE_DONE", "status": "success", "app_key": app, "label": f"{suite.upper()}_CASE_{step:03d}_DONE"})
         previous = app
@@ -585,12 +792,22 @@ def generate_scenario(config: dict[str, Any], *, suite: str, profile: str, round
             "normal_sum_le_physical": sum(normal_ratios.values()) <= 1.0,
             "each_peak_le_physical": all(value <= 1.0 for value in peak_ratios.values()),
             "concurrent_peak_ge_120_percent": sum(peak_ratios.values()) >= 1.20,
+            "oom_probe": suite_cfg.get("oom_probe", {"enabled": False}),
         })
+    portable_plan = {
+        "schema_version": 1, "suite": suite, "profile": profile,
+        "round": round_index, "seed": seed, "apps": apps,
+        "memtotal_bytes": total_memory, "logical_total_bytes": sum(allocation.values()),
+        "fixture_layout": fixture_layout,
+        "oom_probe": suite_cfg.get("oom_probe", {"enabled": False}) if suite == "peak" else {"enabled": False},
+        "cases": case_plan,
+    }
     scenario = {
         "description": f"PARP {suite} diagnostic acceptance round {round_index}",
         "validation_mode": True,
         "metadata": {
             "suite": suite, "profile": profile, "round": round_index, "seed": seed,
+            "scenario_plan": portable_plan,
             "memtotal_bytes": total_memory, "logical_ratio": logical_ratio,
             "logical_total_bytes": sum(allocation.values()), "fixture_layout": fixture_layout,
             "scored_steps": steps, "workload_contract": workload_contract,
@@ -618,7 +835,7 @@ def enable_user_accounting() -> None:  #lzx
             raise RuntimeError(outcome.stderr.strip() or f"failed to enable CPU/I/O accounting on {unit}")  #lzx
 
 
-def setup_slice(config: dict[str, Any]) -> Path:
+def setup_slice(config: dict[str, Any], variant: str = "observe") -> Path:
     slice_name = str(config["slice"])
     enable_user_accounting()  #lzx
     total = meminfo()["MemTotal"]
@@ -646,6 +863,8 @@ def setup_slice(config: dict[str, Any]) -> Path:
     missing = [name for name in REQUIRED_CGROUP_FILES if not endpoint.get("read_status", {}).get(name, {}).get("ok", False)]  #lzx
     if missing:  #lzx
         raise RuntimeError("test slice required cgroup files unavailable: " + ",".join(missing))  #lzx
+    if variant != "observe":
+        apply_cgroup_policy(path, variant)
     return path
 
 
@@ -1077,6 +1296,19 @@ def finalize_round(session_dir: Path, suite: str, expected_steps: int, automatio
     cgroup_oom_kill = int(cgroup_metrics.get("oom_kill_delta") or 0)  #lzx
     trace_loss = stats["overrun"] + stats["commit_overrun"] + stats["dropped_events"]
     invalid_reasons: list[str] = []  #lzx
+    try:
+        policy_before = json.loads((session_dir / "policy-state-before.json").read_text(encoding="utf-8"))
+        policy_after = json.loads((session_dir / "policy-state-after.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        policy_before = policy_after = {"variant": "observe"}
+    variant = str(policy_before.get("variant", "observe"))
+    if variant in POLICY_VARIANTS:
+        desired = POLICY_VARIANTS[variant]
+        for phase, state in (("before", policy_before), ("after", policy_after)):
+            for key in ("parp_mode", "effective_tier_mode", "tier2_enabled", "cgroup_tier2_enabled"):
+                expected = desired["tier2_enabled"] if key == "cgroup_tier2_enabled" else desired[key]
+                if int(state.get(key) or -1) != expected:
+                    invalid_reasons.append(f"policy drift {phase} {key}: expected={expected} actual={state.get(key)}")
     if automation_rc != 0:  #lzx
         invalid_reasons.append(f"automation returned {automation_rc}")  #lzx
     if abort_reason:  #lzx
@@ -1113,6 +1345,7 @@ def finalize_round(session_dir: Path, suite: str, expected_steps: int, automatio
         "cgroup": cgroup_metrics,  #lzx
         "system": system_metrics,  #lzx
         "launch": launch_metrics,  #lzx
+        "policy": {"variant": variant, "before": policy_before, "after": policy_after},
         "validity": {  #lzx
             "valid": valid, "invalid_reasons": invalid_reasons, "cgroup_endpoints_valid": cgroup_valid,  #lzx
             "trace_pairing_valid": trace_counts.get("pairing_error_count", 0) == 0,  #lzx
@@ -1125,14 +1358,15 @@ def finalize_round(session_dir: Path, suite: str, expected_steps: int, automatio
     return result
 
 
-def run_round(config: dict[str, Any], *, suite: str, profile: str, round_index: int, seed: int, parent_dir: Path, preflight_data: dict[str, Any]) -> dict[str, Any]:
+def run_round(config: dict[str, Any], *, suite: str, profile: str, round_index: int, seed: int, parent_dir: Path, preflight_data: dict[str, Any], variant: str = "observe", replay_plan: dict[str, Any] | None = None) -> dict[str, Any]:
     session_dir = parent_dir / f"round-{round_index:02d}"
     for child in ("trace", "ballast", "screenshots"):
         (session_dir / child).mkdir(parents=True, exist_ok=True)
     instance = f"parp-accept-{os.getpid()}-{round_index}"
-    scenario = generate_scenario(config, suite=suite, profile=profile, round_index=round_index, seed=seed, session_dir=session_dir, trace_instance=instance)
+    scenario = generate_scenario(config, suite=suite, profile=profile, round_index=round_index, seed=seed, session_dir=session_dir, trace_instance=instance, replay_plan=replay_plan)
     scenario_path = session_dir / "scenario.json"
     write_json(scenario_path, scenario)
+    write_json(session_dir / "scenario-plan.json", scenario["metadata"]["scenario_plan"])
     write_json(session_dir / "preflight.json", preflight_data)
     expected_steps = int(scenario["metadata"]["scored_steps"])
     cgroup_path: Path | None = None
@@ -1147,7 +1381,8 @@ def run_round(config: dict[str, Any], *, suite: str, profile: str, round_index: 
     high_psi_count = 0
     root_oom_before = vmstat().get("oom_kill", 0)
     try:
-        cgroup_path = setup_slice(config)
+        cgroup_path = setup_slice(config, variant)
+        write_json(session_dir / "policy-state-before.json", {"variant": variant, **policy_state(cgroup_path)})
         before = snapshot(cgroup_path)
         write_json(session_dir / "snapshot-before.json", before)
         setup = run([
@@ -1223,6 +1458,7 @@ def run_round(config: dict[str, Any], *, suite: str, profile: str, round_index: 
             automation_rc = automation.wait(timeout=10)
         automation_log.close()
         write_json(session_dir / "snapshot-after.json", snapshot(cgroup_path))
+        write_json(session_dir / "policy-state-after.json", {"variant": variant, **policy_state(cgroup_path)})
     except Exception as exc:
         abort_reason = abort_reason or f"HARNESS_ERROR:{type(exc).__name__}:{exc}"
     finally:
@@ -1248,7 +1484,7 @@ def run_round(config: dict[str, Any], *, suite: str, profile: str, round_index: 
     return finalize_round(session_dir, suite, expected_steps, automation_rc, abort_reason)
 
 
-def aggregate(parent: Path, preflight_data: dict[str, Any], results: list[dict[str, Any]], suite: str, profile: str) -> dict[str, Any]:
+def aggregate(parent: Path, preflight_data: dict[str, Any], results: list[dict[str, Any]], suite: str, profile: str, variant: str = "observe") -> dict[str, Any]:
     valid = [item for item in results if item["status"] == "VALID_DIAGNOSTIC"]
     def mean(path: tuple[str, str]) -> float | None:  #lzx
         values = [item.get(path[0], {}).get(path[1]) for item in valid]  #lzx
@@ -1256,16 +1492,20 @@ def aggregate(parent: Path, preflight_data: dict[str, Any], results: list[dict[s
         return sum(present) / len(present) if present else None  #lzx
     first_scenario = json.loads((parent / "round-01/scenario.json").read_text(encoding="utf-8"))
     limitations = [
-        "当前 r9 为 Shadow，apply_compiled=0，不能计算优化改善率。",
         "PageFault trace 只过滤到受控应用内存 sidecar PID；真实 GUI 应用及 sidecar 的总 fault 以测试 slice cgroup pgfault 复核。",
         "正式验收必须用同源 Native/OFF 与 Apply 内核、完全相同的 seed/场景进行成对比较。",
     ]
+    if variant == "observe":
+        limitations.insert(0, "当前为既有观察/Shadow运行，不能单独计算优化改善率。")
+    else:
+        limitations.insert(0, f"当前只完成 {variant} 单侧运行；必须与 scenario-plan 哈希一致的 native 结果配对。")
     if suite == "peak" and valid and mean(("events", "failure_total")) == 0:
         limitations.append("当前基线异常总数为 0，30% 降低率分母为 0；需要经过安全校准的更强峰值负载后才能评价该指标。")
     summary = {
         "status": "DIAGNOSTIC_BASELINE_COMPLETE" if len(valid) == len(results) else "DIAGNOSTIC_BASELINE_INCOMPLETE",
-        "acceptance_verdict": "NOT_EVALUABLE_SHADOW_NO_APPLY" if preflight_data["diagnostic_only"] else "BASELINE_ONLY_NO_OPTIMIZED_PAIR",
+        "acceptance_verdict": "NOT_EVALUABLE_SHADOW_NO_APPLY" if variant == "observe" and preflight_data["diagnostic_only"] else "PAIR_REQUIRED",
         "kernel_release": preflight_data["kernel_release"], "suite": suite, "profile": profile,
+        "variant": variant,
         "rounds_requested": len(results), "rounds_valid": len(valid),
         "workload_contract": first_scenario.get("metadata", {}).get("workload_contract", {}),
         "averages": {
@@ -1315,10 +1555,21 @@ def aggregate(parent: Path, preflight_data: dict[str, Any], results: list[dict[s
 
 def execute(args: argparse.Namespace) -> int:
     config = load_config(args.config)
-    pf = preflight(config, args.profile, args.suite)
+    if args.oom_probe_ratio is not None:
+        if args.suite != "peak" or not 0 < args.oom_probe_ratio < 1:
+            raise ValueError("--oom-probe-ratio is only valid for peak and must be between zero and one")
+        config.setdefault("peak", {}).setdefault("oom_probe", {})["enabled"] = True
+        config["peak"]["oom_probe"]["memory_ratio"] = args.oom_probe_ratio
+    if args.replay_from and args.suite == "peak":
+        first_plan = args.replay_from / "round-01" / "scenario-plan.json"
+        if first_plan.is_file():
+            replay_settings = json.loads(first_plan.read_text(encoding="utf-8")).get("oom_probe", {"enabled": False})
+            config["peak"]["oom_probe"] = replay_settings
+    variant = args.variant
+    pf = preflight(config, args.profile, args.suite, variant)
     root = output_root(config)
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    parent = root / f"{args.suite}-{args.profile}-{stamp}-{os.uname().release}"
+    parent = root / f"{args.suite}-{args.profile}-{variant}-{stamp}-{os.uname().release}"
     parent.mkdir(parents=True, exist_ok=True)
     write_json(parent / "system-metadata-lzx.json", pf.get("system_metadata", {}))  #lzx
     write_json(parent / "preflight.json", pf)
@@ -1330,12 +1581,33 @@ def execute(args: argparse.Namespace) -> int:
     if args.rounds:
         rounds = args.rounds
     results = []
-    for index in range(1, rounds + 1):
-        seed = args.seed + index - 1
-        print(f"round={index}/{rounds} seed={seed}", flush=True)
-        results.append(run_round(config, suite=args.suite, profile=args.profile, round_index=index, seed=seed, parent_dir=parent, preflight_data=pf))
-        print(f"round_status={results[-1]['status']}", flush=True)
-    summary = aggregate(parent, pf, results, args.suite, args.profile)
+    original_policy: dict[str, Any] | None = None
+    try:
+        if variant != "observe":
+            original_policy = policy_state()
+            apply_global_policy(variant)
+            pf["parp"]["applied_policy"] = policy_state()
+            write_json(parent / "preflight.json", pf)
+        for index in range(1, rounds + 1):
+            replay_plan = None
+            seed = args.seed + index - 1
+            if args.replay_from:
+                plan_path = args.replay_from / f"round-{index:02d}" / "scenario-plan.json"
+                if not plan_path.is_file():
+                    raise RuntimeError(f"replay plan missing: {plan_path}")
+                replay_plan = json.loads(plan_path.read_text(encoding="utf-8"))
+                seed = int(replay_plan["seed"])
+            print(f"round={index}/{rounds} seed={seed} variant={variant}", flush=True)
+            results.append(run_round(
+                config, suite=args.suite, profile=args.profile, round_index=index,
+                seed=seed, parent_dir=parent, preflight_data=pf, variant=variant,
+                replay_plan=replay_plan,
+            ))
+            print(f"round_status={results[-1]['status']}", flush=True)
+    finally:
+        if original_policy is not None:
+            restore_global_policy(original_policy)
+    summary = aggregate(parent, pf, results, args.suite, args.profile, variant)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if summary["rounds_valid"] == rounds else 1
 
@@ -1463,6 +1735,7 @@ def parser() -> argparse.ArgumentParser:
     check.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     check.add_argument("--profile", choices=["smoke", "full"], default="smoke")
     check.add_argument("--suite", choices=["hotcold", "peak", "all"], default="all")
+    check.add_argument("--variant", choices=["observe", *POLICY_VARIANTS], default="observe")
     check.add_argument("--output", type=Path)
     generate = sub.add_parser("generate")
     generate.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -1487,6 +1760,9 @@ def parser() -> argparse.ArgumentParser:
     execute_parser.add_argument("--suite", choices=["hotcold", "peak"], required=True)
     execute_parser.add_argument("--seed", type=int, default=20260809)
     execute_parser.add_argument("--rounds", type=int)
+    execute_parser.add_argument("--variant", choices=["observe", *POLICY_VARIANTS], default="observe")
+    execute_parser.add_argument("--replay-from", type=Path, help="Baseline suite directory containing round-NN/scenario-plan.json")
+    execute_parser.add_argument("--oom-probe-ratio", type=float, help="Enable the cgroup-confined anonymous OOM calibration burst")
     combine = sub.add_parser("combine")
     combine.add_argument("--hotcold", type=Path, required=True)
     combine.add_argument("--peak", type=Path, required=True)
@@ -1497,7 +1773,7 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     if args.subcommand == "preflight":
-        data = preflight(load_config(args.config), args.profile, args.suite)
+        data = preflight(load_config(args.config), args.profile, args.suite, args.variant)
         if args.output:
             write_json(args.output, data)
         print(json.dumps(data, ensure_ascii=False, indent=2))

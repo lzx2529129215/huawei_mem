@@ -6,7 +6,13 @@ __pycache__/
 .venv/
 venv/
 
-# zhj experiment package: generated environments, build metadata, and run data
+# Independent test module: generated environments, build metadata, and run data
+/test/tmp/
+/test/*.egg-info/
+/test/results/
+/test/data/
+
+# Legacy zhj module is intentionally retained; ignore new local run artifacts.
 /zhj/tmp/
 /zhj/*.egg-info/
 /zhj/results/

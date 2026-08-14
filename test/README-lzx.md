@@ -4,6 +4,8 @@
 
 当前基线数值、验收目标换算、结果限制和复现实验说明见 [`baseline-results-lzx.md`](baseline-results-lzx.md)。
 
+新一轮应用集合、LSTM重训、两个独立开关、精确重放和OOM校准的完整方案见 [`实验设计-lzx.md`](实验设计-lzx.md)。主基线固定为 Linux 6.17.13，唯一修改与编译源码树为 `lzx/kernel/src/linux-6.17.13-parp-lzx`。<!-- lzx-note -->
+
 两套完整实验结束后，可以生成包含各轮原始值、均值、标准差、极值和目标阈值的醒目对比报告：
 
 ```bash
@@ -20,7 +22,7 @@ python3 test/baseline-report-lzx.py \
 - PageFault 主采集来自 `exceptions:page_fault_user` tracepoint，并只过滤受控应用内存 sidecar PID；测试 slice 的 `pgfault/pgmajfault` 用于包含真实 GUI 应用的交叉复核。
 - 真实refault按每轮测试cgroup `memory.stat` 的首尾差值统计，分别报告 `workingset_refault_file` 与 `workingset_refault_anon`；禁止用未来访问标签代替真实refault。
 - 完整回收诊断同时记录 `workingset_activate/restore`、`pgscan/pgsteal`、direct/kswapd扫描回收量、扫描效率、direct/memcg reclaim延迟和kswapd CPU时间。旧基线没有采集的字段显示为 `N/A`，不能填0。
-- 当前 `schema-v3` 已把 zhj 中适合正式验收的严格检查合并到本主线：cgroup 首尾路径与 device/inode 必须一致，`memory.stat`、`memory.events`、`cpu.stat`、`io.stat` 和 `memory.current` 必须可读，必需计数器不得缺失或倒退；任一条件失败都使该轮无效，原始文件仍保留。
+- 当前 `schema-v3` 已吸收同目录 `memsched_exp` 独立测量核心中的严格检查：cgroup 首尾路径与 device/inode 必须一致，`memory.stat`、`memory.events`、`cpu.stat`、`io.stat` 和 `memory.current` 必须可读，必需计数器不得缺失或倒退；任一条件失败都使该轮无效，原始文件仍保留。
 - trace 除 ring 丢失外，还检查 direct reclaim 与 memcg reclaim 的 begin/end 嵌套、孤立 end、未闭合 begin 和关键事件解析失败；配对错误不会被静默丢弃，也不会用成功配对数掩盖。
 - CPU/I/O 使用同一个测试 slice 的 `cpu.stat` 与 `io.stat` 首尾差分，报告 CPU 总时间、单核等价占比、整机占比、块层读写量和吞吐；页缓存命中的读取不计入块层 I/O。
 - 每个应用报告“启动动作开始到匹配 X11 窗口验证成功”的就绪代理延迟，并输出轮内均值与 P95。该值不是首个可交互帧；峰值场景先并发启动再逐个验证，因此应视为启动就绪上界。
@@ -30,6 +32,8 @@ python3 test/baseline-report-lzx.py \
 - 峰值异常总数为自动化动作/启动失败、低内存窗口命中和测试 cgroup `oom_kill` 的合计。宿主 `oom_kill` 不计入成绩，而是立即中止并判该轮无效。
 
 随机不等于不可复现：每轮先由 seed 生成序列并保存 `scenario.json`，优化前后必须复用完全相同的 seed 和场景。正式改善率为 `(基线均值 - 优化均值) / 基线均值 * 100%`。
+
+现在每轮还会保存不含临时路径的 `scenario-plan.json`。Apply 侧必须用 `--replay-from <Native输出目录>` 重放逐步应用、冷区偏移、停留时间及OOM burst设置；`paired-report-lzx.py` 会逐轮校验计划哈希和系统元数据，不能只凭seed相同认定为有效配对。
 
 ## 已实现并实际执行的自动化场景
 
@@ -131,3 +135,5 @@ python3 test/parp-acceptance-lzx.py run --profile full --suite peak --seed 20260
 ## 扩展应用建议
 
 首版不依赖额外安装。正式扩展可加入 Blender、QEMU/KVM + virt-manager、Ollama，分别覆盖图形渲染、虚拟机和本地大模型峰值。新应用必须先补齐启动命令、窗口识别、无外部副作用的 UI 操作、scope 归属和失败检测，未通过预检时只能记为 `NOT_INSTALLED/SKIP`，不能算作成功步骤。
+
+LSAPP 对齐实验不使用上述超大应用，也不再依赖QQ登录。它使用本机已经安装的 Firefox、LibreOffice、VLC、GIMP、Audacity、Thunderbird、Evince、PCManFM/Nautilus 和 GNOME Calculator；所有操作只读取运行时生成的本地 HTML、TXT、WAV、EML、PDF、PPM 或仓库目录。

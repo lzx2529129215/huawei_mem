@@ -71,9 +71,45 @@ class AcceptanceConfigTests(unittest.TestCase):
                     first_launch = min(index for index, label in enumerate(labels) if label.startswith("LAUNCH_"))
                     self.assertLess(last_prepare, first_launch)
 
-    def test_all_tracked_test_source_names_have_lzx_suffix(self) -> None:
+    def test_lsapp_aligned_suite_matches_login_free_runtime_scope(self) -> None:
+        aligned = json.loads((ROOT / "parp-lsapp-aligned-config-lzx.json").read_text(encoding="utf-8"))
+        scope_path = ROOT.parent / aligned["lstm_contract"]["runtime_scope"]
+        scope = json.loads(scope_path.read_text(encoding="utf-8"))
+        configured = set(aligned["hotcold"]["apps"])
+        runtime = {item["app_key"] for item in scope["apps"] if item["prediction_enabled"]}
+        self.assertEqual(configured, runtime)
+        self.assertNotIn("QQ", configured)
+        self.assertNotIn("TELEGRAM", configured)
+        self.assertGreaterEqual(len(configured), 9)
+
+    def test_scenario_plan_replays_every_scored_decision(self) -> None:
+        aligned = json.loads((ROOT / "parp-lsapp-aligned-config-lzx.json").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = MODULE.generate_scenario(
+                aligned, suite="hotcold", profile="smoke", round_index=1,
+                seed=20260812, session_dir=root / "native", trace_instance="native",
+            )
+            plan = original["metadata"]["scenario_plan"]
+            replayed = MODULE.generate_scenario(
+                aligned, suite="hotcold", profile="smoke", round_index=1,
+                seed=20260812, session_dir=root / "effective", trace_instance="effective",
+                replay_plan=plan,
+            )
+            self.assertEqual(plan, replayed["metadata"]["scenario_plan"])
+            self.assertEqual(len(plan["cases"]), aligned["profiles"]["smoke"]["hotcold_steps"])
+
+    def test_policy_variants_isolate_effective_tier_and_tier2(self) -> None:
+        self.assertEqual(MODULE.POLICY_VARIANTS["native"], {"parp_mode": 0, "effective_tier_mode": 0, "tier2_enabled": 0})
+        self.assertEqual(MODULE.POLICY_VARIANTS["effective"]["tier2_enabled"], 0)
+        self.assertEqual(MODULE.POLICY_VARIANTS["tier2"]["effective_tier_mode"], 0)
+        self.assertEqual(MODULE.POLICY_VARIANTS["combined"]["effective_tier_mode"], 2)
+
+    def test_legacy_root_sources_keep_lzx_suffix(self) -> None:
         for path in ROOT.iterdir():
             if not path.is_file():
+                continue
+            if path.name in {"README.md", "pyproject.toml", "setup.cfg"}:
                 continue
             self.assertTrue(path.stem.endswith("-lzx"), path.name)
 
