@@ -67,7 +67,7 @@ WPS Writer：打开同一个本地 DOCX（建议 100 页、含固定图片），
 
 1. 终止本用户的目标进程，等待 3 秒并确认无残留子进程。
 2. “进程冷”只要求无进程；“严格冷缓存”额外执行 `sync` 与 drop_caches。两类结果分开存放。
-3. 先启动系统/cgroup 与 eBPF collector，再启动应用。
+3. 预创建应用 cgroup；collector 先写入 before 快照和 collector-ready marker，应用等待系统/cgroup collector 均 ready 后才写 start marker 并启动。
 4. X11 记录首 mapped window；若可修改 wrapper，则在首帧可交互时 `touch READY_FILE`，以该值为主。
 5. 按固定动作操作到 60 秒，保存 raw snapshots、launch JSON 和 eBPF events。
 6. 当前首轮 QQ、WPS 各 1 次；链路验证后各 5 次冒烟，正式数据各至少 10 次。
@@ -125,7 +125,7 @@ bash scripts/scenarios/run_appflow.sh medium
 bash scripts/scenarios/run_appflow.sh high
 ```
 
-脚本第一次创建 1.2 GiB 文件：逐块写入确定性伪随机内容、`fsync`，并生成 `.meta.json` SHA-256 manifest；旧版稀疏文件没有有效 manifest 时会自动重建。严格冷缓存要设置 `DROP_CACHES=1`，只允许在隔离机使用。默认 128 KB block 表示 AppFlow “during-launch throughput-first”方向；再用 4/16/32/64/128/256/512 KB 做 block-size sweep，报告吞吐与延迟曲线。
+脚本第一次创建 1.2 GiB 文件：逐块写入确定性伪随机内容、`fsync`，并生成 `.meta.json` SHA-256 manifest；旧版稀疏文件没有有效 manifest 时会自动重建。每轮先执行逐文件 `POSIX_FADV_DONTNEED`，再用 `mincore` 证明驻留率不高于 1%（阈值可配置），验证失败则拒绝运行。`DROP_CACHES=1` 只是独占测试机上的可选全局补充。默认 128 KB block 表示 AppFlow “during-launch throughput-first”方向；再用 4/16/32/64/128/256/512 KB 做 block-size sweep，报告吞吐与延迟曲线。
 
 ### 5.2 真实 GB 级应用
 
@@ -180,3 +180,5 @@ QQ/WPS 加上浏览器、媒体和工具类应用，固定顺序运行两轮，�
 5. refault ratio 分母为 0 时输出 null，不填 0。
 6. runner 等待 eBPF `collector_start` 后才放行负载；BPF begin/end 丢配对、collector stderr 有 lost/dropped events、cgroup 端点消失或 inode 改变时自动标记无效，但 vmstat raw data 仍保留。
 7. 先完成 QQ/WPS 各 1 次首轮并检查 raw→summary 一致，再扩为 5 次冒烟和论文工作负载。
+8. 正式轮次必须生成 schema-v4 `manifest.json`；比较器按场景、seed、repetition、cache state 和 workload hash 配对，并拒绝环境指纹不一致的轮次。
+9. 使用 `memsched_exp.compare` 生成 mean、median、sample standard deviation、p90/p95、配对差、改善率和 bootstrap 95% CI；Baseline 为 0 时改善率保持 `null`。

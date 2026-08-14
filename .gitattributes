@@ -1,3 +1,8 @@
 zb/operation_predictor_lstm/data/processed/v3_next_app_aligned/train.csv filter=lfs diff=lfs merge=lfs -text
 zb/operation_predictor_lstm/outputs/results/app_lstm_next/inference_trace.csv filter=lfs diff=lfs merge=lfs -text
 zb/operation_predictor_lstm/outputs/results/v3_aligned/inference_trace.csv filter=lfs diff=lfs merge=lfs -text
+
+# Linux experiment sources must keep LF endings when edited on Windows.
+zhj/**/*.sh text eol=lf
+zhj/**/*.py text eol=lf
+zhj/**/*.bt text eol=lf

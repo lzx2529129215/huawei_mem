@@ -14,7 +14,7 @@
 | Page Re-fault 次数 | `workingset_refault_anon + workingset_refault_file` 的窗口差分 | 页 | 与 Acclaim 的 non-resident refault 概念对齐；内核 shadow entry 的 refault 窗口不是固定“若干秒”。|
 | Page Re-fault 比率 | refault 页 / reclaimed 页 | `refault_delta / pgsteal_delta` | 分母使用被回收成功的页，是 Linux 可审计的 evicted-page 代理。分子分母和源字段一并输出。|
 | Direct Reclaim 次数 | 首选 eBPF `mm_vmscan_direct_reclaim_begin` 事件数；回退为 `allocstall*` 差分 | 事件 | tracepoint 是进入直接回收的精确事件数；`allocstall` 是分配停顿代理，单独命名。|
-| Direct Reclaim 比率 | 主报告采用直接扫描页 /（直接扫描页 + kswapd 扫描页） | `pgscan_direct* / (pgscan_direct* + pgscan_kswapd*)` | 这是页比例，不冒充 Acclaim 的操作次数比例。补充报告 `direct_begin / (direct_begin + kswapd_wake)`，但注明 kswapd wake 是周期代理。|
+| Direct Reclaim 比率 | 主报告采用直接扫描页 /（直接扫描页 + kswapd 扫描页）；补充事件代理为 direct begin /（direct begin + kswapd wake） | 页比例与事件代理 | `direct_reclaim_page_ratio` 是页比例；`direct_reclaim_event_ratio` 是事件代理。两者分开报告，kswapd wake 不等于一次完整后台回收。|
 | 应用启动延迟 | `memsched_exp.launch` | ms | 优先 app 写入 `ready-file` 作为首帧标记；X11 `wmctrl` 是首个 mapped window 代理，不证明可交互。Wayland 原生窗口必须用 app 标记或 compositor 插件。|
 | 前台应用 Page Re-fault | 前台应用独立 cgroup 的 `memory.stat` | 页 | 必须把完整进程树放入 cgroup；只看主 PID 会漏 Electron/Qt 子进程。|
 | 游戏 FPS 及标准差 | 帧时间 CSV，按完整观测窗口的 1 秒桶统计 FPS | FPS | `average_fps`、`fps_per_second_stddev`；完全没有帧的内部秒桶以 0 FPS 计入。可用 `--window-start-ns/--window-end-ns` 固定首尾边界。|
@@ -46,6 +46,8 @@ eBPF 汇总中：
 
 - `direct_reclaim_count`: direct-reclaim begin tracepoint 次数
 - `direct_reclaim_total_duration_ms`: begin/end 按 TID 配对后的累计时间
+- `direct_reclaim_started_full_duration_ms`: 正式窗口内开始的 reclaim 的完整持续时间
+- `direct_reclaim_boundary_spanning_count`: 跨 start/stop 边界的完整配对数量
 - `kswapd_wake_count`
 - `oom_mark_victim_count`
 - `by_comm`: 事件的进程名分布；前台精确归属应结合事件中的 `cgroup_id`
@@ -54,5 +56,8 @@ eBPF 汇总中：
 
 - cgroup 两端必须路径和目录 inode 一致，并成功读取 `memory.stat`、`memory.events`、`cpu.stat`、`io.stat`；否则 `cgroup.valid=false`，不会生成伪零指标。
 - eBPF 必须各有一个 `collector_start/collector_stop`，direct-reclaim begin/end 数量一致，JSON 无解析错误，stderr 无 lost/dropped events；否则 `valid=false`。
+- eBPF 先在完整事件流中配对，再投影到实验窗口；合法的跨窗口事件不会因为窗口内 begin/end 数量不同而误判无效。
+- 正式协议必须满足 `before < collector_ready <= workload_start < workload_stop <= after <= collector_done`。
+- 严格冷缓存轮次必须保存 `cache-eviction.json`，且 `mincore` 驻留率不高于配置阈值。
 - 启动探针只接受启动后新出现的窗口 ID；`start-file` 使用单调时钟标记。
 - 汇总 CSV 的 `measurement_valid` 聚合 cgroup、eBPF 和启动探针状态，无效原因写入 `invalid_reasons`，原始文件仍保留。

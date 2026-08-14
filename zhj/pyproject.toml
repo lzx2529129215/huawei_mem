@@ -1,11 +1,16 @@
 [project]
 name = "memsched-exp"
-version = "0.1.0"
-description = "Linux 6.17 memory scheduling experiment collectors"
+version = "0.2.0"
+description = "Auditable Linux 6.17 memory scheduling experiment collectors and paired analysis"
 requires-python = ">=3.10"
 
 [project.scripts]
 memsched-exp = "memsched_exp.cli:main"
+memsched-report = "memsched_exp.report:main"
+memsched-compare = "memsched_exp.compare:main"
+memsched-manifest = "memsched_exp.schema:main"
+memsched-cache-state = "memsched_exp.cache_state:main"
+memsched-policy-state = "memsched_exp.policy_state:main"
 
 [tool.setuptools.packages.find]
 include = ["memsched_exp*"]

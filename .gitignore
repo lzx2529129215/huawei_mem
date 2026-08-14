@@ -6,6 +6,12 @@ __pycache__/
 .venv/
 venv/
 
+# zhj experiment package: generated environments, build metadata, and run data
+/zhj/tmp/
+/zhj/*.egg-info/
+/zhj/results/
+/zhj/data/
+
 # Generated experiment data can be many gigabytes and may contain host metadata.
 /lzx/tool/outputs/
 
