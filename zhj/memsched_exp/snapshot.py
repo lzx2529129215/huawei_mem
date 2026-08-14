@@ -145,6 +145,30 @@ def _mount_metadata(path: Path | None) -> dict[str, Any] | None:
     return max(matches, default=(0, None), key=lambda item: item[0])[1]
 
 
+def _cpu_model() -> str | None:
+    text = _read_text(Path("/proc/cpuinfo"))
+    if not text:
+        return None
+    for line in text.splitlines():
+        if line.lower().startswith("model name") and ":" in line:
+            return line.split(":", 1)[1].strip()
+    return None
+
+
+def _cpu_frequency_constraints() -> list[dict[str, str | None]]:
+    rows: list[dict[str, str | None]] = []
+    for policy in sorted(Path("/sys/devices/system/cpu/cpufreq").glob("policy*")):
+        rows.append(
+            {
+                "policy": policy.name,
+                "min_khz": _read_text(policy / "scaling_min_freq"),
+                "max_khz": _read_text(policy / "scaling_max_freq"),
+                "governor": _read_text(policy / "scaling_governor"),
+            }
+        )
+    return rows
+
+
 def host_metadata(storage_path: Path | None = None) -> dict[str, Any]:
     sysctls = {
         key: _read_text(Path("/proc/sys") / Path(key.replace(".", "/")))
@@ -167,6 +191,7 @@ def host_metadata(storage_path: Path | None = None) -> dict[str, Any]:
         "kernel": platform.release(),
         "platform": platform.platform(),
         "machine": platform.machine(),
+        "cpu_model": _cpu_model(),
         "cpu_count": os.cpu_count() or 1,
         "page_size": mmap.PAGESIZE,
         "mem_total_kib": meminfo.get("MemTotal"),
@@ -180,6 +205,9 @@ def host_metadata(storage_path: Path | None = None) -> dict[str, Any]:
             "defrag": _read_text(Path("/sys/kernel/mm/transparent_hugepage/defrag")),
         },
         "cpu_governors": governors,
+        "cpu_frequency_constraints": _cpu_frequency_constraints(),
+        "numa_nodes_online": _read_text(Path("/sys/devices/system/node/online")),
+        "boot_id": _read_text(Path("/proc/sys/kernel/random/boot_id")),
         "session": {
             "type": os.environ.get("XDG_SESSION_TYPE"),
             "desktop": os.environ.get("XDG_CURRENT_DESKTOP"),

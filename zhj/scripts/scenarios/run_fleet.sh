@@ -28,12 +28,22 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 stop_file="$output/experiment-stop.marker"
-rm -f "$stop_file"
-start_bpf_collector "$collector_duration" "$output" "" "$stop_file"
+start_file="$output/experiment-start.marker"
+ready_file="$output/collector-ready.json"
+done_file="$output/collector-done.json"
+rm -f "$start_file" "$stop_file" "$ready_file" "$done_file"
+manifest_path="$(create_run_manifest "$output" "fleet-${object_bytes}B" warm "${EXPERIMENT_REPETITION:-1}")"
+manifest_args=()
+[[ -z "$manifest_path" ]] || manifest_args=(--manifest-file "$manifest_path")
+start_bpf_collector "$collector_duration" "$output" "$start_file" "$stop_file"
 python3 -m memsched_exp.cli collect \
   --name "fleet-${object_bytes}B" --duration "$collector_duration" --interval 1 \
-  --scenario fleet --cache-state warm --stop-file "$stop_file" --output "$output" &
+  --scenario fleet --cache-state warm --ready-file "$ready_file" --start-file "$start_file" \
+  "${manifest_args[@]}" \
+  --stop-file "$stop_file" --done-file "$done_file" --output "$output" &
 collector_pid=$!
+wait_for_protocol_marker "$ready_file" 60
+write_protocol_marker "$start_file" workload_start
 
 launched_count=0
 for ((index=0; index<app_count; index++)); do
@@ -69,7 +79,7 @@ for ((index=0; index<${#pids[@]}; index++)); do
   printf '{"app_index":%d,"pid":%d,"rss_bytes":%d}\n' "$index" "$pid" "$((rss_kib * 1024))" >>"$output/app-rss.jsonl"
 done
 python3 -m memsched_exp.workload_summary --type fleet --run "$output"
-touch "$stop_file"
+write_protocol_marker "$stop_file" workload_stop
 wait "$collector_pid"
 wait_bpf_collector
 echo "$output"

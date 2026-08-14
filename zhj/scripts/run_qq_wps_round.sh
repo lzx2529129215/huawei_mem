@@ -46,8 +46,9 @@ trap cleanup_active_app EXIT INT TERM
 run_one() {
   local record="$1"
   local repetition="$2"
-  local name window_regex safe_name run_dir start_file cache_state repetition_label
-  local -a command process_names
+  local name window_regex safe_name run_dir start_file cache_state repetition_label manifest_path
+  local system_ready cgroup_ready system_done cgroup_done
+  local -a command process_names manifest_args
   name="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["name"])' "$record")"
   window_regex="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["window_regex"])' "$record")"
   mapfile -d '' -t command < <(python3 -c 'import json,sys; [sys.stdout.write(v+"\0") for v in json.loads(sys.argv[1])["command"]]' "$record")
@@ -58,10 +59,17 @@ run_one() {
   active_unit="memexp-$safe_name-r$repetition_label"
   active_process_names=("${process_names[@]}")
   start_file="$run_dir/app-start.marker"
+  system_ready="$run_dir/system/collector-ready.json"
+  cgroup_ready="$run_dir/cgroup/collector-ready.json"
+  system_done="$run_dir/system/collector-done.json"
+  cgroup_done="$run_dir/cgroup/collector-done.json"
   cache_state="process-cold"
   [[ "$drop_caches" == "1" ]] && cache_state="strict-cold"
   mkdir -p "$run_dir"
-  rm -f "$start_file"
+  rm -f "$start_file" "$system_ready" "$cgroup_ready" "$system_done" "$cgroup_done"
+  manifest_path="$(create_run_manifest "$run_dir" "$name-cold" "$cache_state" "$repetition")"
+  manifest_args=()
+  [[ -z "$manifest_path" ]] || manifest_args=(--manifest-file "$manifest_path")
 
   cleanup_active_app
   active_unit="memexp-$safe_name-r$repetition_label"
@@ -76,7 +84,9 @@ run_one() {
   python3 -m memsched_exp.cli collect \
     --name "$name-cold-r$repetition_label" --duration "$duration" --interval "$interval" \
     --scenario qq-wps --cache-state "$cache_state" --metadata-file "$run_dir/app-metadata.json" \
-    --start-file "$start_file" --output "$run_dir/system" &
+    "${manifest_args[@]}" \
+    --ready-file "$system_ready" --start-file "$start_file" --done-file "$system_done" \
+    --output "$run_dir/system" &
   local system_collector_pid=$!
   background_pids+=("$system_collector_pid")
 
@@ -88,8 +98,9 @@ run_one() {
     --output "$run_dir/launch.json" -- \
     systemd-run --user --unit="$active_unit" --collect \
       --property=MemoryAccounting=yes --property=CPUAccounting=yes \
-      --property=IOAccounting=yes --property="ExecStartPre=/bin/sleep 2" \
-      -- python3 -m memsched_exp.start_marker --marker "$start_file" -- "${command[@]}" &
+      --property=IOAccounting=yes \
+      -- python3 -m memsched_exp.start_marker --marker "$start_file" \
+        --ready-file "$system_ready" --ready-file "$cgroup_ready" -- "${command[@]}" &
   local launch_probe_pid=$!
   background_pids+=("$launch_probe_pid")
 
@@ -109,11 +120,14 @@ run_one() {
     python3 -m memsched_exp.cli collect \
       --name "$name-cold-cgroup-r$repetition_label" --duration "$duration" --interval "$interval" \
       --scenario qq-wps --cache-state "$cache_state" --metadata-file "$run_dir/app-metadata.json" \
-      --start-file "$start_file" --cgroup "$cgroup_path" --output "$run_dir/cgroup" &
+      "${manifest_args[@]}" \
+      --ready-file "$cgroup_ready" --start-file "$start_file" --done-file "$cgroup_done" \
+      --cgroup "$cgroup_path" --output "$run_dir/cgroup" &
     cgroup_collector_pid=$!
     background_pids+=("$cgroup_collector_pid")
   else
     echo "Could not resolve transient service cgroup" >"$run_dir/cgroup.error"
+    return 4
   fi
 
   wait "$launch_probe_pid" || true

@@ -48,6 +48,15 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(row["page_refault_count"], 10)
         self.assertEqual(row["foreground_page_refault_count"], 2)
 
+    def test_appflow_requires_cold_cache_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+            (run / "metadata.json").write_text('{"name":"appflow","scenario":"appflow"}', encoding="utf-8")
+            (run / "summary.json").write_text('{"elapsed_s":1,"system":{}}', encoding="utf-8")
+            row = row_for_run(run)
+        self.assertFalse(row["measurement_valid"])
+        self.assertIn("cold-cache evidence is missing", row["invalid_reasons"])
+
 
 if __name__ == "__main__":
     unittest.main()

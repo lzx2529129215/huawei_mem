@@ -60,6 +60,7 @@ if [[ -n "$stop_file" ]]; then
     sleep 0.1
   done
   if kill -0 "$collector_pid" 2>/dev/null; then
+    sleep "${BPF_STOP_GRACE_SECONDS:-0.5}"
     sudo -n kill -INT "$collector_pid" 2>/dev/null || kill -INT "$collector_pid" 2>/dev/null || true
   fi
 fi
@@ -76,5 +77,8 @@ parser_args=(
 )
 if [[ -n "$start_file" ]]; then
   parser_args+=(--start-file "$start_file" --duration "$duration")
+fi
+if [[ -n "$stop_file" ]]; then
+  parser_args+=(--stop-file "$stop_file")
 fi
 python3 -m memsched_exp.bpf_events "${parser_args[@]}"

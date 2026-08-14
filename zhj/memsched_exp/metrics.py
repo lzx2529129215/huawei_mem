@@ -150,12 +150,19 @@ def cgroup_validity(before: dict[str, Any], after: dict[str, Any]) -> tuple[bool
     return not reasons, reasons
 
 
-def summarize(before: dict[str, Any], after: dict[str, Any], cpu_count: int = 1) -> dict[str, Any]:
-    elapsed_s = max((after["monotonic_ns"] - before["monotonic_ns"]) / 1e9, 1e-9)
+def summarize(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    cpu_count: int = 1,
+    elapsed_s_override: float | None = None,
+) -> dict[str, Any]:
+    snapshot_elapsed_s = max((after["monotonic_ns"] - before["monotonic_ns"]) / 1e9, 1e-9)
+    elapsed_s = max(elapsed_s_override, 1e-9) if elapsed_s_override is not None else snapshot_elapsed_s
     system = memory_metrics(before["vmstat"], after["vmstat"])
     system.update(system_cpu_metrics(before.get("cpu_stat", {}), after.get("cpu_stat", {}), cpu_count))
     result: dict[str, Any] = {
         "elapsed_s": elapsed_s,
+        "snapshot_elapsed_s": snapshot_elapsed_s,
         "system": system,
     }
     if before.get("cgroup") is not None or after.get("cgroup") is not None:

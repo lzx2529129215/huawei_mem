@@ -58,3 +58,52 @@ record_memory_state() {
   python3 -m memsched_exp.pressure_guard \
     --max-memory-gb 1000000 --allow-unconstrained --output "$1"
 }
+
+wait_for_protocol_marker() {
+  local marker="$1"
+  local timeout="${2:-60}"
+  python3 -m memsched_exp.protocol wait --path "$marker" --timeout "$timeout" >/dev/null
+}
+
+write_protocol_marker() {
+  local marker="$1"
+  local event="$2"
+  python3 -m memsched_exp.protocol mark --path "$marker" --event "$event" >/dev/null
+}
+
+create_run_manifest() {
+  local output="$1"
+  local scenario="$2"
+  local cache_state="$3"
+  local repetition="${4:-1}"
+  if [[ -z "${EXPERIMENT_VARIANT:-}" ]]; then
+    printf '\n'
+    return 0
+  fi
+  if [[ -z "${EXPERIMENT_SEED:-}" ]]; then
+    echo "EXPERIMENT_SEED is required when EXPERIMENT_VARIANT is set" >&2
+    return 2
+  fi
+  local seed=$((EXPERIMENT_SEED + repetition - 1))
+  local manifest="$output/manifest.json"
+  local policy_root="${POLICY_DEBUGFS_ROOT:-/sys/kernel/debug/parp}"
+  local policy_state="$output/policy-state.json"
+  local args=(
+    --variant "$EXPERIMENT_VARIANT" --scenario "$scenario" --seed "$seed"
+    --repetition "$repetition" --cache-state "$cache_state" --output "$manifest"
+  )
+  [[ -z "${KERNEL_COMMIT:-}" ]] || args+=(--kernel-commit "$KERNEL_COMMIT")
+  [[ -z "${POLICY_MODE:-}" ]] || args+=(--policy-mode "$POLICY_MODE")
+  [[ -z "${APPLY_COMPILED:-}" ]] || args+=(--apply-compiled "$APPLY_COMPILED")
+  [[ -z "${MODEL_PROVENANCE:-}" ]] || args+=(--model-provenance "$MODEL_PROVENANCE")
+  if [[ -d "$policy_root" ]]; then
+    local policy_args=(--root "$policy_root" --output "$policy_state")
+    [[ -z "${POLICY_MODE:-}" ]] || policy_args+=(--expected-mode "$POLICY_MODE")
+    [[ -z "${APPLY_COMPILED:-}" ]] || policy_args+=(--expected-apply-compiled "$APPLY_COMPILED")
+    [[ -z "${MODEL_PROVENANCE:-}" ]] || policy_args+=(--expected-model-provenance "$MODEL_PROVENANCE")
+    python3 -m memsched_exp.policy_state "${policy_args[@]}" >/dev/null
+    args+=(--policy-state-file "$policy_state")
+  fi
+  python3 -m memsched_exp.schema "${args[@]}" >/dev/null
+  printf '%s\n' "$manifest"
+}

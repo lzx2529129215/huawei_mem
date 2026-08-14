@@ -53,6 +53,26 @@ class BpfEventsTest(unittest.TestCase):
         self.assertFalse(result["valid"])
         self.assertTrue(result["pairing_errors"])
 
+    def test_window_boundary_pairs_remain_valid_and_are_clipped(self):
+        content = "\n".join(
+            [
+                '{"type":"collector_start","ts_ns":1}',
+                '{"type":"direct_reclaim_begin","ts_ns":150,"tid":7}',
+                '{"type":"direct_reclaim_end","ts_ns":250,"tid":7,"duration_ns":100}',
+                '{"type":"direct_reclaim_begin","ts_ns":250,"tid":8}',
+                '{"type":"direct_reclaim_end","ts_ns":350,"tid":8,"duration_ns":100}',
+                '{"type":"collector_stop","ts_ns":400}',
+            ]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.jsonl"
+            path.write_text(content, encoding="utf-8")
+            result = parse_events(path, window_start_ns=200, window_stop_ns=300)
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["direct_reclaim_count"], 1)
+        self.assertEqual(result["direct_reclaim_boundary_spanning_count"], 2)
+        self.assertAlmostEqual(result["direct_reclaim_total_duration_ms"], 0.0001)
+
 
 if __name__ == "__main__":
     unittest.main()

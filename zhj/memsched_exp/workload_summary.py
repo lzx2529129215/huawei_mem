@@ -33,13 +33,30 @@ def summarize_fleet(run: Path) -> dict[str, Any]:
             break
         max_cached = int(row.get("launched", 0))
     hot_events: list[dict[str, Any]] = []
+    heap_by_app: dict[int, int] = {}
     for path in sorted(run.glob("app-*.jsonl")):
-        hot_events.extend(event for event in _events(path) if event.get("event") == "hot_launch")
+        app_hot_events = [event for event in _events(path) if event.get("event") == "hot_launch"]
+        hot_events.extend(app_hot_events)
+        try:
+            app_index = int(path.stem.split("-", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        heap_samples = [int(event["java_heap_used_bytes"]) for event in app_hot_events if "java_heap_used_bytes" in event]
+        if heap_samples:
+            heap_by_app[app_index] = heap_samples[-1]
     latencies = [float(event["latency_ms"]) for event in hot_events if "latency_ms" in event]
     reaccess = [float(event["object_reaccess_ratio"]) for event in hot_events if "object_reaccess_ratio" in event]
     heap = [int(event["java_heap_used_bytes"]) for event in hot_events if "java_heap_used_bytes" in event]
     rss_events = _events(run / "app-rss.jsonl")
-    total_rss = sum(int(event.get("rss_bytes", 0)) for event in rss_events)
+    rss_by_app = {
+        int(event["app_index"]): int(event["rss_bytes"])
+        for event in rss_events
+        if "app_index" in event and int(event.get("rss_bytes", 0)) > 0
+    }
+    matched_apps = sorted(set(heap_by_app) & set(rss_by_app))
+    total_heap = sum(heap_by_app[index] for index in matched_apps)
+    total_rss = sum(rss_by_app[index] for index in matched_apps)
+    per_app_heap_ratios = [heap_by_app[index] / rss_by_app[index] for index in matched_apps]
     return {
         "workload_type": "fleet-managed-object-proxy",
         "background_apps_launched": launched,
@@ -50,10 +67,11 @@ def summarize_fleet(run: Path) -> dict[str, Any]:
         "hot_launch_latency_ms_mean": statistics.fmean(latencies) if latencies else None,
         "object_reaccess_ratio_mean": statistics.fmean(reaccess) if reaccess else None,
         "java_heap_used_bytes_mean": statistics.fmean(heap) if heap else None,
-        "java_heap_ratio": sum(heap) / total_rss if heap and total_rss and len(heap) == len(rss_events) else None,
+        "java_heap_ratio": total_heap / total_rss if total_rss else None,
+        "java_heap_ratio_per_app_mean": statistics.fmean(per_app_heap_ratios) if per_app_heap_ratios else None,
         "gc_working_set_objects": None,
         "limitations": [
-            "Java heap ratio uses the post-hot-phase process RSS snapshot as its denominator.",
+            "Java heap ratio matches each app's last post-hot heap sample to its post-hot RSS snapshot.",
             "GC working-set size requires a JVM/ART runtime probe and is not inferred from page faults.",
         ],
     }

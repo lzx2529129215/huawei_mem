@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .schema import pair_key, validate_manifest
+
 
 def _load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
@@ -41,9 +43,20 @@ def _load_last_jsonl(path: Path) -> dict[str, Any]:
 FIELDS = [
     "run",
     "name",
+    "variant",
+    "scenario",
+    "seed",
+    "repetition",
+    "cache_state",
+    "environment_hash",
+    "workload_hash",
+    "pair_id",
     "measurement_valid",
     "invalid_reasons",
     "elapsed_s",
+    "snapshot_elapsed_s",
+    "pre_start_boundary_ms",
+    "post_stop_boundary_ms",
     "launch_latency_ms",
     "launch_measurement_source",
     "page_refault_count",
@@ -54,6 +67,8 @@ FIELDS = [
     "direct_reclaim_allocstall_count",
     "direct_reclaim_tracepoint_count",
     "direct_reclaim_total_duration_ms",
+    "direct_reclaim_boundary_spanning_count",
+    "direct_reclaim_event_ratio",
     "direct_reclaim_scanned_pages",
     "kswapd_scanned_pages",
     "direct_reclaim_page_ratio",
@@ -94,9 +109,11 @@ def row_for_run(run: Path) -> dict[str, Any]:
     bpf = _load(_artifact(run, "reclaim-events-summary.json"))
     frames = _load(_artifact(run, "frames-summary.json"))
     workload = _load(_artifact(run, "workload-summary.json"))
+    cache_eviction = _load(_artifact(run, "cache-eviction.json"))
     cold_launch = _load_last_jsonl(_artifact(run, "cold-launch.jsonl"))
     system_scope = summary.get("system") or {}
     cgroup_scope = summary.get("cgroup") or {}
+    manifest = _load(_artifact(run, "manifest.json")) or metadata.get("manifest") or {}
     invalid_reasons: list[str] = []
     if metadata.get("valid") is False:
         invalid_reasons.append(str(metadata.get("invalid_reason", "metadata marked the run invalid")))
@@ -106,12 +123,41 @@ def row_for_run(run: Path) -> dict[str, Any]:
         invalid_reasons.extend(bpf.get("invalid_reasons", []))
     if launch and launch.get("timed_out"):
         invalid_reasons.append("launch readiness timed out")
+    for error_name in ("cgroup.error", "foreground-cgroup.error"):
+        error_path = _artifact(run, error_name)
+        if error_path.exists():
+            invalid_reasons.append(error_path.read_text(encoding="utf-8", errors="replace").strip() or error_name)
+    if metadata.get("scenario") == "appflow":
+        if not cache_eviction:
+            invalid_reasons.append("AppFlow cold-cache evidence is missing")
+        elif cache_eviction.get("valid") is not True:
+            invalid_reasons.append(str(cache_eviction.get("reason", "AppFlow cold-cache verification failed")))
+    if manifest:
+        invalid_reasons.extend(validate_manifest(manifest))
+    direct_count = bpf.get("direct_reclaim_count")
+    kswapd_wakes = bpf.get("kswapd_wake_count")
+    direct_event_ratio = None
+    if isinstance(direct_count, (int, float)) and isinstance(kswapd_wakes, (int, float)):
+        denominator = direct_count + kswapd_wakes
+        direct_event_ratio = direct_count / denominator if denominator > 0 else None
+    pair_id = json.dumps(pair_key(manifest), ensure_ascii=False) if manifest else None
     return {
         "run": str(run),
         "name": metadata.get("name", run.name),
+        "variant": manifest.get("variant"),
+        "scenario": manifest.get("scenario", metadata.get("scenario")),
+        "seed": manifest.get("seed"),
+        "repetition": manifest.get("repetition"),
+        "cache_state": manifest.get("cache_state", metadata.get("cache_state")),
+        "environment_hash": manifest.get("environment_hash"),
+        "workload_hash": manifest.get("workload_hash"),
+        "pair_id": pair_id,
         "measurement_valid": not invalid_reasons,
         "invalid_reasons": json.dumps(invalid_reasons, ensure_ascii=False),
         "elapsed_s": summary.get("elapsed_s"),
+        "snapshot_elapsed_s": summary.get("snapshot_elapsed_s"),
+        "pre_start_boundary_ms": _get(summary, "measurement_window.pre_start_boundary_ms"),
+        "post_stop_boundary_ms": _get(summary, "measurement_window.post_stop_boundary_ms"),
         "launch_latency_ms": launch.get("launch_latency_ms"),
         "launch_measurement_source": launch.get("measurement_source"),
         "page_refault_count": system_scope.get("page_refault_count"),
@@ -122,6 +168,8 @@ def row_for_run(run: Path) -> dict[str, Any]:
         "direct_reclaim_allocstall_count": system_scope.get("direct_reclaim_allocstall_count"),
         "direct_reclaim_tracepoint_count": bpf.get("direct_reclaim_count"),
         "direct_reclaim_total_duration_ms": bpf.get("direct_reclaim_total_duration_ms"),
+        "direct_reclaim_boundary_spanning_count": bpf.get("direct_reclaim_boundary_spanning_count"),
+        "direct_reclaim_event_ratio": direct_event_ratio,
         "direct_reclaim_scanned_pages": system_scope.get("direct_reclaim_scanned_pages"),
         "kswapd_scanned_pages": system_scope.get("kswapd_scanned_pages"),
         "direct_reclaim_page_ratio": system_scope.get("direct_reclaim_page_ratio"),
