@@ -1,0 +1,10 @@
+# Per-Cgroup Tier2 Watermark - Complete Patch Set
+# Apply to linux-hwe-6.17-6.17.0 kernel source
+# Kernel: 6.17.13 #8 (2026-07-06)
+
+=== FILES ===
+1. include/linux/tier2_watermark.h (NEW)
+2. mm/tier2_watermark.c (NEW)
+3. include/linux/memcontrol.h (patch)
+4. mm/memcontrol.c (patch)
+
