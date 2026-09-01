@@ -30,7 +30,7 @@ Windows 侧 VMA 采集和数据构造包放在：
 
 `lzx/mem/Harmony/v6-Homeny/windows_core/douyu_vma_windows_core_20260731/`
 
-关键文件与 WPS 对应：`douyu_v6_session.py`（采集编排）、`run_douyu_operation_dataset.py`（带标签采集）、`build_douyu_vma_dataset.py`（向量构造）、`export_douyu_vma_dataset_core.py`（核心数据导出）、`douyu_operation_catalog*.json`（操作目录）。历史 HYPium 自动化入口仍在 `hypium/testcases/DouyuUserJourney.py` 和 `scripts/run_douyu_hypium.sh`。
+关键文件与 WPS 对应：`douyu_v6_session.py`（采集编排）、`run_douyu_operation_dataset.py`（带标签采集）、`build_douyu_vma_dataset.py`（向量构造）、`export_douyu_vma_dataset_core.py`（核心数据导出）、`douyu_operation_catalog*.json`（操作目录）。历史 HYPium 自动化版本保留在 GitHub 的 `codex/hypium-douyu-automation` 分支，对应路径是 `hypium/testcases/DouyuUserJourney.py` 和 `scripts/run_douyu_hypium.sh`。
 
 ## 从采集到反推
 
