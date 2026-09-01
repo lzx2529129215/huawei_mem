@@ -1,0 +1,12 @@
+# 采集运行目录和中间产物不进入代码仓库
+hdc_out/
+*_run_*/
+*_dataset_*/
+*_experiment_*/
+temporary_raw/
+raw_reports/
+*.jsonl
+*.csv
+*.log
+*.zip
+__pycache__/

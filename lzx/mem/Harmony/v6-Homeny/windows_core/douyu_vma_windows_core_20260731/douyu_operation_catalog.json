@@ -1,0 +1,89 @@
+{
+  "schema_version": "douyu.operation-catalog.v1",
+  "app_id": "douyu_pc",
+  "app_name": "斗鱼",
+  "bundle": "com.douyu.ho.app",
+  "ability": "EntryAbility",
+  "selection_policy": {
+    "active_operation_count": 8,
+    "pre_collection_exclusions": [
+      {
+        "label": "SWITCH_VIDEO_TAB",
+        "reason": "纯页签/界面状态切换，类似 WPS 中 FIND_TEXT、PASTE_SELECTION 的弱稳定 VMA 信号，先不进入正式采集"
+      },
+      {
+        "label": "SWITCH_CHAT_TAB",
+        "reason": "聊天页签切换主要是 UI 状态变化，VMA 增量可能短暂且与其他房间操作混淆"
+      },
+      {
+        "label": "SCROLL_LIVE_ROOM",
+        "reason": "滚动属于高频输入，单次动作未必触发稳定的进程级 VMA 变化"
+      }
+    ]
+  },
+  "families": [
+    {"id": "navigation", "name": "导航", "color": "#2F6BFF"},
+    {"id": "room", "name": "直播间", "color": "#13A68A"},
+    {"id": "playback", "name": "播放", "color": "#EE8B3A"},
+    {"id": "lifecycle", "name": "应用生命周期", "color": "#805AD5"},
+    {"id": "background", "name": "前后台", "color": "#D9487D"}
+  ],
+  "operations": [
+    {
+      "label_id": 0,
+      "label": "SEARCH_LIVE_ROOM",
+      "family": "navigation",
+      "description": "在斗鱼首页搜索一个直播间关键词",
+      "precondition": "DOUYU_HOME_IDLE"
+    },
+    {
+      "label_id": 1,
+      "label": "ENTER_LIVE_ROOM",
+      "family": "navigation",
+      "description": "从搜索结果进入直播间",
+      "precondition": "SEARCH_RESULT_IDLE"
+    },
+    {
+      "label_id": 2,
+      "label": "PLAY_PAUSE_VIDEO",
+      "family": "playback",
+      "description": "点击视频区域触发播放或暂停",
+      "precondition": "LIVE_ROOM_VIDEO_IDLE"
+    },
+    {
+      "label_id": 3,
+      "label": "BACK_TO_HOME",
+      "family": "navigation",
+      "description": "从直播间返回斗鱼首页",
+      "precondition": "LIVE_ROOM_IDLE"
+    },
+    {
+      "label_id": 4,
+      "label": "BACKGROUND_APP",
+      "family": "background",
+      "description": "将斗鱼切到后台",
+      "precondition": "DOUYU_HOME_IDLE"
+    },
+    {
+      "label_id": 5,
+      "label": "RESTORE_APP",
+      "family": "background",
+      "description": "从后台恢复斗鱼前台",
+      "precondition": "DOUYU_BACKGROUND"
+    },
+    {
+      "label_id": 6,
+      "label": "RESTART_APP",
+      "family": "lifecycle",
+      "description": "强制停止并重新启动斗鱼",
+      "precondition": "DOUYU_HOME_IDLE"
+    },
+    {
+      "label_id": 7,
+      "label": "SWITCH_LIVE_ROOM",
+      "family": "navigation",
+      "description": "返回首页并搜索另一个直播间",
+      "precondition": "LIVE_ROOM_IDLE"
+    }
+  ]
+}
