@@ -47,7 +47,7 @@ Windows 侧 VMA 采集和数据构造包放在：
 
 ## 聚类代码的边界
 
-当前仓库里没有找到独立的 spherical k-means、PCA/UMAP 训练和 5 折 trial 评估脚本；`build_*_vma_dataset.py` 负责生成聚类输入，`scripts/analyze_operations.py` 主要做持久性/转移分析，并不是 2048 维聚类实现。此前的聚类图和准确率结果来自 Windows 侧分析流程，后续如果要复现实验，建议补一个单独的 `analysis/` 目录，把数据切分、聚类标签对齐、Accuracy/Macro-F1、混淆矩阵和 PCA/UMAP 脚本一并纳入版本管理。
+当前仓库里没有找到独立的 spherical k-means、PCA/UMAP 训练和 5 折 trial 评估脚本；`build_*_vma_dataset.py` 负责生成聚类输入。`scripts/analyze_operations.py` 在 `agent/workload-operation-handoff` 分支，主要做持久性/转移分析，也不是 2048 维聚类实现。此前的聚类图和准确率结果来自 Windows 侧分析流程，后续如果要复现实验，建议补一个单独的 `analysis/` 目录，把数据切分、聚类标签对齐、Accuracy/Macro-F1、混淆矩阵和 PCA/UMAP 脚本一并纳入版本管理。
 
 ## 数据位置说明
 
