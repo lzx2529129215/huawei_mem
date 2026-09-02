@@ -9,6 +9,7 @@
 - `wps_v6_session.py`：鸿蒙设备启动、UI 操作、VMA 报告拉回与校验；
 - `build_wps_vma_dataset.py`：将原始报告汇总为带标签 CSV 和 2048 维向量；
 - `wps_operation_catalog.json`：18 类 WPS Writer 操作目录；
+- `mem_analyze-v6.c`：设备侧采集器源码，支持 formal Markdown 和 fast compact TSV 两种输出；
 - `mem_analyze-v6-ohos`：已编译的鸿蒙 ARM64 设备侧采集器，Windows 只需推送，不执行它。
 
 ## Windows 端一次性准备
@@ -41,6 +42,9 @@ Set-Location "C:\你的路径\wps_vma_windows_core_20260723"
 
 # 正式采集：6 个 trial，共 108 组带标签样本
 .\run_wps_operation_dataset.ps1 -Target <hdc设备序列号> -Trials 6 -NoBuild
+
+# fast 采集：仅替换 VMA 报告传输格式，观察窗口和 2048 维特征不变
+.\run_wps_operation_dataset.ps1 -Mode fast -Target <hdc设备序列号> -Trials 1 -NoBuild
 ```
 
 每个 trial 依次执行 18 类 WPS Writer 操作；每个操作采集 2 个 baseline、1 个 ACTION 和 1 个 POST_ACTION 窗口。默认输出目录为本目录下的 `hdc_out\wps_operation_dataset_<时间戳>`，也可以显式指定：
@@ -68,6 +72,8 @@ Set-Location "C:\你的路径\wps_vma_windows_core_20260723"
 - `dataset_summary.json`：样本数、类别数、哈希不一致和零向量统计；
 - `dataset_analysis.md`：数据质量与类别分析；
 - `trial_XXX\`：每轮原始 VMA Markdown 报告和试验元数据。
+
+formal 模式会保留 Markdown、逐报告 SHA-256 和 HDC `recv`。fast 模式调用 `mem_analyze-v6 --compact-vma`，通过一次 HDC shell 返回 TSV，主机侧直接聚合 FILE/ANON、pathname、segment、perms 和 Referenced pages；默认不落盘原始流，需要调试时增加 `-FastKeepRaw`。
 
 ## 注意事项
 

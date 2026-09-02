@@ -461,6 +461,13 @@ class Session:
             self.warnings.append(f"截图未拉回: {label}")
 
     def sample(self, index: int, stage: str) -> dict[str, Any]:
+        """Collect one window using the selected formal/fast transport."""
+        if getattr(self.args, "mode", "formal") == "fast":
+            return self.sample_fast(index, stage)
+        return self.sample_formal(index, stage)
+
+    def sample_formal(self, index: int, stage: str) -> dict[str, Any]:
+        """Keep the original Markdown, recv and hash-audit collection path."""
         collection_started_at = now_iso()
         collection_started = time.perf_counter()
         stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -520,6 +527,7 @@ class Session:
         return {
             "report": ";".join(local_reports),
             "report_count": len(local_reports),
+            "process_count": len(remote_reports),
             "collection_started_at": collection_started_at,
             "collection_ended_at": now_iso(),
             "collection_elapsed_s": collection_elapsed_s,
@@ -534,6 +542,63 @@ class Session:
                 for remote in local_reports
             ),
             "hash_mismatch_count": window_hash_mismatch_count,
+            "formal_report_bytes": sum(
+                path.stat().st_size for path in (Path(item) for item in local_reports) if path.is_file()
+            ),
+        }
+
+    def sample_fast(self, index: int, stage: str) -> dict[str, Any]:
+        """Collect compact VMA rows directly over one HDC shell call.
+
+        The device still scans every matching WPS PID and every VMA, so the
+        semantic FILE/ANON feature input is unchanged.  Only the transport and
+        serialization path differs from formal mode: no Markdown file, remote
+        hash, recv, or local Markdown parse is used.
+        """
+        from build_wps_vma_dataset import aggregate_compact_features
+
+        collection_started_at = now_iso()
+        collection_started = time.perf_counter()
+        collector_started = time.perf_counter()
+        output = self.device.shell(
+            f"{q(self.device_bin)} --app {q(BUNDLE)} --compact-vma",
+            timeout_s=300.0,
+        )
+        collector_elapsed_s = time.perf_counter() - collector_started
+        aggregate = aggregate_compact_features(output, source=f"compact:{stage}")
+        raw_rows = aggregate.get("raw_rows", [])
+        pids = {str(row.get("pid", "")) for row in raw_rows if row.get("pid")}
+        if not raw_rows or not pids:
+            raise HdcError(f"compact 采集没有返回 VMA 数据: {output[:500]}")
+
+        compact_path = ""
+        if getattr(self.args, "fast_keep_raw", False):
+            safe_stage = re.sub(r"[^A-Za-z0-9_-]+", "_", stage)
+            compact_file = self.local_out / f"compact_{index:02d}_{safe_stage}.tsv"
+            compact_file.write_text(output + ("\n" if not output.endswith("\n") else ""), encoding="utf-8")
+            compact_path = str(compact_file)
+
+        collection_elapsed_s = time.perf_counter() - collection_started
+        return {
+            "report": "",
+            "report_count": len(pids),
+            "process_count": len(pids),
+            "device_report_count": len(pids),
+            "local_report_count": 0,
+            "matched_report_count": 0,
+            "hash_mismatch_count": 0,
+            "collection_started_at": collection_started_at,
+            "collection_ended_at": now_iso(),
+            "collection_elapsed_s": collection_elapsed_s,
+            "collector_elapsed_s": collector_elapsed_s,
+            "report_pull_started_at": "",
+            "report_pull_ended_at": "",
+            "report_pull_elapsed_s": 0.0,
+            "compact_output_bytes": len(output.encode("utf-8")),
+            "formal_report_bytes": 0,
+            "compact_path": compact_path,
+            "feature_pages": aggregate["feature_pages"],
+            "feature_meta": aggregate["feature_meta"],
         }
 
     def start_wps(self) -> None:

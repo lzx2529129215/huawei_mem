@@ -23,7 +23,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
 
-from build_wps_vma_dataset import build_dataset, map_fixed_window_sequence
+from build_wps_vma_dataset import aggregate_compact_features, build_dataset, map_fixed_window_sequence
 from wps_v6_session import BUNDLE, HdcError, Session, now_iso
 
 
@@ -92,10 +92,20 @@ class DatasetSession(Session):
         window_started_at: str,
         window_started: float,
         action_metadata: dict[str, Any],
+        snapshot_elapsed_s: float = 0.0,
+        clear_refs_elapsed_s: float = 0.0,
+        action_elapsed_s: float = 0.0,
+        target_wait_elapsed_s: float = 0.0,
     ) -> dict[str, Any]:
         sample = self.sample(segment_index, f"{operation_id}_{segment_label}")
         report_paths = _split_reports(str(sample.get("report", "")))
-        return {
+        process_count = int(
+            sample.get("process_count", 0)
+            or sample.get("device_report_count", 0)
+            or len(report_paths)
+        )
+        compact = bool(sample.get("compact_output_bytes", 0))
+        window = {
             "window_id": window_id,
             "operation_id": operation_id,
             "segment_index": segment_index,
@@ -110,9 +120,29 @@ class DatasetSession(Session):
             "action_metadata": action_metadata,
             "report_paths": report_paths,
             "report_count": int(sample.get("report_count", 0) or 0),
+            "process_count": process_count,
+            "snapshot_elapsed_s": round(float(snapshot_elapsed_s), 6),
+            "clear_refs_elapsed_s": round(float(clear_refs_elapsed_s), 6),
+            "action_elapsed_s": round(float(action_elapsed_s), 6),
+            "target_wait_elapsed_s": round(float(target_wait_elapsed_s), 6),
+            "collector_elapsed_s": round(float(sample.get("collector_elapsed_s", 0.0) or 0.0), 6),
+            "report_pull_elapsed_s": round(float(sample.get("report_pull_elapsed_s", 0.0) or 0.0), 6),
+            "collection_elapsed_s": round(float(sample.get("collection_elapsed_s", 0.0) or 0.0), 6),
+            "compact_output_bytes": int(sample.get("compact_output_bytes", 0) or 0),
+            "formal_report_bytes": int(sample.get("formal_report_bytes", 0) or 0),
             "hash_mismatch_count": int(sample.get("hash_mismatch_count", 0) or 0),
-            "collection_quality": "pass" if not sample.get("hash_mismatch_count", 0) else "hash_mismatch",
+            "collection_quality": (
+                "compact" if compact else "pass"
+                if not sample.get("hash_mismatch_count", 0)
+                else "hash_mismatch"
+            ),
         }
+        if "feature_pages" in sample:
+            window["feature_pages"] = sample["feature_pages"]
+            window["feature_meta"] = sample.get("feature_meta", {})
+        if sample.get("compact_path"):
+            window["compact_path"] = sample["compact_path"]
+        return window
 
     def collect_fixed_baselines(
         self,
@@ -130,8 +160,12 @@ class DatasetSession(Session):
             started_at = now_iso()
             started = time.perf_counter()
             try:
+                clear_started = time.perf_counter()
                 self.clear_refs()
+                clear_refs_elapsed_s = time.perf_counter() - clear_started
+                wait_started = time.perf_counter()
                 time.sleep(max(baseline_window_s, 0.0))
+                target_wait_elapsed_s = time.perf_counter() - wait_started
                 window = self._sample_window(
                     window_id=window_id,
                     operation_id=operation_id,
@@ -143,6 +177,8 @@ class DatasetSession(Session):
                     window_started_at=started_at,
                     window_started=started,
                     action_metadata={"baseline_state": baseline_state, "baseline_index": index},
+                    clear_refs_elapsed_s=clear_refs_elapsed_s,
+                    target_wait_elapsed_s=target_wait_elapsed_s,
                 )
             except (HdcError, OSError, RuntimeError, TimeoutError) as exc:
                 window = {
@@ -160,6 +196,18 @@ class DatasetSession(Session):
                     "action_metadata": {"baseline_state": baseline_state, "baseline_index": index},
                     "report_paths": [],
                     "report_count": 0,
+                    "process_count": 0,
+                    "snapshot_elapsed_s": 0.0,
+                    "clear_refs_elapsed_s": 0.0,
+                    "action_elapsed_s": 0.0,
+                    "target_wait_elapsed_s": 0.0,
+                    "collector_elapsed_s": 0.0,
+                    "report_pull_elapsed_s": 0.0,
+                    "collection_elapsed_s": 0.0,
+                    "compact_output_bytes": 0,
+                    "formal_report_bytes": 0,
+                    "feature_pages": {},
+                    "feature_meta": {},
                     "hash_mismatch_count": 0,
                     "error": str(exc),
                 }
@@ -184,10 +232,14 @@ class DatasetSession(Session):
         window_id = self._new_window_id(operation_execution_id, segment_index, segment_label)
         window_started_at = now_iso()
         window_started = time.perf_counter()
+        snapshot_started = time.perf_counter()
         before = self.snapshot()
+        snapshot_elapsed_s = time.perf_counter() - snapshot_started
         if not before:
             raise HdcError(f"{operation_id}/{segment_label} 前未发现 WPS 进程")
+        clear_started = time.perf_counter()
         self.clear_refs()
+        clear_refs_elapsed_s = time.perf_counter() - clear_started
         action_started_at = now_iso()
         action_started = time.perf_counter()
         action_result: Any = None
@@ -195,8 +247,11 @@ class DatasetSession(Session):
             action_result = action_callback()
         finally:
             action_ended_at = now_iso()
+        action_elapsed_s = time.perf_counter() - action_started
+        wait_started = time.perf_counter()
         elapsed = time.perf_counter() - window_started
         time.sleep(max(float(target_duration_s) - elapsed, 0.0))
+        target_wait_elapsed_s = time.perf_counter() - wait_started
         metadata = {
             **action_metadata,
             "baseline_group_id": baseline_group_id,
@@ -213,6 +268,10 @@ class DatasetSession(Session):
             window_started_at=window_started_at,
             window_started=window_started,
             action_metadata=metadata,
+            snapshot_elapsed_s=snapshot_elapsed_s,
+            clear_refs_elapsed_s=clear_refs_elapsed_s,
+            action_elapsed_s=action_elapsed_s,
+            target_wait_elapsed_s=target_wait_elapsed_s,
         )
         window["baseline_group_id"] = baseline_group_id
         window["before_process_count"] = len(before)
@@ -300,6 +359,7 @@ def collect_labeled_operation(
     return {
         "schema_version": "wps.operation-sample.v1",
         "status": "success",
+        "mode": getattr(session.args, "mode", "formal"),
         "sample_id": sample_id,
         "trial_id": trial_id,
         "session_id": session.session_id,
@@ -320,7 +380,11 @@ def collect_labeled_operation(
         "device_target": device_target,
         "system_version": system_version,
         "wps_version": wps_version,
-        "collector_version": "mem_analyze-v6-with-vma",
+        "collector_version": (
+            "mem_analyze-v6-compact-vma"
+            if getattr(session.args, "mode", "formal") == "fast"
+            else "mem_analyze-v6-with-vma"
+        ),
     }
 
 
@@ -332,6 +396,8 @@ def _session_namespace(args: argparse.Namespace, trial_dir: Path, session_id: st
         device_out=args.device_out,
         session_id=session_id,
         no_build=args.no_build,
+        mode=args.mode,
+        fast_keep_raw=args.fast_keep_raw,
         launch_wait_s=args.launch_wait_s,
         editor_x=args.editor_x,
         editor_y=args.editor_y,
@@ -546,6 +612,17 @@ def _run_trial(args: argparse.Namespace, root: Path, trial_number: int) -> dict[
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--mode",
+        choices=("formal", "fast"),
+        default="formal",
+        help="采集模式；默认 formal，fast 仅使用 compact VMA stdout 传输",
+    )
+    parser.add_argument(
+        "--fast-keep-raw",
+        action="store_true",
+        help="fast 模式将 compact stdout 保存为本地 TSV（默认不落盘）",
+    )
     parser.add_argument("--out", type=Path, help="数据集根目录；默认写入 hdc_out/wps_operation_dataset_<timestamp>")
     parser.add_argument("--target", default=os.environ.get("HDC_TARGET", ""), help="hdc target；单设备时可省略")
     parser.add_argument(
@@ -612,6 +689,8 @@ def main(argv: list[str] | None = None) -> int:
     metadata = {
         "schema_version": "wps.operation-dataset-run.v1",
         "created_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "mode": args.mode,
+        "fast_keep_raw": args.fast_keep_raw,
         "target": args.target,
         "trials_requested": args.trials,
         "formal_samples_per_trial": formal_samples_per_trial,
@@ -627,6 +706,7 @@ def main(argv: list[str] | None = None) -> int:
             "第一轮 Save As 仅用于建立 SAVE_DOCUMENT 的既有路径，不计入正式 SAVE_DOCUMENT 样本。",
             f"每个 trial 包含 {formal_samples_per_trial} 个 WPS Writer 常用操作；默认 6 个 trial 产生至少 100 个正式带标签样本。",
             "每个正式操作保留两个 baseline、一个 ACTION 和一个 POST_ACTION 窗口；ACTION/POST_ACTION 的同一语义特征取最大 baseline-relative excess pages。",
+            "fast 模式只替换 VMA 报告传输格式，不改变 baseline/action/post-action 窗口或 2048 维特征定义。",
             "失败 trial 目录保留；重复执行同一输出目录会从下一个 trial 编号继续，不覆盖原始报告。",
         ],
     }

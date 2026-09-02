@@ -1,4 +1,7 @@
 param(
+    [ValidateSet("formal", "fast")]
+    [string]$Mode = "formal",
+    [switch]$FastKeepRaw,
     [string]$Out,
     [string]$Target = "",
     [int]$Trials = 6,
@@ -18,6 +21,7 @@ param(
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $arguments = @(
     (Join-Path $scriptDir "run_wps_operation_dataset.py"),
+    "--mode", $Mode,
     "--trials", $Trials,
     "--action-window-s", $ActionWindowS,
     "--post-window-s", $PostWindowS,
@@ -33,6 +37,7 @@ $arguments = @(
 if ($Out) { $arguments += @("--out", $Out) }
 if ($Target) { $arguments += @("--target", $Target) }
 if ($NoBuild) { $arguments += "--no-build" }
+if ($FastKeepRaw) { $arguments += "--fast-keep-raw" }
 
 & python @arguments
 exit $LASTEXITCODE

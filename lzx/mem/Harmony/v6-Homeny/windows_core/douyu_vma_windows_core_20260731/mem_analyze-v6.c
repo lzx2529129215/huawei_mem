@@ -99,6 +99,7 @@ static void usage(const char *argv0)
             "  sudo %s --app firefox -o referenced.md\n\n"
             "可选:\n"
             "  --with-vma    额外输出 `## Referenced VMA 定位` 明细表\n\n"
+            "  --compact-vma 直接向 stdout 输出 TSV VMA 数据，不生成 Markdown\n\n"
             "v6 只做 Referenced 工作流：clear_refs 后执行用户操作，再读取 smaps，输出 VMA/segment 表。\n",
             argv0, argv0, argv0, argv0);
 }
@@ -566,6 +567,51 @@ static void print_md_text_cell(FILE *out, const char *s)
     }
 }
 
+static unsigned long long kb_to_pages(long kb, long page_size);
+
+static void print_compact_text_cell(FILE *out, const char *s)
+{
+    for (const char *p = s; *p != '\0'; p++) {
+        if (*p == '\t' || *p == '\n' || *p == '\r') fputc(' ', out);
+        else fputc(*p, out);
+    }
+}
+
+static void print_compact_header(FILE *out)
+{
+    fprintf(out, "# mem_analyze-v6 compact-vma v1\n");
+    fprintf(out, "pid\tprocess_name\tsegment\tperms\treferenced_kib\treferenced_pages\tpathname\n");
+}
+
+static bool print_compact_pid(pid_t pid, long page_size)
+{
+    VmaList list = {0};
+    char err[256] = {0};
+    char comm[256];
+
+    read_comm(pid, comm, sizeof(comm));
+    if (!parse_smaps(pid, &list, err, sizeof(err))) {
+        fprintf(stderr, "%s\n", err);
+        return false;
+    }
+    classify_segments(&list, "");
+    for (size_t i = 0; i < list.count; i++) {
+        const Vma *v = &list.items[i];
+        long referenced_kb = v->referenced_kb >= 0 ? v->referenced_kb : 0;
+        const char *pathname = v->path[0] ? v->path : "(anonymous)";
+        fprintf(stdout, "%ld\t", (long)pid);
+        print_compact_text_cell(stdout, comm);
+        fprintf(stdout, "\t");
+        print_compact_text_cell(stdout, segment_name(v->segment));
+        fprintf(stdout, "\t%s\t%ld\t%llu\t", v->perms, referenced_kb,
+                kb_to_pages(referenced_kb, page_size));
+        print_compact_text_cell(stdout, pathname);
+        fputc('\n', stdout);
+    }
+    vma_list_free(&list);
+    return true;
+}
+
 static int compare_vma_ref_rows(const void *a, const void *b)
 {
     const VmaRefRow *ra = (const VmaRefRow *)a;
@@ -759,6 +805,7 @@ int main(int argc, char **argv)
 {
     bool clear_refs = false;
     bool include_vma_table = false;
+    bool compact_vma = false;
     const char *app_keyword = NULL;
     const char *out_path = "referenced.md";
     pid_t pids[256];
@@ -780,6 +827,10 @@ int main(int argc, char **argv)
         }
         if (strcmp(argv[i], "--with-vma") == 0) {
             include_vma_table = true;
+            continue;
+        }
+        if (strcmp(argv[i], "--compact-vma") == 0) {
+            compact_vma = true;
             continue;
         }
         if (strcmp(argv[i], "--app") == 0) {
@@ -849,6 +900,17 @@ int main(int argc, char **argv)
         fprintf(stderr, "请指定 PID 或 --app\n");
         usage(argv[0]);
         return 1;
+    }
+
+    if (compact_vma) {
+        long page_size = sysconf(_SC_PAGESIZE);
+        int ok_count = 0;
+        if (page_size <= 0) page_size = 4096;
+        print_compact_header(stdout);
+        for (int i = 0; i < pid_count; i++) {
+            if (print_compact_pid(pids[i], page_size)) ok_count++;
+        }
+        return ok_count == pid_count ? 0 : 2;
     }
 
     int ok_count = 0;

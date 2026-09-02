@@ -154,6 +154,14 @@ python -m py_compile wps_v6_session.py run_wps_operation_dataset.py build_wps_vm
 python run_wps_operation_dataset.py --trials 6 --no-build --target <hdc-target>
 ```
 
+默认模式是 `formal`，保留 Markdown 报告、逐报告 SHA-256 校验和 HDC `recv`，用于正式数据集审计。需要测试采集链路延迟时，可显式使用 fast 模式：
+
+```powershell
+python run_wps_operation_dataset.py --mode fast --trials 1 --no-build --target <hdc-target>
+```
+
+fast 模式不改变 5s/15s/5s 观察窗口，也不改变 FILE/ANON 语义聚合和 2048 维向量；它只把设备侧输出切换为 `mem_analyze-v6 --compact-vma` 的 TSV stdout，并在主机侧直接聚合。因而不会生成 Markdown、逐报告远端/本地哈希或逐报告 `hdc recv`。需要保留紧凑原始流用于调试时再加 `--fast-keep-raw`。每个窗口的 `snapshot_elapsed_s`、`clear_refs_elapsed_s`、`action_elapsed_s`、`target_wait_elapsed_s`、`collector_elapsed_s`、`report_pull_elapsed_s`、`collection_elapsed_s`、`window_elapsed_s`、`report_count` 和 `process_count` 会写入 `operation_window_sequences.jsonl`。
+
 输出包括 `dataset_manifest.csv`、`labels.csv`、`vma_features_long.csv`、`vma_vectors_raw.csv`、`vma_vectors_l2.csv`、`pairwise_similarity.csv`、`dataset_summary.json` 和 `dataset_analysis.md`。2048 维向量使用确定性 SHA-256 feature hashing：FILE 占 `0–1023`，ANON 占 `1024–2047`；PID、绝对 VMA 地址、时间戳和 trial 身份只保存在元数据中。
 
 ## hdc 脚本执行流程

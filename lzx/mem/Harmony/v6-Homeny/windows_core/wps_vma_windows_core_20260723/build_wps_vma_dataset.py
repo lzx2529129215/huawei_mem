@@ -164,28 +164,76 @@ def parse_vma_report(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def aggregate_report_features(report_paths: Iterable[Path]) -> dict[str, Any]:
-    """Aggregate VMA referenced pages across all WPS process reports."""
+def parse_compact_vma(text: str, source: str = "<compact-vma>") -> list[dict[str, Any]]:
+    """Parse the TSV stream emitted by ``mem_analyze-v6 --compact-vma``.
+
+    The compact stream deliberately carries the same semantic fields used by
+    ``parse_vma_report``: process role, segment, permissions, pathname and
+    Referenced pages.  Addresses and report prose are omitted because they are
+    not part of the 2048-dimensional feature definition.
+    """
+    rows: list[dict[str, Any]] = []
+    header = (
+        "pid", "process_name", "segment", "perms", "referenced_kib",
+        "referenced_pages", "pathname",
+    )
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        cells = line.split("\t")
+        if tuple(cells) == header:
+            continue
+        if len(cells) < len(header) or not cells[0].strip().isdigit():
+            continue
+        pid, process_name, segment, perms, referenced_kb_text, referenced_pages_text, pathname = cells[:7]
+        referenced_kb = max(_number(referenced_kb_text), 0.0)
+        referenced_pages = max(_number(referenced_pages_text), 0.0)
+        if referenced_pages == 0.0 and referenced_kb > 0.0:
+            referenced_pages = referenced_kb / PAGE_SIZE_KB
+        pathname = pathname or "(anonymous)"
+        namespace = _feature_namespace(segment, pathname)
+        key = _semantic_key(namespace, segment, perms, pathname)
+        rows.append(
+            {
+                "report_path": source,
+                "pid": pid.strip(),
+                "process_role": process_name.strip() or "unknown",
+                "vma": "",
+                "segment": segment.strip(),
+                "perms": perms.strip(),
+                "size_kb": 0.0,
+                "rss_kb": 0.0,
+                "pss_kb": 0.0,
+                "referenced_kb": referenced_kb,
+                "referenced_pages": referenced_pages,
+                "pathname": pathname.strip(),
+                "feature_namespace": namespace,
+                "feature_key": key,
+            }
+        )
+    return rows
+
+
+def aggregate_feature_rows(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate semantic VMA rows into the representation used by vectors."""
     feature_pages: dict[str, float] = defaultdict(float)
     feature_meta: dict[str, dict[str, Any]] = {}
     raw_rows: list[dict[str, Any]] = []
-    for path in report_paths:
-        rows = parse_vma_report(path)
-        raw_rows.extend(rows)
-        for row in rows:
-            feature_id = f"{row['feature_namespace']}\t{row['feature_key']}"
-            feature_pages[feature_id] += float(row["referenced_pages"])
-            metadata = feature_meta.setdefault(
-                feature_id,
-                {
-                    "feature_namespace": row["feature_namespace"],
-                    "feature_key": row["feature_key"],
-                    "process_roles": set(),
-                    "pathnames": set(),
-                },
-            )
-            metadata["process_roles"].add(row["process_role"])
-            metadata["pathnames"].add(row["pathname"])
+    for row in rows:
+        raw_rows.append(row)
+        feature_id = f"{row['feature_namespace']}\t{row['feature_key']}"
+        feature_pages[feature_id] += float(row["referenced_pages"])
+        metadata = feature_meta.setdefault(
+            feature_id,
+            {
+                "feature_namespace": row["feature_namespace"],
+                "feature_key": row["feature_key"],
+                "process_roles": set(),
+                "pathnames": set(),
+            },
+        )
+        metadata["process_roles"].add(row["process_role"])
+        metadata["pathnames"].add(row["pathname"])
     for metadata in feature_meta.values():
         metadata["process_role"] = ";".join(sorted(metadata.pop("process_roles")))
         metadata["pathname"] = ";".join(sorted(metadata.pop("pathnames")))
@@ -194,6 +242,19 @@ def aggregate_report_features(report_paths: Iterable[Path]) -> dict[str, Any]:
         "feature_meta": feature_meta,
         "raw_rows": raw_rows,
     }
+
+
+def aggregate_report_features(report_paths: Iterable[Path]) -> dict[str, Any]:
+    """Aggregate VMA referenced pages across all WPS process reports."""
+    rows: list[dict[str, Any]] = []
+    for path in report_paths:
+        rows.extend(parse_vma_report(path))
+    return aggregate_feature_rows(rows)
+
+
+def aggregate_compact_features(text: str, source: str = "<compact-vma>") -> dict[str, Any]:
+    """Aggregate the compact TSV stream without writing or parsing Markdown."""
+    return aggregate_feature_rows(parse_compact_vma(text, source=source))
 
 
 def _window_features(window: dict[str, Any]) -> dict[str, Any]:
@@ -431,7 +492,11 @@ def build_dataset(root: Path) -> dict[str, Any]:
         all_windows = [*sequence.get("baseline_windows", []), action_window, post_window]
         statuses = [item.get("status", "failed") for item in all_windows if item]
         hash_mismatch_count = sum(int(item.get("hash_mismatch_count", 0) or 0) for item in all_windows if item)
-        report_count = sum(len(item.get("report_paths", [])) for item in all_windows if item)
+        report_count = sum(
+            int(item.get("report_count", 0) or 0) or len(item.get("report_paths", []))
+            for item in all_windows
+            if item
+        )
         complete = sequence.get("status") == "success" and statuses and all(status == "success" for status in statuses)
         support_eligible = bool(complete and report_count > 0 and hash_mismatch_count == 0)
         sample_id = str(sequence["sample_id"])

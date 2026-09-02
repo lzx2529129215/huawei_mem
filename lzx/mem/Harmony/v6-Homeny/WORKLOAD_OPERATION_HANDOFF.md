@@ -70,6 +70,8 @@ BASELINE_01 → BASELINE_02 → ACTION → POST_ACTION
 
 每个 trial 串行覆盖 `wps_operation_catalog.json` 中的 18 类 WPS Writer 操作，成功样本写入 `operation_window_sequences.jsonl`，失败 trial 写入失败记录。
 
+数据集 runner 默认使用 `formal` 采集；显式传入 `--mode fast` 时，只替换 VMA 报告传输路径：设备侧通过 `mem_analyze-v6 --compact-vma` 将保留 FILE/ANON、pathname、segment、perms 和 Referenced pages 的 TSV 直接写到 stdout，主机侧直接聚合，不生成 Markdown、不做逐报告 `sha256sum`、`recv` 或 Markdown 解析。5s/15s/5s 窗口、baseline/action/post-action 结构和 2048 维特征定义不变。fast 窗口同时记录各阶段耗时，便于比较扫描本身与文件传输开销。
+
 运行示例：
 
 ```powershell
